@@ -705,6 +705,9 @@ static void *shack_alGetProcAddress(const char *name) {
     return f ? AudioProcThunk(f(name), name) : NULL;
 }
 
+static void *(*gGuestSymbolAnswer)(const char *name);
+void ShackHooksSetGuestSymbolAnswer(void *(*answer)(const char *name)) { gGuestSymbolAnswer = answer; }
+
 // An Intel game's calls reach the host through AArchX's dlsym, which fishhook never changes: it asks here first.
 // Only identity, preferences, case-insensitive paths and the IOKit registry; exit, signals, dl* and mmap stay
 // AArchX's own (it runs the guest's memory, signals and loader itself).
@@ -738,7 +741,7 @@ void *ShackHookForGuestSymbol(const char *name) {
     if (gGLGetProc && name[0] == 'g' && name[1] == 'l') return gGLGetProc(name);
     for (size_t i = 0; i < sizeof hooks / sizeof *hooks; i++)
         if (!strcmp(name, hooks[i].name)) return hooks[i].fn;
-    return NULL;
+    return gGuestSymbolAnswer ? gGuestSymbolAnswer(name) : NULL;
 }
 
 void ShackHooksAddGuest(NSString *bundlePath, NSString *execPath, NSString *codePath, BOOL translated, void (^ended)(int code)) {

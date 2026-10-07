@@ -562,6 +562,28 @@ static void gameImageAdded(const struct mach_header *h, intptr_t slide) {
     rebind_symbols_image((void *)h, slide, r, strcmp(strrchr(real, '/'), "/libsteam_api.dylib") ? 5 : 6);
 }
 
+// An Intel game's Steam API (AArchX). Its own x86 libsteam_api loads the x86_64 slice of Valve's universal steamclient
+// (and tier0, vstdlib, audio) from Steam's folder, translated like the game, which connects to steam_osx's as from a
+// separate game process: what a Rosetta game does on a Mac (prep/aarchx/check_steam_api.c). Translated code reaches the
+// host through AArchX's symbol lookup, which fishhook never changes, so its answers come from translatedGameSymbol
+// (below), the same ones steamclient_g gets: the game's pid and environment, the stand-in pids, and libShackSteamClient's
+// in-process IPC. For all of the game's translated code: to Steam it is one process. AArchX's own handlers of a few
+// calls (variadic, or taking a command line) call libOcerz's imports instead: rebound here.
+static void *gSteamShim;   // libShackSteamClient
+static const void *gSteamShimBase;
+static void answerTranslatedGame(void) {
+    Dl_info d;
+    if (!gSteamShim || !dladdr(dlsym(gSteamShim, "semget"), &d)) { say(@"the Intel game's Steam API: libShackSteamClient is not loaded"); return; }
+    gSteamShimBase = d.dli_fbase;
+    struct rebinding r[] = {{"sem_open", dlsym(gSteamShim, "sem_open"), NULL}, {"shm_open", dlsym(gSteamShim, "shm_open"), NULL},
+                            {"semctl", dlsym(gSteamShim, "semctl"), NULL}, {"popen", dlsym(gSteamShim, "popen"), NULL},
+                            {"pclose", dlsym(gSteamShim, "pclose"), NULL}};
+    for (uint32_t i = 0; i < _dyld_image_count(); i++)
+        if (strstr(_dyld_get_image_name(i), "/libOcerz.dylib"))
+            rebind_symbols_image((void *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i), r, sizeof r / sizeof *r);
+    say(@"the Intel game's Steam API: Valve's x86 steamclient, answered in-process");
+}
+
 // Runs the game whose executable is path (in app, a bundle in Steam's library) with argv and envp (taken, they live for
 // the process). 0, or the errno Steam reports.
 static int startSteamGame(NSString *app, NSString *path, char **argv, char **envp) {
@@ -581,8 +603,8 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
     gGame.translated = manifest[@"translate"] != nil;
     gGame.jitMB = ![manifest[@"requiresJIT"] boolValue] ? 0 : gGame.translated ? ShackTranslatedJITMB(app) : 128;
     if (!steamLookUp) {
-        void *shim = dlopen("@rpath/libShackSteamClient.dylib", RTLD_LAZY | RTLD_NOLOAD);
-        steamLookUp = (shim ? dlsym(shim, "bootstrap_look_up") : NULL) ?: dlsym(RTLD_DEFAULT, "bootstrap_look_up");
+        gSteamShim = dlopen("@rpath/libShackSteamClient.dylib", RTLD_LAZY | RTLD_NOLOAD);
+        steamLookUp = (gSteamShim ? dlsym(gSteamShim, "bootstrap_look_up") : NULL) ?: dlsym(RTLD_DEFAULT, "bootstrap_look_up");
     }
     // GameMaker's Mac runner (data in game.ios) draws only with OpenGL.
     if ([NSFileManager.defaultManager fileExistsAtPath:[app stringByAppendingPathComponent:@"Contents/Resources/game.ios"]]) {
@@ -596,6 +618,7 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
         gGame.argv = cStrings(args);   // also what NSProcessInfo shows the game (-force-metal)
         gGame.argc = (int)args.count;
         ShackHooksEnableGL();
+        answerTranslatedGame();
     }
     ShackHooksAddGuest(app, path, code, gGame.translated, ^(int status) { gameEnded(status); });
     ShackHIDSetSecondGuestTest(ShackHooksIsSecondCaller);   // the game's pad callbacks apart from Steam's
@@ -724,6 +747,30 @@ static int steamKevent(int kq, const struct kevent *changes, int nchanges, struc
     return n;
 }
 
+// What a translated game Steam started gets for a host symbol (answerTranslatedGame above), or NULL for the usual one.
+// The calls Valve's x86 steamclient made in a session on the Mac (OCERZ_BRIDGELOG_MATCH): Mach look-ups, SysV and
+// POSIX semaphores, the game's own pid and environment, pid watches. libShackSteamClient's stubs (what iOS lacks) only
+// when nothing else in the process defines the name: MacShack's own shims (GL, CGL) come first.
+static void *translatedGameSymbol(const char *name) {
+    if (gGame.state != 1 || !gGame.translated || !gSteamShimBase) return NULL;
+    static const struct { const char *name; void *fn; } stand_ins[] = {
+        {"getpid", (void *)gamePid}, {"getenv", (void *)gameGetenv}, {"kill", (void *)steamKill},
+        {"waitid", (void *)steamWaitid}, {"waitpid", (void *)steamWaitpid}, {"kevent", (void *)steamKevent}};
+    static const char *const ipc[] = {"bootstrap_look_up", "bootstrap_check_in", "semget", "semop", "sem_close", "sem_unlink",
+                                      "sem_wait", "sem_trywait", "sem_post", "shm_unlink", "bind", "connect"};
+    void *answer = NULL;
+    for (size_t i = 0; i < sizeof stand_ins / sizeof *stand_ins && !answer; i++)
+        if (!strcmp(name, stand_ins[i].name)) answer = stand_ins[i].fn;
+    for (size_t i = 0; i < sizeof ipc / sizeof *ipc && !answer; i++)
+        if (!strcmp(name, ipc[i])) answer = dlsym(gSteamShim, name);
+    Dl_info d;
+    void *own = answer ? NULL : dlsym(gSteamShim, name);
+    if (own && dladdr(own, &d) && d.dli_fbase == gSteamShimBase && dlsym(RTLD_DEFAULT, name) == own) answer = own;
+    static _Atomic int told;   // diagnostic: once per symbol (AArchX asks once), the first 40
+    if (answer && told++ < 40) fprintf(stderr, "[SteamClient] the Intel game's %s: Steam's answer\n", name);
+    return answer;
+}
+
 void ShackSteamClientInstall(NSString *bundle, NSString *code) {
     gBundle = bundle; gCode = code;
     // The private images (the helper's, a game's Steam API) report Steam's originals: tier0 finds steamui and steam.cfg
@@ -773,6 +820,7 @@ void ShackSteamClientInstall(NSString *bundle, NSString *code) {
     // each new image, whose dlopen it keeps as the original. Called back for the images loaded now too (none a game's).
     realGetenv = dlsym(RTLD_DEFAULT, "getenv");
     _dyld_register_func_for_add_image(gameImageAdded);
+    ShackHooksSetGuestSymbolAnswer(translatedGameSymbol);   // an Intel game's (AArchX): never images fishhook reaches
     // Games Steam starts as app bundles, and the NSRunningApplication it gets back: the game's pid, bundle and end.
     // Added here, not in libShackSteamClient, which loads with steam_osx: after this, and a category there would win.
     Class running = NSClassFromString(@"NSRunningApplication"), workspace = NSClassFromString(@"NSWorkspace");

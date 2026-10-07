@@ -19,6 +19,8 @@ void ShackHooksEnableGL(void);   // desktop OpenGL on ES for a guest that needs 
 BOOL ShackResolveCase(const char *path, char *out, size_t n);
 // The replacement ShackHooksInstall made for this symbol, when an Intel game (AArchX) should get it too; else NULL.
 void *ShackHookForGuestSymbol(const char *name);
+// Asked after ShackHookForGuestSymbol's own replacements (the Steam client's answers for an Intel game it started).
+void ShackHooksSetGuestSymbolAnswer(void *(*answer)(const char *name));
 // The game ended (exit or main returned): posts ShackGuestExited on the main queue; the host returns to Home.
 void ShackGuestEnded(int code);
 // Really end MacShack (relaunch into another game, Force Quit); a plain exit() is a guest ending once hooks are in.
