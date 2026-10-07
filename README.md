@@ -82,8 +82,51 @@ Windows game ──► Steam Play ──► MacShack Play ──► Madeira (Win
 
 ## Building
 
-MacShack is source only for now: you build it on a Mac and install it with your own Apple developer account (a free one
-works). The build steps are being reworked while the repository is cleaned up, and will be written up here.
+MacShack is source only for now: you build it on a Mac and install it with your own Apple developer account.
+
+**You need:**
+
+- A Mac with Xcode 26.4 or newer, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`), the
+  [GitHub CLI](https://cli.github.com) and Python 3.
+- An iPhone or iPad on iOS 26 or later, with Developer Mode on.
+- An Apple developer account. A free one works: its profiles last 7 days, so you install again each week. MacShack uses
+  two App IDs, the app and its JIT extension (`<bundle id>.jit`).
+- For games that need JIT (Unity Mono and Intel games): your device's pairing file, made on the Mac with
+  [idevice_pair](https://github.com/jkcoxson/idevice_pair), and LocalDevVPN from the App Store. Other games need neither.
+
+**Get the source and its prebuilt parts:**
+
+```sh
+git clone --recurse-submodules https://github.com/Jfishin/MacShack.git && cd MacShack
+git -C vendor/AArchX apply ../../prep/aarchx/macshack.patch
+gh release download prebuilt-deps -p macshack-prebuilt-deps.tar.gz -R Jfishin/MacShack && tar -xzf macshack-prebuilt-deps.tar.gz
+```
+
+The `prebuilt-deps` download holds Unity's Mono rebuilt for MacShack's JIT and AArchX's data for Intel games. Both can
+be rebuilt from `prep/unity-mono` and `prep/aarchx`; sources and licenses are in `build/prebuilt-deps-NOTICE.txt`.
+
+**Set your signing.** Create `Signing.local.xcconfig` (git ignores it) with your team ID and a bundle ID of your own:
+
+```
+DEVELOPMENT_TEAM = ABCDE12345
+MACSHACK_BUNDLE_ID = com.yourname.macshack
+```
+
+**Build and install** (`xcrun devicectl list devices` shows your device ID):
+
+```sh
+xcodegen generate
+xcodebuild -project MacShack.xcodeproj -scheme MacShack -configuration Release \
+  -destination 'generic/platform=iOS' -allowProvisioningUpdates -derivedDataPath build build
+xcrun devicectl device install app --device <device-id> build/Build/Products/Release-iphoneos/MacShack.app
+```
+
+**First run** walks you through three things:
+
+1. **Signing certificate.** MacShack signs each game on the device with your Apple Development identity. In Keychain
+   Access, export the identity Xcode built MacShack with as a `.p12` with a password, and AirDrop it to the device.
+2. **Pairing file.** AirDrop the pairing file to the device, for JIT.
+3. **Steam.** MacShack downloads Valve's macOS Steam client (about 420 MB) and opens Big Picture.
 
 ## Getting games onto the device
 
