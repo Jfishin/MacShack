@@ -250,6 +250,22 @@ Games started from Local Games have no Steam client behind them, and Intel games
 Steam yet: the host's hooks only patch arm64 images. Their `SteamAPI_Init` fails; games that tolerate that run without
 Steam features, games that require Steam quit. Intel games on the real Steam API is the next piece of work.
 
+How it can work: the way an Intel game on an Apple silicon Mac does it under Rosetta. Valve's `steamclient.dylib`,
+`libtier0_s`, `libvstdlib_s`, `libaudio` and `crashhandler` are universal (x86_64 + arm64), so the game's own x86
+`libsteam_api` loads their x86_64 slices from Steam's folder, translated like the game, and they talk to the arm64
+Steam over Mach, SysV semaphores and shared memory. No C++ interface crosses architectures, only system calls.
+On the Mac (10-07, `prep/aarchx/check_steam_api.c`) AArchX matches Rosetta for both libsteam_api generations
+(Gravity Circuit's SDK with `SteamAPI_Init`, Tiny Glade's 1.58+ with `SteamAPI_InitFlat`), also with the phone's
+dual-mapped JIT pool and an 8 GB arena: all 952 imports of the x86 steamclient resolve, no stubs. The calls that cross
+to the host in a session: `bootstrap_look_up` (com.valvesoftware.steam.ipctool), `semget`/`semctl`, `mach_msg`,
+`kevent`, `kill(pid, 0)`, `sysctl`, `getpid`, `getenv` (SteamAppId and friends), one loopback `connect`.
+On iOS those must reach the answers Steam's own images get (libShackSteamClient's in-process IPC, the game's pid and
+launch environment): AArchX resolves an ordinary bridged call through `ShackHookForGuestSymbol` (dlsym, which fishhook
+never changes), and its specials (`sem_open`, `shm_open`, `semctl`, `kill`, `sysctl`, `posix_spawn`) through
+libOcerz's own imports, which fishhook can rebind. The phone's Steam folder must keep the x86_64 slices (SteamSetup's
+download does; a Steam copied by hand and thinned to arm64 does not). i386 games have no such path: Valve ships no
+32-bit steamclient.
+
 ## Conventions
 
 - Local edits in code we vendor are marked `MacShack:` and listed in that directory's README (`vendor/*`).
