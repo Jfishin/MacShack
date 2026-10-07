@@ -1,0 +1,12 @@
+.superpowers/
+build/
+*.xcodeproj
+xcuserdata/
+.DS_Store
+samples/MiniCocoa/MiniCocoa.app/
+host/probe/out/
+__pycache__/
+host/Guests/*
+!host/Guests/.gitkeep
+.claude/worktrees/
+Signing.local.xcconfig

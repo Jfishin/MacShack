@@ -1,0 +1,446 @@
+name: MacShack
+options:
+  bundleIdPrefix: $(MACSHACK_BUNDLE_ID)
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+configFiles:   # signing identity (DEVELOPMENT_TEAM, MACSHACK_BUNDLE_ID)
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
+packages:
+  OpenSSL:
+    url: https://github.com/krzyzanowskim/OpenSSL.git
+    exactVersion: 3.6.3000
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "6.0"
+    CLANG_ENABLE_OBJC_ARC: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  ShackAppKit:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/AppKit]
+    settings:
+      base:
+        PRODUCT_NAME: ShackAppKit
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackAppKit.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,UIKit -Wl,-reexport_framework,Foundation -Wl,-reexport_framework,QuartzCore -framework OpenGLES -framework Accelerate -framework ImageIO"
+  # Intel games: AArchX (LGPL-2.1, vendor/AArchX with prep/aarchx/macshack.patch applied) as its own dylib, so it
+  # stays replaceable. main.c's main becomes ocerz_main for ShackLoader.m.
+  Ocerz:
+    type: library.dynamic
+    platform: iOS
+    sources:
+      - path: vendor/AArchX/src
+        excludes: [main.c, m32_leaf.c, "*.o", "*.d", "*.s"]
+      - path: vendor/AArchX/src/main.c
+        compilerFlags: "-Dmain=ocerz_main"
+      # i386 leaves run with the guest's xmm registers live in v16-v31 (AArchX Makefile does the same)
+      - path: vendor/AArchX/src/m32_leaf.c
+        compilerFlags: "-mgeneral-regs-only"
+      - path: vendor/AArchX/src/abicall.s   # XcodeGen files .s under Resources unless told
+        buildPhase: sources
+      - path: vendor/AArchX/src/leaf.s
+        buildPhase: sources
+    settings:
+      base:
+        PRODUCT_NAME: Ocerz
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libOcerz.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        GCC_C_LANGUAGE_STANDARD: c11
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/vendor/AArchX/include"
+        GCC_OPTIMIZATION_LEVEL: "2"
+        OTHER_CFLAGS: "-w"
+        CLANG_ENABLE_OBJC_ARC: NO
+  ShackCarbon:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/Carbon]
+    settings:
+      base:
+        PRODUCT_NAME: ShackCarbon
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackCarbon.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,CoreServices -Wl,-reexport-lSystem"
+  ShackCG:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/CG]
+    settings:
+      base:
+        PRODUCT_NAME: ShackCG
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackCG.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,CoreGraphics"
+  ShackCV:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/CV]
+    settings:
+      base:
+        PRODUCT_NAME: ShackCV
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackCV.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,CoreVideo -Wl,-reexport_framework,Metal"
+  ShackSwiftUI:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/SwiftUI]
+    settings:
+      base:
+        PRODUCT_NAME: ShackSwiftUI
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackSwiftUI.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,SwiftUI"
+  ShackIOKit:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/IOKit]
+    settings:
+      base:
+        PRODUCT_NAME: ShackIOKit
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackIOKit.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,IOKit -framework GameController"
+  ShackCoreAudio:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/CoreAudio]
+    settings:
+      base:
+        PRODUCT_NAME: ShackCoreAudio
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackCoreAudio.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,CoreAudio -framework AVFAudio"
+  ShackAudioToolbox:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/AudioToolbox]
+    settings:
+      base:
+        PRODUCT_NAME: ShackAudioToolbox
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackAudioToolbox.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,AudioToolbox -framework AVFAudio"
+  ShackOpenGL:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/OpenGL]
+    settings:
+      base:
+        PRODUCT_NAME: ShackOpenGL
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackOpenGL.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+  ShackSecurity:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/Security]
+    settings:
+      base:
+        PRODUCT_NAME: ShackSecurity
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackSecurity.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,Security"
+  ShackAVFoundation:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/AVFoundation]
+    settings:
+      base:
+        PRODUCT_NAME: ShackAVFoundation
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackAVFoundation.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_framework,AVFoundation"
+  ShackSystem:
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/System]
+    settings:
+      base:
+        PRODUCT_NAME: ShackSystem
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackSystem.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport-lSystem -Wl,-reexport_framework,CFNetwork -L$(SDKROOT)/usr/lib/swift -Wl,-reexport-lswiftCore"
+  ShackSteamClient:   # the macOS Steam client's link gaps (prep/steam-onehost/README.md); only the Steam prepare links it
+    type: library.dynamic
+    platform: iOS
+    sources: [shims/SteamClient]
+    dependencies:
+      - target: ShackAppKit
+      - target: ShackCarbon
+      - target: ShackCG
+      - target: ShackCV
+      - target: ShackIOKit
+      - target: ShackSecurity
+      - target: ShackSystem
+      - target: ShackOpenGL
+    settings:
+      base:
+        PRODUCT_NAME: ShackSteamClient
+        EXECUTABLE_PREFIX: lib
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
+        LD_DYLIB_INSTALL_NAME: "@rpath/libShackSteamClient.dylib"
+        SKIP_INSTALL: YES
+        GCC_PREFIX_HEADER: ""
+        OTHER_LDFLAGS: "-Wl,-reexport_library,$(BUILT_PRODUCTS_DIR)/libShackAppKit.dylib -Wl,-reexport_library,$(BUILT_PRODUCTS_DIR)/libShackCarbon.dylib -Wl,-reexport_library,$(BUILT_PRODUCTS_DIR)/libShackCG.dylib -Wl,-reexport_library,$(BUILT_PRODUCTS_DIR)/libShackCV.dylib -Wl,-reexport_library,$(BUILT_PRODUCTS_DIR)/libShackIOKit.dylib -Wl,-reexport_library,$(BUILT_PRODUCTS_DIR)/libShackSecurity.dylib -Wl,-reexport_library,$(BUILT_PRODUCTS_DIR)/libShackSystem.dylib -Wl,-reexport_library,$(BUILT_PRODUCTS_DIR)/libShackOpenGL.dylib -Wl,-reexport_framework,CoreText -Wl,-reexport_framework,CoreFoundation -Wl,-reexport_framework,VideoToolbox -Wl,-reexport_framework,AuthenticationServices -Wl,-reexport_framework,SafariServices -framework GameController"
+  MacShackJIT:   # built-in JIT enabler, started by host/ShackJITHelper.m
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: jithelper
+      - path: host/probe/macshack-jit.js
+        buildPhase: resources
+    info:
+      path: jithelper/Info.plist
+      properties:
+        CFBundleDisplayName: MacShack JIT
+        NSLocalNetworkUsageDescription: MacShack connects to this iPhone through LocalDevVPN to enable JIT.
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: MacShackJITRequestHandler
+          NSExtensionAttributes:
+            NSExtensionActivationRule: FALSEPREDICATE   # never offered in share sheets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(MACSHACK_BUNDLE_ID).jit
+        SWIFT_VERSION: "5.0"
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../../Frameworks"   # StikJIT is embedded once, in the app
+    dependencies:
+      - framework: vendor/StikJIT/StikJIT.xcframework
+        embed: false
+  MacShack:
+    type: application
+    platform: iOS
+    sources:
+      - path: host
+        excludes:
+          - "probe/**"
+          - "Guests/**"
+      - path: vendor/zsign/src
+        includes:
+          - archo.cpp
+          - macho.cpp
+          - openssl.cpp
+          - signing.cpp
+          - common/fs.cpp
+          - common/json.cpp
+          - common/log.cpp
+          - common/sha.cpp
+          - common/util.cpp
+      - path: vendor/zsign/LICENSE
+        buildPhase: resources
+    entitlements:
+      path: MacShack.entitlements
+      properties:
+        com.apple.developer.kernel.increased-memory-limit: true
+        get-task-allow: true
+    info:
+      path: host/Info.plist
+      properties:
+        CFBundleDisplayName: MacShack
+        UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UIRequiresFullScreen: true
+        GCSupportsGameMode: true
+        CADisableMinimumFrameDurationOnPhone: true
+        LSSupportsGameMode: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]   # the launcher is landscape only
+        CFBundleDocumentTypes:   # AirDrop or "Open in": the signing .p12 and the JIT pairing file (AppModel.receive)
+          - CFBundleTypeName: Signing certificate
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.rsa.pkcs-12]
+          - CFBundleTypeName: Pairing file
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [$(MACSHACK_BUNDLE_ID).mobiledevicepairing, com.apple.property-list]
+        UTImportedTypeDeclarations:   # idevice_pair's pairing file
+          - UTTypeIdentifier: $(MACSHACK_BUNDLE_ID).mobiledevicepairing
+            UTTypeDescription: Device pairing file
+            UTTypeConformsTo: [com.apple.property-list]
+            UTTypeTagSpecification:
+              public.filename-extension: [mobiledevicepairing]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(MACSHACK_BUNDLE_ID)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: host/MacShack-Bridging-Header.h
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks"
+        OTHER_LDFLAGS: "-ObjC -larchive"   # libarchive: Steam client packages (host/ShackSteamSetup.m)
+        SWIFT_VERSION: "5.0"   # Swift 5 language mode
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/vendor/zsign/src $(SRCROOT)/vendor/zsign/src/common"
+    dependencies:
+      - package: OpenSSL
+      - target: MacShackJIT
+      - framework: vendor/StikJIT/StikJIT.xcframework
+        link: false
+        embed: true
+      - target: ShackAppKit
+        link: true
+        embed: false
+      - target: ShackCarbon
+        link: true
+        embed: false
+      - target: Ocerz
+        link: true
+        embed: false
+      - target: ShackCG
+        link: true
+        embed: false
+      - target: ShackCV
+        link: true
+        embed: false
+      - target: ShackSwiftUI
+        link: false
+        embed: false
+      - target: ShackIOKit
+        link: true
+        embed: false
+      - target: ShackCoreAudio
+        link: true
+        embed: false
+      - target: ShackAudioToolbox
+        link: true
+        embed: false
+      - target: ShackOpenGL
+        link: true
+        embed: false
+      - target: ShackSecurity
+        link: true
+        embed: false
+      - target: ShackAVFoundation
+        link: true
+        embed: false
+      - target: ShackSystem
+        link: true
+        embed: false
+      - target: ShackSteamClient
+        link: false
+        embed: false
+    preBuildScripts:
+      - name: Patch zsign iOS signatures
+        script: |
+          for PATCH in "$SRCROOT/prep/zsign-library-entitlements.patch" "$SRCROOT/prep/zsign-ios-pages.patch"; do
+            if ! git -C "$SRCROOT/vendor/zsign" apply --reverse --check "$PATCH" 2>/dev/null; then
+              git -C "$SRCROOT/vendor/zsign" apply "$PATCH" || exit 1
+            fi
+          done
+        basedOnDependencyAnalysis: false
+      - name: Build probe fixtures
+        script: |
+          bash "$SRCROOT/host/probe/build_probe_fixtures.sh"
+        outputFiles:
+          - $(SRCROOT)/host/probe/out/mac.metallib
+    postCompileScripts:
+      - name: Embed Shack shim dylibs
+        script: |
+          FW="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$FW"
+          for d in "$BUILT_PRODUCTS_DIR"/libShack*.dylib "$BUILT_PRODUCTS_DIR"/libOcerz.dylib; do
+            cp -f "$d" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/$(basename "$d")" || exit 1
+          done
+          # Prep outputs (the Mono catalog) live in build/, which a git worktree does not share: use the main checkout's.
+          ART="$SRCROOT/build"
+          [ -d "$ART/mono-catalog" ] || ART="$(git -C "$SRCROOT" rev-parse --path-format=absolute --git-common-dir)/../build"
+          # AArchX's API databases and x86 guest C++ runtime (built on the Mac: prep/aarchx/README.md). Data to
+          # AArchX's own loader, never loaded by dyld.
+          rm -rf "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX"
+          if [ -d "$SRCROOT/vendor/AArchX/runtime/apis/macos" ]; then
+            mkdir -p "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX"
+            cp -R "$SRCROOT/vendor/AArchX/runtime/apis" "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX/apis"
+            cp -R "$SRCROOT/vendor/AArchX/runtime/guest" "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX/guest"
+            # i386 games (m32): the i386 API databases (found as OCERZ_APIDB + "32") and the guest GNU C++ runtime
+            # (OCERZ_GUEST32_ROOT, set by ShackLoader)
+            if [ -d "$SRCROOT/vendor/AArchX/runtime/apis32/macos" ]; then
+              cp -R "$SRCROOT/vendor/AArchX/runtime/apis32" "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX/apis32"
+              cp -R "$SRCROOT/vendor/AArchX/runtime/guest32" "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX/guest32"
+            fi
+          fi
+          python3 "$SRCROOT/prep/unity-mono/prepare_catalog.py" "$ART/mono-catalog" "$FW/MonoRuntimes" "$EXPANDED_CODE_SIGN_IDENTITY" || exit 1
+          # Guest Mach-Os (shackprep.py embed) ride in the host bundle, signed standalone; data stays in Documents.
+          rm -rf "$FW/Guests"
+          if ls "$SRCROOT/host/Guests"/*/ >/dev/null 2>&1; then
+            cp -R "$SRCROOT/host/Guests" "$FW/Guests"; rm -f "$FW/Guests/.gitkeep"
+            # Sign a standalone copy: in place under .../Contents codesign binds Info.plist bundle-style
+            # and iOS then refuses the dlopen ("code signature invalid").
+            T=$(mktemp -d)
+            find "$FW/Guests" -type f | while read f; do
+              if file "$f" | grep -q Mach-O; then
+                cp "$f" "$T/g" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$T/g" && cp "$T/g" "$f" || exit 1
+              fi
+            done || exit 1
+            rm -rf "$T"
+            # A framework's binary must be signed as part of its bundle (iOS refuses a standalone-signed one inside
+            # X.framework). prep flattens them to iOS's shallow layout; innermost first so parents seal signed children.
+            find "$FW/Guests" -type d -name '*.framework' | awk '{ print length($0) "\t" $0 }' | sort -rn | cut -f2- | while read d; do
+              codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$d" || exit 1
+            done || exit 1
+          fi
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/libShackAppKit.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackCarbon.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackCG.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackCV.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackIOKit.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackCoreAudio.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackAudioToolbox.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackOpenGL.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackSwiftUI.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackSecurity.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackAVFoundation.dylib
+          - $(BUILT_PRODUCTS_DIR)/libShackSystem.dylib
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackAppKit.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackCarbon.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackCG.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackCV.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackIOKit.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackCoreAudio.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackAudioToolbox.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackOpenGL.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackSecurity.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackAVFoundation.dylib
+          - $(BUILT_PRODUCTS_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libShackSystem.dylib
+        basedOnDependencyAnalysis: false   # host/Guests changes are not tracked as inputs

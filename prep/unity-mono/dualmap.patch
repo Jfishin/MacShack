@@ -1,0 +1,341 @@
+diff --git a/mono/arch/arm64/arm64-codegen.h b/mono/arch/arm64/arm64-codegen.h
+index 90d773ec..235990db 100644
+--- a/mono/arch/arm64/arm64-codegen.h
++++ b/mono/arch/arm64/arm64-codegen.h
+@@ -12,6 +12,7 @@
+ #define __ARM64_CODEGEN_H__
+ 
+ #include <glib.h>
++#include <mono/utils/mono-codeman.h>
+ 
+ enum {
+ 	ARMREG_R0 = 0,
+@@ -123,13 +124,13 @@ typedef enum {
+ 	ARMSIZE_X = 0x3
+ } ARMSize;
+ 
+-#define arm_emit(p, ins) do { *(guint32*)(p) = (ins); (p) += 4; } while (0)
++#define arm_emit(p, ins) do { *(guint32*)mono_codeman_rw (p) = (ins); (p) += 4; } while (0)
+ 
+ /* Overwrite bits [offset,offset+nbits] with value */
+ static G_GNUC_UNUSED inline void
+ arm_set_ins_bits (void *p, int offset, int nbits, guint32 value)
+ {
+-	*(guint32*)p = (*(guint32*)p & ~(((1 << nbits) - 1) << offset)) | (value << offset);
++	*(guint32*)mono_codeman_rw (p) = (*(guint32*)p & ~(((1 << nbits) - 1) << offset)) | (value << offset);
+ }
+ 
+ /*
+diff --git a/mono/metadata/icall.c b/mono/metadata/icall.c
+index bd92ef1c..5e805532 100644
+--- a/mono/metadata/icall.c
++++ b/mono/metadata/icall.c
+@@ -9682,6 +9682,7 @@ mono_lookup_icall_symbol (MonoMethod *m)
+ typedef enum ICallSigType {
+ 	ICALL_SIG_TYPE_bool     = 0x00,
+ 	ICALL_SIG_TYPE_boolean  = ICALL_SIG_TYPE_bool,
++	ICALL_SIG_TYPE__Bool    = ICALL_SIG_TYPE_bool,  /* <stdbool.h> in the SDK 26 headers turns `bool` into `_Bool` before the paste */
+ 	ICALL_SIG_TYPE_double   = 0x01,
+ 	ICALL_SIG_TYPE_float    = 0x02,
+ 	ICALL_SIG_TYPE_int      = 0x03,
+diff --git a/mono/mini/mini-arm64.c b/mono/mini/mini-arm64.c
+index 825886c6..77e19b85 100644
+--- a/mono/mini/mini-arm64.c
++++ b/mono/mini/mini-arm64.c
+@@ -912,7 +912,7 @@ emit_thunk (guint8 *code, gconstpointer target)
+ 
+ 	arm_ldrx_lit (code, ARMREG_IP0, code + 8);
+ 	arm_brx (code, ARMREG_IP0);
+-	*(guint64*)code = (guint64)target;
++	*(guint64*)mono_codeman_rw (code) = (guint64)target;
+ 	code += sizeof (guint64);
+ 
+ 	mono_arch_flush_icache (p, code - p);
+@@ -2120,6 +2120,9 @@ mono_arch_flush_icache (guint8 *code, gint size)
+ {
+ #ifndef MONO_CROSS_COMPILE
+ #if __APPLE__
++	/* Dual mapping: the stores went to the RW alias; clean them before invalidating the RX side. */
++	if (mono_codeman_rw (code) != code)
++		sys_dcache_flush (mono_codeman_rw (code), size);
+ 	sys_icache_invalidate (code, size);
+ #elif defined(HOST_WIN32)	
+ 	FlushInstructionCache(GetCurrentProcess(), code, size);
+diff --git a/mono/mini/mini-runtime.c b/mono/mini/mini-runtime.c
+index 2849c7e3..ea718377 100644
+--- a/mono/mini/mini-runtime.c
++++ b/mono/mini/mini-runtime.c
+@@ -1485,7 +1485,7 @@ mono_resolve_patch_target (MonoMethod *method, MonoDomain *domain, guint8 *code,
+ 
+ 		mono_codeman_enable_write ();
+ 		for (i = 0; i < patch_info->data.table->table_size; i++) {
+-			jump_table [i] = code + GPOINTER_TO_INT (patch_info->data.table->table [i]);
++			((gpointer*)mono_codeman_rw (jump_table)) [i] = code + GPOINTER_TO_INT (patch_info->data.table->table [i]);
+ 		}
+ 		mono_codeman_disable_write ();
+ 
+diff --git a/mono/mini/mini.c b/mono/mini/mini.c
+index ee8dbae8..66cae2bd 100644
+--- a/mono/mini/mini.c
++++ b/mono/mini/mini.c
+@@ -2115,13 +2115,14 @@ mono_postprocess_patches (MonoCompile *cfg)
+ 				table = (void **)mono_mem_manager_code_reserve (cfg->mem_manager, sizeof (gpointer) * patch_info->data.table->table_size);
+ 			}
+ 
++			gpointer *table_w = (gpointer*)mono_codeman_rw (table);   /* the table lives in code memory */
+ 			for (i = 0; i < patch_info->data.table->table_size; i++) {
+ 				/* Might be NULL if the switch is eliminated */
+ 				if (patch_info->data.table->table [i]) {
+ 					g_assert (patch_info->data.table->table [i]->native_offset);
+-					table [i] = GINT_TO_POINTER (patch_info->data.table->table [i]->native_offset);
++					table_w [i] = GINT_TO_POINTER (patch_info->data.table->table [i]->native_offset);
+ 				} else {
+-					table [i] = NULL;
++					table_w [i] = NULL;
+ 				}
+ 			}
+ 			patch_info->data.table->table = (MonoBasicBlock**)table;
+@@ -2259,11 +2260,11 @@ mono_codegen (MonoCompile *cfg)
+ 	if (cfg->thunk_area) {
+ 		cfg->thunks_offset = cfg->code_size + unwindlen;
+ 		cfg->thunks = code + cfg->thunks_offset;
+-		memset (cfg->thunks, 0, cfg->thunk_area);
++		memset (mono_codeman_rw (cfg->thunks), 0, cfg->thunk_area);
+ 	}
+ 
+ 	g_assert (code);
+-	memcpy (code, cfg->native_code, cfg->code_len);
++	memcpy (mono_codeman_rw (code), cfg->native_code, cfg->code_len);
+ 	g_free (cfg->native_code);
+ 	cfg->native_code = code;
+ 	code = cfg->native_code + cfg->code_len;
+diff --git a/mono/mini/tramp-arm64.c b/mono/mini/tramp-arm64.c
+index 7c651d8e..89c47a19 100644
+--- a/mono/mini/tramp-arm64.c
++++ b/mono/mini/tramp-arm64.c
+@@ -42,7 +42,7 @@ mono_arch_patch_jump_trampoline(guint8* jump_tramp, guint8* addr)
+ {
+ 	MINI_BEGIN_CODEGEN();
+ 	guint8* patch_addr = jump_tramp + JUMP_TRAMP_PATCH_OFFSET;
+-	*(gpointer*)patch_addr = addr;
++	*(gpointer*)mono_codeman_rw (patch_addr) = addr;
+ 	MINI_END_CODEGEN(patch_addr, 8, -1, NULL);
+ }
+ 
+@@ -358,7 +358,7 @@ mono_arch_create_specific_trampoline (gpointer arg1, MonoTrampolineType tramp_ty
+ 		arm_ldrx(code, ARMREG_IP0, ARMREG_IP0, 0);
+ 		code = mono_arm_emit_brx(code, ARMREG_IP0);
+ 		g_assert(code - buf == JUMP_TRAMP_PATCH_OFFSET);
+-		*(guint64*)code = (guint64)(gsize)tramp;
++		*(guint64*)mono_codeman_rw (code) = (guint64)(gsize)tramp;
+ 	}
+ 	else {
+ 		code = mono_arm_emit_imm64(code, ARMREG_IP1, (guint64)arg1);
+diff --git a/mono/utils/mono-codeman.c b/mono/utils/mono-codeman.c
+index 8fdf267e..2bcd7dd2 100644
+--- a/mono/utils/mono-codeman.c
++++ b/mono/utils/mono-codeman.c
+@@ -33,6 +33,11 @@ static void* mono_code_manager_heap;
+ 
+ #include <mono/utils/mono-os-mutex.h>
+ #include <mono/utils/mono-tls.h>
++#include <stdio.h>
++#if defined(__APPLE__)
++#include <sys/mman.h>
++#include <mach/mach.h>
++#endif
+ 
+ static uintptr_t code_memory_used = 0;
+ static size_t dynamic_code_alloc_count;
+@@ -109,6 +114,76 @@ static mono_mutex_t valloc_mutex;
+ static GHashTable *valloc_freelists;
+ static MonoNativeTlsKey write_level_tls_id;
+ 
++char *mono_codeman_pool_rx;
++char *mono_codeman_pool_rx_end;
++ptrdiff_t mono_codeman_pool_delta;
++static char *pool_next;
++
++static gboolean
++in_pool (const void *p)
++{
++	return (const char*)p >= mono_codeman_pool_rx && (const char*)p < mono_codeman_pool_rx_end;
++}
++
++/*
++ * SHACK_JIT_POOL="<rx>,<rw>,<size>" (hex): a region the host already made executable plus its writable
++ * alias. SHACK_JIT_POOL_MB=<n>: build the dual mapping here (macOS testing; no debugger involved).
++ * Called once under valloc_mutex.
++ */
++static void
++pool_init (void)
++{
++	static gboolean done;
++	unsigned long long rx = 0, rw = 0, size = 0;
++	const char *env;
++
++	if (done)
++		return;
++	done = TRUE;
++	env = getenv ("SHACK_JIT_POOL");
++	if (env && sscanf (env, "%llx,%llx,%llx", &rx, &rw, &size) == 3 && rx && rw && size) {
++		mono_codeman_pool_rx = (char*)(uintptr_t)rx;
++		mono_codeman_pool_delta = (char*)(uintptr_t)rw - mono_codeman_pool_rx;
++	}
++#if defined(__APPLE__) && defined(HOST_ARM64)
++	env = getenv ("SHACK_JIT_POOL_MB");
++	if (!mono_codeman_pool_rx && env && atoi (env) > 0) {
++		size = (unsigned long long)atoi (env) << 20;
++		void *w = mmap (NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++		vm_address_t x = 0;
++		vm_prot_t cur, max;
++		if (w != MAP_FAILED &&
++		    vm_remap (mach_task_self (), &x, size, 0, VM_FLAGS_ANYWHERE, mach_task_self (), (vm_address_t)w, FALSE, &cur, &max, VM_INHERIT_NONE) == KERN_SUCCESS &&
++		    vm_protect (mach_task_self (), x, size, FALSE, VM_PROT_READ | VM_PROT_EXECUTE) == KERN_SUCCESS) {
++			mono_codeman_pool_rx = (char*)x;
++			mono_codeman_pool_delta = (char*)w - mono_codeman_pool_rx;
++		} else {
++			g_warning ("SHACK_JIT_POOL_MB: dual mapping failed, using plain mmap");
++		}
++	}
++#endif
++	if (mono_codeman_pool_rx) {
++		mono_codeman_pool_rx_end = mono_codeman_pool_rx + size;
++		pool_next = mono_codeman_pool_rx;
++		fprintf (stderr, "[codeman] dual-mapped JIT pool: rx=%p rw=%p size=%llu\n", mono_codeman_pool_rx, mono_codeman_pool_rx + mono_codeman_pool_delta, size);
++	}
++}
++
++/* Bump allocation only: frees go to the size-keyed freelist below and never return to the pool.
++ * ponytail: add a real free list if a game exhausts the pool through dynamic methods. */
++static void*
++pool_alloc (guint32 size)
++{
++	size = ALIGN_INT (size, MIN_ALIGN);
++	if (pool_next + size > mono_codeman_pool_rx_end) {
++		g_warning ("MacShack JIT pool exhausted (%zu bytes)", (size_t)(mono_codeman_pool_rx_end - mono_codeman_pool_rx));
++		return NULL;
++	}
++	void *ptr = pool_next;
++	pool_next += size;
++	return ptr;
++}
++
+ static void*
+ codechunk_valloc (void *preferred, guint32 size)
+ {
+@@ -124,14 +199,17 @@ codechunk_valloc (void *preferred, guint32 size)
+ 	 * Keep a small freelist of memory blocks to decrease pressure on the kernel memory subsystem to avoid #3321.
+ 	 */
+ 	mono_os_mutex_lock (&valloc_mutex);
++	pool_init ();
+ 	freelist = (GSList *) g_hash_table_lookup (valloc_freelists, GUINT_TO_POINTER (size));
+ 	if (freelist) {
+ 		ptr = freelist->data;
+ 		mono_codeman_enable_write ();
+-		memset (ptr, 0, size);
++		memset (mono_codeman_rw (ptr), 0, size);
+ 		mono_codeman_disable_write ();
+ 		freelist = g_slist_delete_link (freelist, freelist);
+ 		g_hash_table_insert (valloc_freelists, GUINT_TO_POINTER (size), freelist);
++	} else if (mono_codeman_pool_rx) {
++		ptr = pool_alloc (size);
+ 	} else {
+ 		ptr = mono_valloc (preferred, size, MONO_PROT_RWX | ARCH_MAP_FLAGS, MONO_MEM_ACCOUNT_CODE);
+ 		if (!ptr && preferred)
+@@ -148,7 +226,7 @@ codechunk_vfree (void *ptr, guint32 size)
+ 
+ 	mono_os_mutex_lock (&valloc_mutex);
+ 	freelist = (GSList *) g_hash_table_lookup (valloc_freelists, GUINT_TO_POINTER (size));
+-	if (!freelist || g_slist_length (freelist) < VALLOC_FREELIST_SIZE) {
++	if (in_pool (ptr) || !freelist || g_slist_length (freelist) < VALLOC_FREELIST_SIZE) {
+ 		freelist = g_slist_prepend (freelist, ptr);
+ 		g_hash_table_insert (valloc_freelists, GUINT_TO_POINTER (size), freelist);
+ 	} else {
+@@ -171,7 +249,8 @@ codechunk_cleanup (void)
+ 		GSList *l;
+ 
+ 		for (l = freelist; l; l = l->next) {
+-			mono_vfree (l->data, GPOINTER_TO_UINT (key), MONO_MEM_ACCOUNT_CODE);
++			if (!in_pool (l->data))
++				mono_vfree (l->data, GPOINTER_TO_UINT (key), MONO_MEM_ACCOUNT_CODE);
+ 		}
+ 		g_slist_free (freelist);
+ 	}
+@@ -207,7 +286,8 @@ mono_codeman_allocation_type (MonoCodeManager const *cman)
+ #ifdef FORCE_MALLOC
+ 	return CODE_FLAG_MALLOC;
+ #else
+-	return cman->dynamic ? CODE_FLAG_MALLOC : CODE_FLAG_MMAP;
++	/* dlmalloc writes its headers straight into code memory; with a dual-mapped pool every chunk is a pool block */
++	return (cman->dynamic && !mono_codeman_pool_rx) ? CODE_FLAG_MALLOC : CODE_FLAG_MMAP;
+ #endif
+ }
+ 
+@@ -374,9 +454,9 @@ mono_code_manager_invalidate (MonoCodeManager *cman)
+ #endif
+ 
+ 	for (chunk = cman->current; chunk; chunk = chunk->next)
+-		memset (chunk->data, fill_value, chunk->size);
++		memset (mono_codeman_rw (chunk->data), fill_value, chunk->size);
+ 	for (chunk = cman->full; chunk; chunk = chunk->next)
+-		memset (chunk->data, fill_value, chunk->size);
++		memset (mono_codeman_rw (chunk->data), fill_value, chunk->size);
+ }
+ 
+ /**
+@@ -502,7 +582,7 @@ new_codechunk (MonoCodeManager *cman, int size)
+ 		if (flags == CODE_FLAG_MALLOC)
+ 			mono_codeman_free (ptr);
+ 		else
+-			mono_vfree (ptr, chunk_size, MONO_MEM_ACCOUNT_CODE);
++			codechunk_vfree (ptr, chunk_size);
+ 		return NULL;
+ 	}
+ 	chunk->next = NULL;
+diff --git a/mono/utils/mono-codeman.h b/mono/utils/mono-codeman.h
+index fbe2a2f2..f80ea438 100644
+--- a/mono/utils/mono-codeman.h
++++ b/mono/utils/mono-codeman.h
+@@ -44,5 +44,24 @@ void            mono_code_manager_foreach  (MonoCodeManager *cman, MonoCodeManag
+ void mono_codeman_enable_write (void);
+ void mono_codeman_disable_write (void);
+ 
++/*
++ * MacShack dual mapping (iOS has no same-address W^X: a page is executable only while it is never
++ * written, so code lives in one pool with two addresses). Code pointers, PC-relative displacements
++ * and execution all use the RX address the code manager hands out; every store into code goes
++ * through mono_codeman_rw (), the RW alias at a fixed offset. Outside the pool (heap buffers such
++ * as cfg->native_code, or a build with no pool) the address is itself.
++ */
++extern char *mono_codeman_pool_rx;
++extern char *mono_codeman_pool_rx_end;
++extern ptrdiff_t mono_codeman_pool_delta;
++
++static inline void*
++mono_codeman_rw (const void *p)
++{
++	if ((const char*)p >= mono_codeman_pool_rx && (const char*)p < mono_codeman_pool_rx_end)
++		return (char*)p + mono_codeman_pool_delta;
++	return (void*)p;
++}
++
+ #endif /* __MONO_CODEMAN_H__ */
+ 
+diff --git a/mono/utils/mono-threads-mach-helper.c b/mono/utils/mono-threads-mach-helper.c
+index 7b4f140b..66dcd982 100644
+--- a/mono/utils/mono-threads-mach-helper.c
++++ b/mono/utils/mono-threads-mach-helper.c
+@@ -59,11 +59,7 @@ mono_dead_letter_dealloc (id self, SEL _cmd)
+ {
+ 	struct objc_super super;
+ 	super.receiver = self;
+-#if !defined(__cplusplus) && !__OBJC2__
+-	super.class = nsobject;
+-#else
+-	super.super_class = nsobject;
+-#endif
++	super.super_class = nsobject;   /* the SDK 26 objc_super has only super_class */
+ 	void (*objc_msgSendSuper_op)(struct objc_super *, SEL) = (void (*)(struct objc_super *, SEL)) objc_msgSendSuper;
+ 	objc_msgSendSuper_op (&super, dealloc);
+ 

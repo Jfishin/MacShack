@@ -1,0 +1,13 @@
+diff --git a/src/signing.cpp b/src/signing.cpp
+index d677dfe..a9dc7ca 100644
+--- a/src/signing.cpp
++++ b/src/signing.cpp
+@@ -485,7 +485,7 @@ bool ZSign::SlotBuildCodeDirectory(bool bAlternate,
+ 	cdHeader.hashSize = bAlternate ? 32 : 20;
+ 	cdHeader.hashType = bAlternate ? 2 : 1;
+ 	cdHeader.spare1 = 0;
+-	cdHeader.pageSize = 12;
++	cdHeader.pageSize = 14;
+ 	cdHeader.spare2 = 0;
+ 	cdHeader.scatterOffset = 0;
+ 	cdHeader.teamOffset = 0;

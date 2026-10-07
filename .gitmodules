@@ -1,0 +1,6 @@
+[submodule "vendor/zsign"]
+	path = vendor/zsign
+	url = https://github.com/zhlynn/zsign.git
+[submodule "vendor/AArchX"]
+	path = vendor/AArchX
+	url = https://github.com/mont127/AArchX.git

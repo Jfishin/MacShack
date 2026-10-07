@@ -1,0 +1,5 @@
+// Signing identity: your Apple team and a bundle id registered to it (the JIT extension is <bundle id>.jit).
+// Edit these two lines, or put your own in Signing.local.xcconfig (git-ignored), which overrides them.
+DEVELOPMENT_TEAM =
+MACSHACK_BUNDLE_ID = com.example.macshack
+#include? "Signing.local.xcconfig"
