@@ -24,8 +24,9 @@
 #define CS_DEBUGGED 0x10000000
 #endif
 extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
-// <pthread.h> marks this unavailable on iOS; alias straight to the libsystem symbol.
-extern void jit_wp(int enabled) __asm__("_pthread_jit_write_protect_np");
+// <pthread.h> marks this unavailable on iOS; alias straight to the libsystem symbol. Weak: MacShack binds ShackSystem's
+// no-op, MacShack Play links no ShackSystem and may not find it at all (then NULL, and the `--jit-spike` probe skips it).
+extern void jit_wp(int enabled) __asm__("_pthread_jit_write_protect_np") __attribute__((weak_import));
 
 #define JIT_PAGE 0x4000          // iOS 16 KB pages
 // mov w0,#42 ; ret   -> the caller reads w0 as the return value
@@ -320,9 +321,9 @@ void ShackJITSpike(void) {
         jlog("A. MAP_JIT region at %p", jitA);
         int wf;
         GUARDED(wf, {
-            jit_wp(0);
+            if (jit_wp) jit_wp(0);
             memcpy(jitA, CODE_42, sizeof CODE_42);
-            jit_wp(1);
+            if (jit_wp) jit_wp(1);
         });
         if (wf) { jlog("A. write faulted (sig=%d)", wf); rA = "writefault"; }
         else {
@@ -388,9 +389,9 @@ void ShackJITSpike(void) {
             if (rC[0] == 'o') {   // only meaningful if C produced a working RX region
                 int f1;
                 GUARDED(f1, {
-                    jit_wp(0);
+                    if (jit_wp) jit_wp(0);
                     memcpy(rxC, CODE_99, sizeof CODE_99);
-                    jit_wp(1);
+                    if (jit_wp) jit_wp(1);
                 });
                 if (f1) { jlog("D-inplace. write faulted (sig=%d)", f1); rDin = "writefault"; }
                 else {
@@ -426,9 +427,9 @@ void ShackJITSpike(void) {
         jlog("D2. prepare(MAP_JIT %p,1MB) -> %p", jitA, prep);
         int wf;
         GUARDED(wf, {
-            jit_wp(0);
+            if (jit_wp) jit_wp(0);
             memcpy(jitA, CODE_99, sizeof CODE_99);
-            jit_wp(1);
+            if (jit_wp) jit_wp(1);
         });
         if (wf) { jlog("D2. write faulted (sig=%d)", wf); rD2 = "writefault"; }
         else {

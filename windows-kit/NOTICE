@@ -1,0 +1,38 @@
+MacShack Windows kit
+====================
+
+This folder is not under MacShack's MIT license (../LICENSE). It builds the Windows kit: the Windows-side pieces
+MacShack Play needs for Steam, as one zip released with MacShack and downloaded by MacShack on the device. Nothing in
+this folder is compiled into MacShack or MacShack Play.
+
+Built from, each fetched at build time at the pin in pins.sh and never copied here (except NotProton's notices in
+notproton/, kept as it ships them):
+
+  NotProton (https://github.com/NotProtonNot/NotProton), v1.0.3, GPL-3.0. Its notices, as it ships them:
+  notproton/NOTICE, notproton/LICENSE.lsteamclient, notproton/LICENSE.steam-shim.
+  - lsteamclient: Valve's Proton lsteamclient with NotProton's files, under the Steamworks SDK license
+    (notproton/LICENSE.lsteamclient). MacShack's change for Madeira, lsteamclient/macshack-unixlib.patch, is under
+    the same license.
+  - steam.exe: NotProton's steam-shim, a port of Proton 9's steam_helper, BSD-3-Clause
+    (notproton/LICENSE.steam-shim). Built unchanged, with NotProton's own scripts. It also contains upstream Wine's
+    (wine-11.15, 2df1ee28039cf84776eb1421ed90bd154cebb65f, https://gitlab.winehq.org/wine/wine.git: the commit
+    NotProton's bridge/setup-wine-tree.sh pins) winecrt0 and the static parts of its ucrtbase (LGPL-2.1-or-later,
+    licenses/wine-COPYING.LIB), compiler-rt, libc++, libc++abi and libunwind (LLVM, University of Illinois/NCSA or
+    MIT; licenses/wine-compiler-rt.txt, wine-libc++.txt, wine-libc++abi.txt, wine-libunwind.txt), statically linked;
+    source at that commit.
+  - ntdll detour: NotProton's ntdll-patch/detour.c and link64.ld, GPL-3.0, unchanged. ntdll/ (MacShack's Madeira
+    variant of NotProton's shim and resolver) and the detour bytes in ntdll.patch.json are GPL-3.0 (only), as the
+    NotProton code they derive from.
+  Madeira's Wine (https://github.com/willfaust/wine, LGPL-2.1-or-later): its build tools, headers and import
+  libraries. lsteamclient.dll also contains its winecrt0 (LGPL-2.1-or-later, licenses/madeira-wine-COPYING.LIB) and
+  compiler-rt (University of Illinois/NCSA or MIT, licenses/madeira-wine-compiler-rt.txt), statically linked; source
+  at that commit.
+  mingw-w64 runtime (from llvm-mingw): macshack-launch.exe and steamapi-test.exe contain it, statically linked
+  (licenses/mingw-w64-runtime.txt). msi.dll is built without it.
+  Madeira v0.1.3's ntdll.dll (https://github.com/willfaust/Madeira, GPL-3.0-or-later): read for the detour's
+  addresses; the kit carries only the detour's bytes, applied on the device.
+  Madeira v0.1.3's build/madeira_cfg.h (GPL-3.0-or-later): a header Madeira's Wine includes, there only so Wine's
+  build configures; none of it is in the kit.
+
+MacShack's own files here (scripts, helpers/): GPL-3.0-or-later (LICENSE), Copyright the MacShack authors.
+Valve's Steam client files are never part of the kit: the device downloads them from Valve.

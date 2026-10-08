@@ -1,0 +1,41 @@
+--- a/steamclient_main.c
++++ b/steamclient_main.c
+@@ -52,6 +52,18 @@
+ static CRITICAL_SECTION steamclient_cs = { NULL, -1, 0, 0, 0, 0 };
+ static HANDLE steam_overlay_event;
+ static BOOL wsa_initialized;
++
++/* MacShack Play (iOS, Madeira's Wine): the engine keeps no unix_path for builtins it does not know and binds them
++ * to a stub table, so MacShack Play loads lsteamclient.so itself and passes the address of its __wine_unix_call_funcs
++ * in MONO_MACSHACK_UNIXLIB_LSTEAMCLIENT (Madeira passes only Steam*, FNA3D_* and MONO_* variables to Windows). Wine's
++ * dispatcher indexes the handle as that table. */
++static void macshack_unixlib_handle(void)
++{
++    char value[32];
++
++    if (GetEnvironmentVariableA( "MONO_MACSHACK_UNIXLIB_LSTEAMCLIENT", value, sizeof(value) ) && value[0])
++        __wine_unixlib_handle = (unixlib_handle_t)strtoull( value, NULL, 16 );
++}
+ 
+ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+ {
+@@ -67,6 +79,7 @@
+             init_rtti( (char *)instance );
+ #endif
+             __wine_init_unix_call();
++            macshack_unixlib_handle();
+             break;
+         case DLL_PROCESS_DETACH:
+             CloseHandle(steam_overlay_event);
+@@ -83,7 +96,10 @@
+ 
+ NTSTATUS steamclient_call( unsigned int code, void *args, const char *name )
+ {
+-    NTSTATUS status = WINE_UNIX_CALL( code, args );
++    /* MacShack Play: Madeira's dispatcher refuses codes above 0xfff (lsteamclient has ~6300). Wine's dispatcher indexes
++     * the handle as the call table, so the table is reached in blocks of 4096: the handle moved to the block, the code
++     * taken within it (the same function on any Wine). */
++    NTSTATUS status = __wine_unix_call( __wine_unixlib_handle + (code & ~0xfffu) * sizeof(void *), code & 0xfff, args );
+ 
+     if (status == STATUS_ACCESS_VIOLATION)
+     {

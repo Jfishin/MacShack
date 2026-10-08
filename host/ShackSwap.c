@@ -1,4 +1,4 @@
-// File-backed memory tier ("userspace swap"), after Madeira's ml1077 (Wine's VirtualAlloc), here at mmap.
+// File-backed memory tier ("userspace swap"), after Madeira's file-backed guest memory tier (Wine's VirtualAlloc), here at mmap.
 //
 // iOS has no anonymous swap: jetsam kills an app when phys_footprint reaches its limit (8 GB on an iPhone 17 Pro Max). Dirty pages
 // of a MAP_SHARED file mapping are different: they are file cache, not charged to phys_footprint, stay in RAM while

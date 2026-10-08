@@ -16,6 +16,8 @@
 #import <spawn.h>
 #import <sys/event.h>
 #import "ShackSteamProbe.h"
+#import "ShackSteamPlay.h"
+#import "ShackPlay.h"
 #import "vendor/fishhook.h"
 #import <crt_externs.h>
 #import <dlfcn.h>
@@ -27,7 +29,7 @@
 #import <sys/wait.h>
 
 typedef int (*guest_main_t)(int, char **, char **, char **);
-enum { kHelperPid = 1000001, kGamePid = 1000002 };
+enum { kHelperPid = 1000001, kGamePid = 1000002, kWindowsPid = ShackPlaySteamPid, kToolPid = 1000004 };
 void ShackCVSleepLinksOf(const char *image);   // libShackCV
 void ShackAppKitRestoreAppLoop(void);   // libShackAppKit
 void ShackHIDForgetSecondGuest(void);   // libShackIOKit
@@ -40,6 +42,15 @@ static char **gHelperArgv;
 // A game Steam started, running in this process (below): its stand-in process.
 static struct { volatile int state; int status, argc, kq; char **argv, **envp; pthread_t thread; id delegate; NSString *app; char code[PATH_MAX]; int jitMB; BOOL translated; } gGame = { .kq = -1 };
 NSString *ShackSteamClientGameName(void) { return gGame.state == 1 ? gGame.app.lastPathComponent.stringByDeletingPathExtension : nil; }   // the island menu's game
+// A Windows program Steam started through the Steam Play tool (ShackSteamPlay.m): it runs in MacShack Play (ShackPlay.m),
+// this is its stand-in process. The tool's other verbs (install scripts, getcompatpath) end at once as kToolPid.
+static struct { volatile int state; int status; } gWindows;   // 0 none yet, 1 running, 2 ended
+static BOOL windowsProcess(pid_t pid, int *state, int *status) {
+    if (pid == kWindowsPid) { *state = gWindows.state; *status = gWindows.status; return YES; }
+    if (pid == kToolPid) { *state = 2; *status = 0; return YES; }
+    return NO;
+}
+
 static pid_t (*origCreateSimpleProcess)(void *, uint32_t, char **, const char *);
 static int (*origKill)(pid_t, int);
 static int (*origWaitid)(idtype_t, id_t, siginfo_t *, int);
@@ -80,6 +91,15 @@ static char ***steamGetArgv(void) {
 }
 
 static int steamKill(pid_t pid, int sig) {
+    int state, status;
+    if (windowsProcess(pid, &state, &status)) {
+        if (sig && pid == kWindowsPid && state == 1) {   // Steam's Stop
+            say([NSString stringWithFormat:@"kill(Windows program, %d): MacShack Play quits it", sig]);
+            ShackPlayRequestQuit();
+        }
+        if (state != 1) { errno = ESRCH; return -1; }
+        return 0;
+    }
     if (pid == kGamePid) {
         if (sig) say([NSString stringWithFormat:@"kill(game, %d): ignored, a game in this process quits from its own menu", sig]);
         if (gGame.state != 1) { errno = ESRCH; return -1; }
@@ -91,6 +111,13 @@ static int steamKill(pid_t pid, int sig) {
     return 0;
 }
 static int steamWaitid(idtype_t type, id_t id, siginfo_t *info, int options) {
+    int state, status;
+    if (type == P_PID && windowsProcess((pid_t)id, &state, &status)) {
+        while (state == 1 && !(options & WNOHANG)) { sleep(1); windowsProcess((pid_t)id, &state, &status); }
+        if (info) memset(info, 0, sizeof *info);   // si_pid 0: still running
+        if (state == 2 && info) { info->si_pid = (pid_t)id; info->si_code = CLD_EXITED; info->si_status = status; }
+        return 0;
+    }
     if (type == P_PID && id == kGamePid) {
         while (gGame.state == 1 && !(options & WNOHANG)) sleep(1);
         if (info) memset(info, 0, sizeof *info);   // si_pid 0: still running
@@ -104,6 +131,13 @@ static int steamWaitid(idtype_t type, id_t id, siginfo_t *info, int options) {
     return 0;
 }
 static pid_t steamWaitpid(pid_t pid, int *status, int options) {
+    int state, code;
+    if (windowsProcess(pid, &state, &code)) {
+        while (state == 1 && !(options & WNOHANG)) { sleep(1); windowsProcess(pid, &state, &code); }
+        if (state == 1) return 0;
+        if (status) *status = W_EXITCODE(code, 0);
+        return pid;
+    }
     if (pid == kGamePid) {
         while (gGame.state == 1 && !(options & WNOHANG)) sleep(1);
         if (gGame.state == 1) return 0;
@@ -653,8 +687,80 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
     return 0;
 }
 
+// Steam Play: `<tool>/run waitforexitandrun <game.exe> [args]` (Steam's environment: STEAM_COMPAT_INSTALL_PATH,
+// STEAM_COMPAT_DATA_PATH, STEAM_COMPAT_APP_ID, ...) runs the game in MacShack Play. Launch options in NotProton's
+// KEY=VALUE form are not passed on yet (the first Steam Play version).
+static int startWindowsProgram(pid_t *pid, char *const argv[], char *const envp[]) {
+    int argc = 0;
+    while (argv && argv[argc]) argc++;
+    NSString *verb = argc > 1 ? @(argv[1]) : @"";
+    if (![verb isEqualToString:@"waitforexitandrun"] || argc < 3) {
+        say([NSString stringWithFormat:@"Steam Play: '%@ %s' ends at once (not run in MacShack Play yet)", verb, argc > 2 ? argv[2] : ""]);
+        if (pid) *pid = kToolPid;
+        return 0;
+    }
+    if (gWindows.state == 1) { say(@"Steam Play: a Windows program is out in MacShack Play already"); return EAGAIN; }
+    if (!ShackWindowsGamesSetUp()) {   // removed while this Steam runs: Steam Play itself goes at the next Steam start
+        say(@"Steam Play: Windows games were removed (Settings > Windows games); not started");
+        return ENOENT;
+    }
+    NSMutableDictionary<NSString *, NSString *> *env = [NSMutableDictionary dictionary];
+    for (char *const *e = envp; e && *e; e++) {
+        const char *eq = strchr(*e, '=');
+        NSString *key = eq ? [[NSString alloc] initWithBytes:*e length:(NSUInteger)(eq - *e) encoding:NSUTF8StringEncoding] : nil;
+        if (key) env[key] = @(eq + 1) ?: @"";
+    }
+    NSMutableArray<NSString *> *args = [NSMutableArray array];
+    NSRegularExpression *option = [NSRegularExpression regularExpressionWithPattern:@"^[A-Za-z_][A-Za-z0-9_]*=" options:0 error:nil];
+    for (int i = 3; i < argc; i++) {
+        NSString *a = @(argv[i]) ?: @"";
+        if ([option firstMatchInString:a options:0 range:NSMakeRange(0, a.length)]) say([@"Steam Play: launch option not passed on: " stringByAppendingString:a]);
+        else [args addObject:a];
+    }
+    NSDictionary<NSString *, NSString *> *query = @{@"exe": @(argv[2]) ?: @"", @"install": env[@"STEAM_COMPAT_INSTALL_PATH"] ?: @"",
+        @"compat": env[@"STEAM_COMPAT_DATA_PATH"] ?: @"", @"appid": env[@"STEAM_COMPAT_APP_ID"] ?: env[@"SteamAppId"] ?: @"",
+        @"args": [args componentsJoinedByString:@" "],
+        // NotProton's launch, for the Steam API in Windows games (lsteamclient, the ntdll detour, Valve's DLLs in the prefix),
+        // started by its steam.exe; Play prepares Valve's steamclient for it first.
+        @"steam": @"1", @"shim": @"1"};
+    NSURL *group = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:ShackPlayGroup(ShackPlayHostBundleID())];
+    say([@"Steam Play: " stringByAppendingString:ShackSteamPreparePlayFiles(group, [ShackPlayHostBundleID() stringByAppendingString:@".play"])]);
+    gWindows.status = 0;
+    gWindows.state = 1;
+    say([NSString stringWithFormat:@"Steam Play: %s runs in MacShack Play as pid %d", argv[2], kWindowsPid]);
+    ShackPlayStart(@"run", query, ^(int status) {
+        gWindows.status = status;
+        gWindows.state = 2;
+        say([NSString stringWithFormat:@"Steam Play: the Windows program ended (%d)", status]);
+    });
+    if (pid) *pid = kWindowsPid;
+    return 0;
+}
+
+mach_port_t ShackSteamClientIPCPort(void) {
+    void *shim = dlopen("@rpath/libShackSteamClient.dylib", RTLD_LAZY | RTLD_NOLOAD);
+    kern_return_t (*lookUp)(mach_port_t, const char *, mach_port_t *) = shim ? dlsym(shim, "bootstrap_look_up") : NULL;
+    mach_port_t port = MACH_PORT_NULL;
+    if (lookUp && lookUp(MACH_PORT_NULL, "com.valvesoftware.steam.ipctool", &port) != KERN_SUCCESS) port = MACH_PORT_NULL;
+    return port;
+}
+
+void ShackSteamPlaySteamProbe(NSString *mode, NSDictionary<NSString *, NSString *> *query) {
+    if (gWindows.state == 1) { say(@"Steam client test: something is out in MacShack Play already"); return; }
+    NSURL *group = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:ShackPlayGroup(ShackPlayHostBundleID())];
+    say([@"Steam client test: " stringByAppendingString:ShackSteamPreparePlayFiles(group, [ShackPlayHostBundleID() stringByAppendingString:@".play"])]);
+    gWindows.status = 0;
+    gWindows.state = 1;   // Steam sees Play's steamclient as this pid: alive while it is out
+    ShackPlayStart(mode, query, ^(int status) {
+        gWindows.status = status;
+        gWindows.state = 2;
+        say([NSString stringWithFormat:@"Steam client test: MacShack Play ended (%d)", status]);
+    });
+}
+
 static int steamPosixSpawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *actions, const posix_spawnattr_t *attr,
                            char *const argv[], char *const envp[]) {
+    if (ShackSteamPlayIsTool(path)) return startWindowsProgram(pid, argv, envp);
     NSString *app = path ? steamGameApp(path) : nil;
     if (!app) {   // anything else goes to libShackSteamClient's refusal (SteamProcess.c), logged as before
         static int (*refuse)(pid_t *, const char *, const posix_spawn_file_actions_t *, const posix_spawnattr_t *, char *const[], char *const[]);

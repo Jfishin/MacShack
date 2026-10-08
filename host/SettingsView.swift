@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var app
     let close: () -> Void
     let setUpSteam: (SteamSetup.Mode) -> Void   // update or repair: LauncherView runs SteamSetupView
+    let windowsGames: () -> Void   // LauncherView shows WindowsGamesView
     @AppStorage("metalHUD") private var metalHUD = false
     // How hard Big Picture and the games it starts may work the phone. Low Power Mode runs the UI at 60 Hz and stays
     // cool; uncapped, Chromium drew Big Picture at the panel's 120 Hz and full 3x resolution.
@@ -39,6 +40,14 @@ struct SettingsView: View {
                     Button("Repair Steam") { setUpSteam(.repair) }
                 } header: { Text("Steam client") } footer: {
                     Text("Tested is the Steam this MacShack was tested with. Update brings Valve's newest, untested. Repair downloads and prepares all of Steam again. Your sign-in, games and settings stay.")
+                }
+                if WindowsSetup.playInstalled || WindowsSetup.stamp != nil {
+                    Section {
+                        Button("Windows games") { windowsGames() }
+                    } header: { Text("Windows games") } footer: {
+                        Text(WindowsSetup.stamp != nil ? "Set up: Windows games from Steam run in MacShack Play."
+                                                       : "MacShack Play is installed. Set up Windows games to play them from Steam.")
+                    }
                 }
                 GameDefaultsSection()
                 Section {

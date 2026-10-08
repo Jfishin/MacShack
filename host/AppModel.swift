@@ -20,6 +20,8 @@ final class AppModel {
     var signingBusy = false
     var signingStatus = ""
     let steamSetup = SteamSetup()   // Valve's Steam client onto this device (SteamSetup.swift)
+    let windowsSetup = WindowsSetup()   // Windows games onto this device (WindowsSetup.swift)
+    var openPage: LauncherView.Page?    // a page another app asked for (MacShack Play's "Set up Windows games")
     var pendingCertificate: Data?   // a received .p12 waiting for its password (MacShackApp's prompt)
     var askPassword = false
     var certificateReady = AppModel.identityValid   // onboarding: a valid identity whose test library loaded
@@ -272,7 +274,8 @@ final class AppModel {
     // (onboarding, Settings > JIT & signing). A copy iOS put in Documents/Inbox is deleted once read: a private key must
     // not stay in the folder Files shows. Contents are never logged.
     func receive(_ url: URL) {
-        guard url.isFileURL else { return }
+        if url.host == "windows-games" { openPage = .windowsGames; return }   // from MacShack Play's own screen
+        guard url.isFileURL else { return }   // MacShack Play's return URL comes here too
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let data = (try? FileHandle(forReadingFrom: url)).flatMap { file -> Data? in
@@ -364,6 +367,36 @@ final class AppModel {
         if let last = UserDefaults.standard.string(forKey: "lastLaunch") {
             UserDefaults.standard.removeObject(forKey: "lastLaunch")
             if let url = games.first(where: { $0.deletingPathExtension().lastPathComponent == last }) { checkConfig(url) }
+        }
+        // MacShack Play (host/ShackPlay.m): `--play-probe [minutes]` (the bridge checks) or `--play-run <exe> [--play-jit MB]
+        // [--play-seconds N] [--play-screen WxH] [--play-hud]` (a Windows program in Play); beside --steam-run they wait
+        // for Big Picture to be up.
+        func value(_ flag: String) -> String? { args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+        var play: (mode: String, query: [String: String])?
+        if args.contains("--play-probe") { play = ("probe", ["minutes": value("--play-probe").flatMap { UInt($0) }.map(String.init) ?? "10"]) }
+        if let exe = value("--play-run") {
+            var query = ["exe": exe]
+            for (flag, key) in [("--play-jit", "jitMB"), ("--play-seconds", "seconds"), ("--play-screen", "screen")] {
+                if let v = value(flag) { query[key] = v }
+            }
+            if args.contains("--play-hud") || UserDefaults.standard.bool(forKey: "metalHUD") { query["hud"] = "1" }
+            play = ("run", query)
+        }
+        if let play {
+            DispatchQueue.global().asyncAfter(deadline: .now() + (args.contains("--steam-run") ? 60 : 0)) { ShackPlayStart(play.mode, play.query, nil) }
+        }
+        // Beside --steam-run, Play logs on to this Steam: `--play-steam [seconds]` with Valve's steamclient itself,
+        // `--play-steam-wine [seconds]` from a Windows program through lsteamclient (windows-kit); `--play-appid N`,
+        // `--play-steam-via steamclient64|lsteamclient` (default: Valve's DLL, as a game loads it), `--play-steam-shim` (started
+        // by NotProton's steam.exe, as a Steam game is), `--play-winedebug <WINEDEBUG>`.
+        for (flag, wine) in [("--play-steam", false), ("--play-steam-wine", true)] where args.contains(flag) {
+            let seconds = value(flag).flatMap { UInt($0) }.map(String.init) ?? "30", appid = value("--play-appid") ?? "480"
+            let via = value("--play-steam-via") ?? "steamclient64"   // or "lsteamclient": the DLL straight, no detour
+            let query = wine ? ["exe": "steamapi-test.exe", "args": "\(appid) \(seconds) \(via)", "steam": "1", "result": "steamapi-test.txt",
+                                "shim": args.contains("--play-steam-shim") ? "1" : "", "appid": appid,
+                                "winedebug": value("--play-winedebug") ?? ""]
+                             : ["seconds": seconds, "appid": appid]
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60) { ShackSteamPlaySteamProbe(wine ? "run" : "steam", query) }
         }
         guard !autoLaunched else { return }
         if args.contains("--jit-spike") {

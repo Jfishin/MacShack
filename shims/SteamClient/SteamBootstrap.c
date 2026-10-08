@@ -84,6 +84,18 @@ static mach_port_t servicePort(const char *name, int create) {
     return port;
 }
 
+// MacShack Play: a service another app runs (MacShack's ipcserver, its send right handed over the Play bridge), kept
+// under its name before Steam's images look it up, so the look-up finds it here and no ipcserver starts in this process.
+__attribute__((visibility("default"))) void ShackSteamClientProvideService(const char *name, mach_port_t port) {
+    service_t *s = calloc(1, sizeof *s);
+    strlcpy(s->name, name, sizeof s->name);
+    s->port = port;
+    pthread_mutex_lock(&servicesLock);
+    s->next = services;
+    services = s;
+    pthread_mutex_unlock(&servicesLock);
+}
+
 kern_return_t bootstrap_check_in(mach_port_t bp, const name_t name, mach_port_t *port) {
     (void)bp;
     *port = servicePort(name, 1);   // every service a Steam image offers lives here: nothing outside could reach it

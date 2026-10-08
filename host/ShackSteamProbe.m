@@ -1,6 +1,7 @@
 #import "ShackSteamProbe.h"
 #import "ShackPrep.h"
 #import "ShackSigner.h"
+#import "ShackSteamPlay.h"
 #import <dlfcn.h>
 #import <mach-o/fat.h>
 #import <mach-o/loader.h>
@@ -112,13 +113,40 @@ static NSUInteger PrepareHelperFiles(NSDictionary<NSString *, NSString *> *priva
     return failed;
 }
 
+// Steam's own steamclient (the server end steam_osx runs), prepared again from Steam's copy: with Steam Play's patches
+// (ShackSteamPlay.m) while Windows games are on, as Valve ships it otherwise. Signed beside the old copy and renamed
+// over it: a new file (the signer wants a fresh destination; iOS wants a new inode).
+static NSString *const kSteamClient = @"Contents/MacOS/steamclient.dylib";
+static BOOL PrepareSteamClient(NSString *source, NSString *guest, NSString *work, BOOL steamPlay, NSError **error) {
+    NSString *unsignedPath = [work stringByAppendingPathComponent:kSteamClient], *output = [guest stringByAppendingPathComponent:kSteamClient];
+    for (NSString *dir in @[unsignedPath.stringByDeletingLastPathComponent, output.stringByDeletingLastPathComponent])
+        if (![NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:error]) return NO;
+    if (![ShackPrep prepareBinaryAtPath:[source stringByAppendingPathComponent:kSteamClient] outputPath:unsignedPath
+                    executableDirectory:[source stringByAppendingPathComponent:@"Contents/MacOS"] mainExecutable:NO
+                        loaderPathShift:nil linkMap:SteamLinkMap() error:error]) return NO;
+    if (steamPlay) Say(@"Steam Play: %@", ShackSteamPlayPatch(unsignedPath));
+    NSString *fresh = [output stringByAppendingString:@".new"];
+    [NSFileManager.defaultManager removeItemAtPath:fresh error:nil];
+    if (![ShackSigner signBinaryAtPath:unsignedPath outputPath:fresh error:error]) return NO;
+    if (!rename(fresh.fileSystemRepresentation, output.fileSystemRepresentation)) return YES;
+    if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
+    return NO;
+}
+
 // ponytail: synchronous on the launching (main) thread, once per new private file (a steamclient copy: seconds).
-void ShackSteamPrepareHelperFiles(void) {
+void ShackSteamPrepareHelperFiles(BOOL steamPlay) {
     NSString *work = [GuestBundle() stringByAppendingString:@".helperwork"];
     NSMutableArray *prepared = [NSMutableArray array];
     if (![ShackSigner signingContextWithError:nil]) return;
     NSUInteger failed = PrepareHelperFiles(ShackSteamHelperFiles(), 'h', SteamBundle(), GuestBundle(), work, YES, prepared) +
                         PrepareHelperFiles(ShackSteamGameFiles(), 'g', SteamBundle(), GuestBundle(), work, YES, prepared);
+    // steamclient as Steam Play wants it: patched while Windows games are on, Valve's own otherwise.
+    NSString *state = ShackSteamPlayCheck([GuestBundle() stringByAppendingPathComponent:kSteamClient]);
+    if (steamPlay ? [state hasPrefix:@"would patch"] : [state isEqualToString:@"already patched"]) {
+        NSError *error = nil;
+        if (PrepareSteamClient(SteamBundle(), GuestBundle(), work, steamPlay, &error)) [prepared addObject:kSteamClient];
+        else { failed++; NSLog(@"[MacShack] steamclient not prepared %@ Steam Play: %@", steamPlay ? @"for" : @"without", error.localizedDescription); }
+    } else NSLog(@"[MacShack] Steam Play %@: steamclient %@", steamPlay ? @"on" : @"off", state);
     [NSFileManager.defaultManager removeItemAtPath:work error:nil];
     if (prepared.count || failed) NSLog(@"[MacShack] Steam Helper files prepared: %@, %lu failed", prepared, (unsigned long)failed);
 }
@@ -219,4 +247,37 @@ void ShackSteamLoadProbe(void) {
         else Say(@"  LOAD FAIL %s", dlerror());
     }
     Say(@"done: %lu of %lu images load", (unsigned long)loaded, (unsigned long)prepared.count);
+}
+
+// iOS loads a library from outside an app when its code-signing identifier is that app's bundle id: MacShack Play gets
+// its own signature of the prepared images (the code folder's, re-signed), each published as a new file.
+NSString *ShackSteamPreparePlayFiles(NSURL *group, NSString *identifier) {
+    if (!group) return @"no App Group container";
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSArray<NSString *> *files = [ShackSteamGameFiles().allValues arrayByAddingObjectsFromArray:@[
+        @"Contents/MacOS/crashhandler.dylib", @"Contents/MacOS/Frameworks/Breakpad.framework/Versions/A/Breakpad",
+        @"Contents/MacOS/Frameworks/Breakpad.framework/Versions/A/Resources/breakpadUtilities.dylib"]];
+    NSString *root = [group.path stringByAppendingPathComponent:@"SteamClient"];
+    NSMutableArray<NSString *> *signedNow = [NSMutableArray array], *failed = [NSMutableArray array];
+    for (NSString *file in files) {
+        NSString *from = [GuestBundle() stringByAppendingPathComponent:file], *to = [root stringByAppendingPathComponent:file];
+        NSDate *made = [fm attributesOfItemAtPath:from error:nil].fileModificationDate, *copied = [fm attributesOfItemAtPath:to error:nil].fileModificationDate;
+        if (!made) { [failed addObject:[file.lastPathComponent stringByAppendingString:@" (not prepared)"]]; continue; }
+        if (copied && [copied compare:made] != NSOrderedAscending) continue;   // signed for Play since it was prepared
+        NSString *fresh = [to stringByAppendingString:@".new"];
+        NSError *error = nil;
+        [fm removeItemAtPath:fresh error:nil];
+        BOOL ok = [fm createDirectoryAtPath:to.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&error] &&
+                  [ShackSigner signBinaryAtPath:from outputPath:fresh identifier:identifier error:&error] &&
+                  !rename(fresh.fileSystemRepresentation, to.fileSystemRepresentation);
+        if (ok) [signedNow addObject:file.lastPathComponent];
+        else [failed addObject:[NSString stringWithFormat:@"%@ (%@)", file.lastPathComponent, error.localizedDescription ?: @(strerror(errno))]];
+    }
+    // Breakpad's framework links, as Steam has them: the prepared crashhandler loads Breakpad.framework/Breakpad.
+    NSString *framework = [root stringByAppendingPathComponent:@"Contents/MacOS/Frameworks/Breakpad.framework"];
+    for (NSArray<NSString *> *link in @[@[@"Versions/Current", @"A"], @[@"Breakpad", @"Versions/Current/Breakpad"]])
+        if (![fm destinationOfSymbolicLinkAtPath:[framework stringByAppendingPathComponent:link[0]] error:nil])
+            [fm createSymbolicLinkAtPath:[framework stringByAppendingPathComponent:link[0]] withDestinationPath:link[1] error:nil];
+    return [NSString stringWithFormat:@"Play's Steam images in %@: signed as %@: %@; failed: %@", root, identifier,
+            signedNow.count ? [signedNow componentsJoinedByString:@", "] : @"none needed", failed.count ? [failed componentsJoinedByString:@", "] : @"none"];
 }

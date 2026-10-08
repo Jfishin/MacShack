@@ -13,5 +13,10 @@ NSArray<NSString *> *ShackSteamPrepare(NSString *source, NSString *guest, NSMuta
 NSDictionary<NSString *, NSString *> *ShackSteamHelperFiles(void);
 // The same for the private Steam client API of a game Steam starts (steamclient_g and its tier0/vstdlib/audio).
 NSDictionary<NSString *, NSString *> *ShackSteamGameFiles(void);
-// Prepares and signs those not in the code folder yet (a Steam prepared by an older MacShack); before Steam starts.
-void ShackSteamPrepareHelperFiles(void);
+// Prepares and signs those not in the code folder yet (a Steam prepared by an older MacShack), and Steam's steamclient
+// again when it is not as `steamPlay` wants it: Steam Play's patches while Windows games are on (ShackSteamPlay.m),
+// Valve's own instructions otherwise. Before Steam starts.
+void ShackSteamPrepareHelperFiles(BOOL steamPlay);
+// MacShack Play's Steam images: the game set above plus tier0's crash handler and Breakpad, signed again with Play's
+// identifier into <group>/SteamClient (same paths as in the code folder). Returns what it did, for the log.
+NSString *ShackSteamPreparePlayFiles(NSURL *group, NSString *identifier);

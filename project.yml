@@ -250,6 +250,72 @@ targets:
     dependencies:
       - framework: vendor/StikJIT/StikJIT.xcframework
         embed: false
+  MacShackPlay:   # MacShack Play: the frontmost app Windows programs run in (Game Mode); README "Windows games", windows-kit/README.md
+    type: application
+    platform: iOS
+    sources:
+      - path: play
+      - path: host/ShackJIT.m
+      - path: host/ShackPlayMach.m
+      - path: host/ShackVAReport.m
+      - path: host/vendor/fishhook.c
+      - path: host/ShackTouchPad.m   # MacShack's on-screen pad (a GCController), polled like any pad
+      - path: host/TouchControls.swift
+    entitlements:
+      path: play/MacShackPlay.entitlements
+      properties:
+        com.apple.developer.kernel.increased-memory-limit: true   # 6 GB; Game Mode adds 2 GB in front
+        get-task-allow: true   # MacShack's JIT extension attaches to it
+        com.apple.security.application-groups: [group.$(MACSHACK_BUNDLE_ID)]   # the bridge to MacShack
+    info:
+      path: play/Info.plist
+      properties:
+        CFBundleDisplayName: MacShack Play
+        CADisableMinimumFrameDurationOnPhone: true   # 120 Hz, as Madeira's cube runs
+        UIBackgroundModes: [audio]   # keeps running behind Big Picture (its game audio), so Steam's Stop reaches it
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        LSSupportsGameMode: true
+        GCSupportsGameMode: true
+        LSApplicationCategoryType: public.app-category.games
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        CFBundleURLTypes:
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes: [$(PRODUCT_BUNDLE_IDENTIFIER)]
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default
+                UISceneDelegateClassName: ShackPlaySceneDelegate
+    dependencies:   # the slice of MacShack's macOS runtime Valve's steamclient needs in Play (play/PlaySteam.m)
+      - target: ShackSteamClient
+        link: false
+        embed: false
+      - target: ShackCoreAudio   # steamclient links CoreAudio, outside the Steam link map
+        link: false
+        embed: false
+    postCompileScripts:
+      - name: Embed the Steam client's shims
+        script: |
+          # libShackSteamClient and the shims it re-exports, as MacShack embeds them: Steam's prepared images bind to
+          # @rpath/libShackSteamClient.dylib (ShackSteamProbe.m's link map).
+          FW="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$FW"
+          for n in SteamClient AppKit Carbon CG CV IOKit Security System OpenGL CoreAudio; do
+            cp -f "$BUILT_PRODUCTS_DIR/libShack$n.dylib" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/libShack$n.dylib" || exit 1
+          done
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(MACSHACK_BUNDLE_ID).play
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/host"
+        SWIFT_OBJC_BRIDGING_HEADER: play/MacShackPlay-Bridging-Header.h
+        SWIFT_VERSION: "5.0"   # TouchControls.swift, as in MacShack
+        # ShackJIT.m's spike calls libsystem's pthread_jit_write_protect_np, which the iOS SDK's tbd does not list (MacShack gets
+        # it from libShackSystem). Play never calls the spike, and a Release link strips it; a Debug build keeps every export
+        # of its debug dylib, so the symbol is left to dyld's flat lookup. ShackJIT.m declares it weak: if dyld finds
+        # nothing, the pointer stays NULL (the spike checks it) instead of failing the launch.
+        OTHER_LDFLAGS: "-Wl,-U,_pthread_jit_write_protect_np"
   MacShack:
     type: application
     platform: iOS
@@ -276,6 +342,7 @@ targets:
       properties:
         com.apple.developer.kernel.increased-memory-limit: true
         get-task-allow: true
+        com.apple.security.application-groups: [group.$(MACSHACK_BUNDLE_ID)]   # shared with MacShack Play (Windows/, SteamLibrary, SteamClient)
     info:
       path: host/Info.plist
       properties:
@@ -288,6 +355,11 @@ targets:
         CADisableMinimumFrameDurationOnPhone: true
         LSSupportsGameMode: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]   # the launcher is landscape only
+        UIBackgroundModes: [audio]   # stays running (Steam) while a game plays in MacShack Play (host/ShackPlay.m)
+        CFBundleURLTypes:
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes: [$(PRODUCT_BUNDLE_IDENTIFIER)]   # MacShack Play returns here; ://windows-games opens that screen
+        LSApplicationQueriesSchemes: [$(PRODUCT_BUNDLE_IDENTIFIER).play]   # is MacShack Play installed (ShackWindowsGamesOn)
         CFBundleDocumentTypes:   # AirDrop or "Open in": the signing .p12 and the JIT pairing file (AppModel.receive)
           - CFBundleTypeName: Signing certificate
             LSHandlerRank: Alternate

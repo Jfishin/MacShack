@@ -8,7 +8,7 @@ struct LauncherView: View {
     @State private var page: Page?
     @State private var setupMode: SteamSetup.Mode?   // SteamSetupView over the launcher
     @State private var bootAfterSetup = false   // Big Picture once the setup cover is gone
-    enum Page { case games, settings }
+    enum Page { case games, settings, windowsGames }
 
     init(start: Page?) { _page = State(initialValue: start) }
 
@@ -23,10 +23,16 @@ struct LauncherView: View {
                         Button("OK", role: .cancel) {}
                     } message: { Text(app.error ?? "") }
             case .games: HomeView(close: { page = nil })
-            case .settings: SettingsView(close: { page = nil }, setUpSteam: { page = nil; setupMode = $0 })
+            case .settings: SettingsView(close: { page = nil }, setUpSteam: { page = nil; setupMode = $0 }, windowsGames: { page = .windowsGames })
+            case .windowsGames: WindowsGamesView(close: { page = nil })
             }
         }
         .preferredColorScheme(.dark)
+        .onChange(of: app.openPage, initial: true) { _, wanted in   // initial: asked for before this view appeared (onboarding)
+            guard let wanted else { return }
+            page = wanted
+            app.openPage = nil
+        }
         .fullScreenCover(item: $setupMode, onDismiss: { if bootAfterSetup { bootAfterSetup = false; app.openBigPicture() } }) { mode in
             SteamSetupView(mode: mode, done: { bootAfterSetup = true; setupMode = nil }, close: { setupMode = nil })
                 .background(LauncherBackground())

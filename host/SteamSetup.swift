@@ -221,34 +221,6 @@ final class SteamSetup {
         throw SteamSetupError("\(package.name) arrived damaged twice (sha256). Tap Retry.")
     }
 
-    // One file into `to`, reporting bytes as they come (each MB); returns the HTTP status (the file is kept only on 200).
-    private func download(_ url: URL, to: URL, progress: @escaping (Int64) -> Void) async throws -> Int {
-        let box = DownloadBox()
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (finished: CheckedContinuation<Int, Error>) in
-                let task = URLSession.shared.downloadTask(with: url) { file, response, error in
-                    box.observation = nil
-                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    do {
-                        if let error { throw error }
-                        if status == 200, let file {
-                            try? FileManager.default.removeItem(at: to)
-                            try FileManager.default.moveItem(at: file, to: to)
-                        }
-                        finished.resume(returning: status)
-                    } catch { finished.resume(throwing: error) }
-                }
-                box.observation = task.progress.observe(\.completedUnitCount) { p, _ in
-                    guard p.completedUnitCount - box.reported >= 1 << 20 else { return }
-                    box.reported = p.completedUnitCount
-                    progress(p.completedUnitCount)
-                }
-                box.task = task
-                task.resume()
-            }
-        } onCancel: { box.task?.cancel() }
-    }
-
     private func checkSpace(_ needed: Int64) throws {
         let values = try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         let free = values?.volumeAvailableCapacityForImportantUsage ?? 0
@@ -265,26 +237,59 @@ final class SteamSetup {
         do { try fm.moveItem(at: new, to: live) } catch { try? fm.moveItem(at: old, to: live); throw error }
     }
 
-    // Hashing, unpacking and preparing run off the main thread.
-    private func offMain<T>(_ work: @escaping () -> T) async -> T {
-        await Task.detached(priority: .userInitiated) { work() }.value
-    }
+    private func log(_ line: String) { appendLog(line, tag: "SteamSetup", file: "steam-setup.log") }
+}
 
-    private func offMainThrowing<T>(_ work: @escaping () throws -> T) async throws -> T {
-        try await Task.detached(priority: .userInitiated) { try work() }.value
+// One line to NSLog and to Documents/Logs/<file>. Shared by Steam setup and Windows games setup (WindowsSetup.swift).
+@MainActor
+func appendLog(_ line: String, tag: String, file: String) {
+    NSLog("[%@] %@", tag, line)
+    let url = AppModel.logs.appendingPathComponent(file), text = Data("\(Date()) \(line)\n".utf8)
+    if let handle = try? FileHandle(forWritingTo: url) {
+        defer { try? handle.close() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: text)
+    } else {
+        try? text.write(to: url)
     }
+}
 
-    private func log(_ line: String) {
-        NSLog("[SteamSetup] %@", line)
-        let url = AppModel.logs.appendingPathComponent("steam-setup.log"), text = Data("\(Date()) \(line)\n".utf8)
-        if let file = try? FileHandle(forWritingTo: url) {
-            defer { try? file.close() }
-            _ = try? file.seekToEnd()
-            try? file.write(contentsOf: text)
-        } else {
-            try? text.write(to: url)
+// One file into `to`, reporting bytes as they come (each MB); returns the HTTP status (the file is kept only on 200).
+// Shared by Steam setup and Windows games setup (WindowsSetup.swift).
+func download(_ url: URL, to: URL, progress: @escaping (Int64) -> Void) async throws -> Int {
+    let box = DownloadBox()
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { (finished: CheckedContinuation<Int, Error>) in
+            let task = URLSession.shared.downloadTask(with: url) { file, response, error in
+                box.observation = nil
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                do {
+                    if let error { throw error }
+                    if status == 200, let file {
+                        try? FileManager.default.removeItem(at: to)
+                        try FileManager.default.moveItem(at: file, to: to)
+                    }
+                    finished.resume(returning: status)
+                } catch { finished.resume(throwing: error) }
+            }
+            box.observation = task.progress.observe(\.completedUnitCount) { p, _ in
+                guard p.completedUnitCount - box.reported >= 1 << 20 else { return }
+                box.reported = p.completedUnitCount
+                progress(p.completedUnitCount)
+            }
+            box.task = task
+            task.resume()
         }
-    }
+    } onCancel: { box.task?.cancel() }
+}
+
+// Hashing, unpacking, preparing and signing run off the main thread.
+func offMain<T>(_ work: @escaping () -> T) async -> T {
+    await Task.detached(priority: .userInitiated) { work() }.value
+}
+
+func offMainThrowing<T>(_ work: @escaping () throws -> T) async throws -> T {
+    try await Task.detached(priority: .userInitiated) { try work() }.value
 }
 
 // The running download, for cancellation and progress (set before the task starts).

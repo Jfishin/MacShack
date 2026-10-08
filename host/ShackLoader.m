@@ -1,4 +1,6 @@
 #import "ShackLoader.h"
+#import "ShackSteamPlay.h"
+#import "ShackPlay.h"
 #import "ShackSteamClient.h"
 #import "ShackSteamProbe.h"
 #import "ShackHooks.h"
@@ -462,7 +464,15 @@ double ShackSteamUIRenderScale(void) {
             [NSFileManager.defaultManager removeItemAtPath:path error:nil];
         }
     }
-    ShackSteamPrepareHelperFiles();   // private images a newer MacShack added (steamclient_h, steamclient_g)
+    // Steam Play only while Windows games are on (set up, and MacShack Play installed: Settings > Windows games); else
+    // Steam stays stock and what an earlier setup added is taken out. Here, before steam_osx runs: it rewrites its VDF
+    // files on exit.
+    NSString *steamRoot = [home stringByAppendingPathComponent:@"Library/Application Support/Steam"];
+    NSURL *group = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:ShackPlayGroup(ShackPlayHostBundleID())];
+    BOOL steamPlay = ShackWindowsGamesOn();
+    if (steamPlay) ShackSteamPlaySetup(steamRoot, group);
+    else ShackSteamPlayRemove(steamRoot, group);
+    ShackSteamPrepareHelperFiles(steamPlay);   // private images a newer MacShack added (steamclient_h, steamclient_g), steamclient as Steam Play wants it
     ShackHooksInstall(bundle, exePath, code);
     ShackSteamClientInstall(bundle, code);   // Steam Helper (Chromium) in-process when steam_osx starts it
     [NSClassFromString(@"NSScreen") valueForKey:@"mainScreen"];   // prime the shim's screen metrics on the main thread
