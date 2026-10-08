@@ -51,10 +51,11 @@ static void say(NSString *line) {
     NSLog(@"[SteamClient] %@", line);
 }
 
-// The launch splash (GameOverlay.swift) over Big Picture while a game Steam started gets going: Steam stops waiting for
-// its window after ~15 s and shows the game's page with Resume, while JIT set-up and translation can take 30 (Celeste,
-// 10-07). Up with the game's bundle path; down after the splash's usual first-frame wait once the game's window has the
-// screen or the game ends (ShackMetal's own first-frame notice went to Steam's UI long ago; ShackGL's comes from the game).
+// The launch splash (GameOverlay.swift) over Big Picture while a game Steam started that needs JIT (Intel, Unity Mono)
+// gets going: Steam stops waiting for its window after ~15 s and shows the game's page with Resume, while JIT set-up
+// and translation can take 30 (Celeste, 10-07). Up with the game's bundle path; down after the splash's usual
+// first-frame wait once the game's window has the screen or the game ends (ShackMetal's own first-frame notice went to
+// Steam's UI long ago; ShackGL's comes from the game).
 static void splash(NSString *gameApp) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [NSNotificationCenter.defaultCenter postNotificationName:gameApp ? @"ShackSteamGameStarting" : @"ShackGameFirstFrame" object:gameApp];
@@ -470,6 +471,9 @@ static void *gameThread(void *arg) {
     // prepares, as when MacShack's own list launches it (ShackLoader, AppModel.startJITHelper); without it iOS kills
     // the process at Mono's first method (Okko, 10-03). Waited for on this thread only: Steam and its UI run on.
     if (gGame.jitMB) {
+        // The helper's debugger stops this whole process for ~15 s: Big Picture's sound would stutter (ShackAudioToolbox.m).
+        void (*pauseAudio)(BOOL) = (void (*)(BOOL))dlsym(RTLD_DEFAULT, "ShackAudioPauseAll");   // libShackAudioToolbox
+        if (pauseAudio) pauseAudio(YES);
         NSString *logs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0] stringByAppendingPathComponent:@"Logs"];
         if ([NSFileManager.defaultManager fileExistsAtPath:ShackJITPairingFileURL().path]) {
             say(@"the game needs JIT: starting the JIT helper (keep LocalDevVPN on and the phone unlocked)");
@@ -480,7 +484,9 @@ static void *gameThread(void *arg) {
                 });
             });
         } else say(@"the game needs JIT and there is no pairing file: run the MacShack script in StikDebug (Enable Script)");
-        if (!ShackJITPoolSetup((size_t)gGame.jitMB << 20)) { say(@"JIT setup failed: the game does not start (see jit-helper.log)"); gameEnded(126); return NULL; }
+        BOOL pool = ShackJITPoolSetup((size_t)gGame.jitMB << 20);
+        if (pauseAudio) pauseAudio(NO);
+        if (!pool) { say(@"JIT setup failed: the game does not start (see jit-helper.log)"); gameEnded(126); return NULL; }
         say(@"JIT pool ready");
     }
     if (gGame.translated) {   // an Intel game: AArchX translates its executable, here Steam's own file
@@ -643,7 +649,7 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
     int e = pthread_create(&gGame.thread, &at, gameThread, (void *)CFBridgingRetain(codeExe));
     if (e) { gGame.state = 0; say([NSString stringWithFormat:@"pthread_create: %d", e]); return e; }
     say([NSString stringWithFormat:@"%@ runs in-process as pid %d (%d arguments)", app.lastPathComponent, kGamePid, gGame.argc]);
-    splash(app);
+    if (gGame.jitMB) splash(app);   // the slow starts; others show their window within a second or two
     return 0;
 }
 

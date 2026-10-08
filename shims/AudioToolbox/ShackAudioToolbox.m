@@ -278,3 +278,36 @@ void ShackAudioStopAll(void) {
     NSLog(@"[ShackAudio] game ended: stopped %lu queues, %lu units, %lu graphs; session off=%d %@",
           (unsigned long)queues.count, (unsigned long)units.count, (unsigned long)graphs.count, off, e ?: @"");
 }
+
+// The JIT helper's debugger stops the whole app for ~15 s (a game Steam started that needs JIT); whatever plays then
+// (Big Picture) stutters on what is left in its buffer. Paused before, started again after: only what this paused,
+// and only if its owner has neither stopped nor disposed it meanwhile (a stop by its owner untracks it).
+// ponytail: output units and queues, what Steam's UI plays through; graphs are a game's, and the game has not started.
+void ShackAudioPauseAll(BOOL pause) {
+    static NSArray<NSValue *> *pausedUnits, *pausedQueues;
+    if (pause) {
+        NSArray<NSValue *> *units, *queues;
+        @synchronized(NSValue.class) { units = gUnits.allObjects ?: @[]; queues = gQueues.allObjects ?: @[]; }
+        NSMutableArray<NSValue *> *paused = [NSMutableArray array];
+        for (NSValue *v in units) REAL(AudioOutputUnitStop)((AudioUnit)v.pointerValue);   // still tracked: not its owner's stop
+        for (NSValue *v in queues) {   // a queue stays tracked until disposed: only the running ones
+            UInt32 running = 0, size = sizeof running;
+            AudioQueueRef q = (AudioQueueRef)v.pointerValue;
+            if (!REAL(AudioQueueGetProperty)(q, kAudioQueueProperty_IsRunning, &running, &size) && running && !REAL(AudioQueuePause)(q))
+                [paused addObject:v];
+        }
+        pausedUnits = units; pausedQueues = paused;
+    } else {
+        for (NSValue *v in pausedUnits) {
+            BOOL live; @synchronized(NSValue.class) { live = [gUnits containsObject:v]; }
+            if (live && !Disposed(v.pointerValue)) REAL(AudioOutputUnitStart)((AudioUnit)v.pointerValue);
+        }
+        for (NSValue *v in pausedQueues) {
+            BOOL live; @synchronized(NSValue.class) { live = [gQueues containsObject:v]; }
+            if (live) REAL(AudioQueueStart)((AudioQueueRef)v.pointerValue, NULL);
+        }
+    }
+    NSLog(@"[ShackAudio] %@ %lu units, %lu queues for the JIT helper", pause ? @"paused" : @"resumed",
+          (unsigned long)pausedUnits.count, (unsigned long)pausedQueues.count);
+    if (!pause) pausedUnits = pausedQueues = nil;
+}
