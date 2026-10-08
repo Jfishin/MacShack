@@ -35,8 +35,8 @@ def main(app, shims):
                 out |= exported_by([os.path.join(shims, f"libShack{s}.dylib") for s in SHIMS])
         return out
     shackprep.exported_by = with_reexported_shims
-    report = shackprep.gap_report2(app, shackprep.sdk_path() if hasattr(shackprep, "sdk_path") else
-                                   os.popen("xcrun --sdk iphoneos --show-sdk-path").read().strip(), shims, link_map, reexports)
+    report = shackprep.gap_report2(app, shackprep.run("xcrun", "--sdk", "iphoneos", "--show-sdk-path").strip(), shims,
+                                   link_map, reexports)
     total = 0
     for path, gaps in sorted(report.items()):
         if os.path.basename(path) not in LOADED: continue

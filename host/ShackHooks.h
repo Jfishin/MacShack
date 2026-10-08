@@ -1,7 +1,8 @@
 #import <Foundation/Foundation.h>
 // Make the process look like the guest: NSBundle.mainBundle, CFBundleGetMainBundle,
 // _NSGetExecutablePath and proc_pidpath all answer with the guest's paths.
-// guestCodePath is the signed copy of the guest's Mach-Os (Frameworks/Guests/<Name>, same layout as the bundle):
+// guestCodePath is the signed copy of the guest's Mach-Os (normally Library/Guests/<Name>/<generation>; Frameworks/Guests
+// is the legacy embed path for developers), same layout as the bundle:
 // a dlopen of a Mach-O inside the guest bundle loads that copy instead (the Documents one is the unsigned Mac file).
 void ShackHooksInstall(NSString *guestBundlePath, NSString *guestExecPath, NSString *guestCodePath);
 // Guest images prepared under another name: code-relative path -> the bundle-relative original whose name
@@ -21,7 +22,7 @@ BOOL ShackResolveCase(const char *path, char *out, size_t n);
 void *ShackHookForGuestSymbol(const char *name);
 // Asked after ShackHookForGuestSymbol's own replacements (the Steam client's answers for an Intel game it started).
 void ShackHooksSetGuestSymbolAnswer(void *(*answer)(const char *name));
-// The game ended (exit or main returned): posts ShackGuestExited on the main queue; the host returns to Home.
+// The game ended (exit or main returned): posts ShackGuestExited on the main queue; the host returns to MacShack's own screen.
 void ShackGuestEnded(int code);
 // Really end MacShack (relaunch into another game, Force Quit); a plain exit() is a guest ending once hooks are in.
 void ShackExitProcess(int code);

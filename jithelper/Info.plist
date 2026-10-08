@@ -33,6 +33,6 @@
 		<string>MacShackJITRequestHandler</string>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>MacShack connects to this iPhone through LocalDevVPN to enable JIT.</string>
+	<string>MacShack connects to this device through LocalDevVPN to enable JIT.</string>
 </dict>
 </plist>

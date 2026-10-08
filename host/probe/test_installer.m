@@ -19,6 +19,9 @@ static NSString *profile = @"profile-one";
     }
     return [NSFileManager.defaultManager copyItemAtPath:input toPath:output error:error];
 }
++ (BOOL)signBinaryAtPath:(NSString *)input outputPath:(NSString *)output identifier:(NSString *)identifier error:(NSError **)error {
+    return [self signBinaryAtPath:input outputPath:output error:error];
+}
 + (BOOL)importCertificateData:(NSData *)data password:(NSString *)password error:(NSError **)error { return NO; }
 + (NSString *)runProbeWithError:(NSError **)error { return nil; }
 @end
@@ -163,12 +166,11 @@ int main(int argc, const char **argv) {
         [fm copyItemAtPath:x86 toPath:[intelSteam stringByAppendingPathComponent:@"Contents/MacOS/libsteam_api.dylib"] error:nil];
         Check([ShackInstaller installAppAtPath:intelSteam error:&error] != nil, error.description);
         NSString *intelSteamData = [root stringByAppendingPathComponent:@"Documents/Games/IntelSteam.app"];
-        Check([[NSData dataWithContentsOfFile:[intelSteamData stringByAppendingPathComponent:@"Contents/MacOS/libsteam_api.dylib"]] isEqual:[NSData dataWithContentsOfFile:x86]] &&
-              ![fm fileExistsAtPath:[intelSteamData stringByAppendingPathComponent:@"Contents/MacOS/libsteam_api.dylib.valve"]], @"Intel game's Valve library untouched");
+        Check([[NSData dataWithContentsOfFile:[intelSteamData stringByAppendingPathComponent:@"Contents/MacOS/libsteam_api.dylib"]] isEqual:[NSData dataWithContentsOfFile:x86]],
+              @"Intel game's Valve library untouched");
         // i386-only (AArchX m32): translated like an Intel game.
         if (argc == 6) {
             NSString *old32 = App(root, @"Old32", [NSString stringWithUTF8String:argv[5]]);
-            [fm copyItemAtPath:[NSString stringWithUTF8String:argv[5]] toPath:[old32 stringByAppendingPathComponent:@"Contents/MacOS/libsteam_api.dylib"] error:nil];
             failSigning = YES;
             Check([ShackInstaller installAppAtPath:old32 error:&error] != nil, error.description);
             failSigning = NO;
@@ -177,7 +179,6 @@ int main(int argc, const char **argv) {
             Check([m32[@"translate"] isEqual:@"i386"] && [ShackInstaller translatesAtAppPath:data32] && [ShackInstaller requiresJITAtAppPath:data32],
                   @"i386 game translated with JIT");
             Check([[ShackInstaller preparedCodeRootForAppPath:data32 error:&error] isEqual:data32], @"i386 code root is its data folder");
-            Check(![fm fileExistsAtPath:[data32 stringByAppendingPathComponent:@"Contents/MacOS/libsteam_api.dylib.valve"]], @"i386 Valve library untouched");
         }
         // Native code inside a .framework folder (Godot GDExtensions: Fountains' EOS plugin) is signed like any dylib.
         NSString *fwGame = App(root, @"FrameworkGame", fixture);

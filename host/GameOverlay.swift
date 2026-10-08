@@ -3,7 +3,7 @@ import UIKit
 
 // MacShack's button over the Dynamic Island while a game runs. The island itself cannot be a button for the app in
 // front (iOS hides an app's own Live Activity), so a transparent window above the game claims a small area over the
-// island's spot and passes every other touch through to the game. A half-second hold opens a Liquid Glass panel to quit, bring up the
+// island's spot and passes every other touch through to the game. A tap or short hold opens a Liquid Glass panel to quit, bring up the
 // keyboard or show the on-screen controller (whose controls are the only other areas the window claims).
 @Observable
 @MainActor
@@ -19,14 +19,14 @@ final class GameOverlayModel {
     var size = CGSize.zero
     var islandInset: CGFloat = 62   // the safe area on the island's side (landscape)
 
-    // The island's spot, sideways: its far edge sits 11 pt inside the safe area (IslandPill measured 14 pt on a 62 pt
+    // The island's spot, sideways: its far edge sits 11 pt inside the safe area (measured: 14 pt on a 62 pt
     // inset, 11 on 59), its length is 125 pt. The button covers it from the screen edge with a margin all round.
     var islandRect: CGRect {
         let width = max(60, islandInset + 6), height: CGFloat = 125 + 50
         return CGRect(x: islandLeft ? 0 : size.width - width, y: (size.height - height) / 2, width: width, height: height)
     }
 
-    // Frame rate and resolution from the panel: the running game's own settings (the keys of Home's tiles), or Big
+    // Frame rate and resolution from the panel: the running game's own settings (the keys of Local Games' tiles), or Big
     // Picture's while the Steam client runs no game. The frame rate changes at once; resolution at the next start.
     @ObservationIgnored var steam = false
     @ObservationIgnored var gameKey: String?   // MacShack's game: Documents/Games/<Name>.app

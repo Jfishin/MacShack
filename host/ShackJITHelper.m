@@ -67,7 +67,7 @@ static void extensionRequest(NSString *identifier, NSString *type, NSData *paylo
 void ShackJITHelperStartForPID(pid_t pid, dispatch_queue_t queue, void (^done)(BOOL ok, NSString *log)) {
     NSData *pairing = [NSData dataWithContentsOfURL:ShackJITPairingFileURL()];
     if (pairing.length == 0) {
-        dispatch_async(queue, ^{ done(NO, @"No pairing file: import one in Settings > JIT."); });
+        dispatch_async(queue, ^{ done(NO, @"No pairing file: import one in Settings > Advanced > JIT & signing."); });
         return;
     }
     NSDictionary *request = @{@"pid": @(pid), @"pairing": [pairing base64EncodedStringWithOptions:0]};

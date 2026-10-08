@@ -1,6 +1,6 @@
 // File-backed memory tier ("userspace swap"), after Madeira's ml1077 (Wine's VirtualAlloc), here at mmap.
 //
-// iOS has no anonymous swap: jetsam kills an app when phys_footprint reaches its limit (8 GB on this phone). Dirty pages
+// iOS has no anonymous swap: jetsam kills an app when phys_footprint reaches its limit (8 GB on an iPhone 17 Pro Max). Dirty pages
 // of a MAP_SHARED file mapping are different: they are file cache, not charged to phys_footprint, stay in RAM while
 // there is room, and are written to the file and evicted only under memory pressure (Madeira measured on device:
 // 512 MB written -> footprint +2 MB; God of War's footprint 8109 -> 4253 MB with 1.6 GB backed).

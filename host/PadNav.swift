@@ -3,10 +3,10 @@ import GameController
 
 // Game controller navigation for MacShack's own screens. Polled at 60 Hz, as ShackHID polls in games: a
 // valueChangedHandler would take the one handler slot a native game may set. Visible views push handlers
-// (`.padHandler`); the newest gets a press first (a sheet over its tab, a tab over the tab bar).
+// (`.padHandler`); the newest gets a press first (a sheet over its page).
 @Observable @MainActor
 final class PadNav {
-    enum Press { case up, down, left, right, a, b, x, y, l1, r1 }
+    enum Press { case up, down, left, right, a, b, x, y }
 
     var active = false            // a pad was used: tiles show a focus ring
     @ObservationIgnored var suspended: () -> Bool = { false }   // a game is running
@@ -39,8 +39,6 @@ final class PadNav {
         if pad.buttonB.isPressed { down.insert(.b) }
         if pad.buttonX.isPressed { down.insert(.x) }
         if pad.buttonY.isPressed { down.insert(.y) }
-        if pad.leftShoulder.isPressed { down.insert(.l1) }
-        if pad.rightShoulder.isPressed { down.insert(.r1) }
         let now = ProcessInfo.processInfo.systemUptime
         for p in down {
             if !held.contains(p) { fire(p); repeatAt[p] = now + 0.4 }   // new press

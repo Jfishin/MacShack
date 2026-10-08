@@ -10,7 +10,7 @@
 #import <libkern/OSCacheControl.h>
 #import <time.h>
 
-// StikDebug JIT26 brk protocol (from StikJIT INTEGRATION.md / Madeira, reimplemented here):
+// StikDebug JIT26 brk protocol (upstream StikJIT's INTEGRATION.md / Madeira, reimplemented here):
 //   brk #0xf00d with x16 = command. x16=1 -> JIT26PrepareRegion(x0=addr|0, x1=len)
 //   returns prepared RX addr in x0 (if x0==0 the debugger allocates and returns it).
 //   x16=0 -> JIT26Detach. Regions prepared AFTER detach are impossible.

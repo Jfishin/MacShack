@@ -25,7 +25,7 @@ struct SettingsView: View {
                         ForEach(renderScales, id: \.self) { Text(scaleLabel($0)).tag($0) }
                     }
                 } header: { Text("Steam Big Picture") } footer: {
-                    Text("Lower draws fewer frames and pixels: less power, less heat. The frame rate also changes from the Dynamic Island menu; resolution when Steam starts. Hold the Dynamic Island in Steam or in a game for the MacShack menu.")
+                    Text("Lower draws fewer frames and pixels: less power, less heat. The frame rate also changes from the MacShack menu; resolution when Steam starts. Hold \(DeviceInfo.menuSpot) in Steam or in a game for the MacShack menu.")
                 }
                 Section {
                     Toggle("Sleep Steam during games", isOn: $sleep)
@@ -48,7 +48,7 @@ struct SettingsView: View {
                     Toggle("Metal performance HUD", isOn: $metalHUD)
                     NavigationLink("JIT & signing") { JITSigningView() }
                     NavigationLink("Logs") { LogBrowser() }
-                    NavigationLink("Device probe") { ProbeView() }
+                    NavigationLink("Self-test") { ProbeView() }
                     if !app.jitStatus.isEmpty { Text(app.jitStatus).font(.footnote) }
                     if let e = app.error { Text(e).font(.system(.footnote, design: .monospaced)).textSelection(.enabled) }
                 }
@@ -68,7 +68,7 @@ struct SettingsView: View {
     }
 }
 
-// Every game's frame cap and resolution unless its own (Home's tile menu, the island menu) says otherwise. Lower is
+// Every game's frame cap and resolution unless its own (its tile menu in Local Games, the MacShack menu) says otherwise. Lower is
 // cooler: Low Power Mode holds the panel to 60, which is the default cap.
 struct GameDefaultsSection: View {
     @AppStorage("fpsCap") private var defaultCap = 60   // ShackGameFrameCap's default
@@ -80,7 +80,7 @@ struct GameDefaultsSection: View {
                 ForEach(renderScales, id: \.self) { Text(scaleLabel($0)).tag($0) }
             }
         } header: { Text("Games") } footer: {
-            Text("A game's own setting wins: its tile on Home, or the Dynamic Island menu while it runs. The frame cap changes at once from the island; resolution at the next launch.")
+            Text("A game's own setting wins: its tile in Local Games, or the MacShack menu while it runs. The frame cap changes at once from that menu; resolution at the next launch.")
         }
     }
 }
@@ -109,7 +109,7 @@ struct JITSigningView: View {
                     }
                 if !app.jitStatus.isEmpty { Text(app.jitStatus).font(.footnote) }
             } header: { Text("JIT") } footer: {
-                Text("Unity games need JIT. With an RPPairing file (idevice_pair's RPPairing format, or the one StikDebug uses) MacShack enables it itself: keep LocalDevVPN connected and Developer Mode on. After a reboot the first launch also downloads and mounts the Developer Disk Image.")
+                Text("Unity and Intel games need JIT. With an RPPairing file (idevice_pair's RPPairing format, or the one StikDebug uses) MacShack enables it itself: keep LocalDevVPN connected and Developer Mode on. After a reboot the first launch also downloads and mounts the Developer Disk Image.")
             }
         }
         .themed()

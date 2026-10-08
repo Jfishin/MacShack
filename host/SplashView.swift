@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 
 // Shown from the tap on a game until the game's own window takes over the screen (the AppKit shim replaces MacShack's
-// root view controller, which removes this). Teaches the two things a player needs: turn the phone, and the
-// MacShack menu lives on the Dynamic Island (GameOverlay.swift). Tips rotate underneath, Big Picture style.
+// root view controller, which removes this). Teaches the one thing a player needs: the MacShack menu lives on the
+// Dynamic Island, or the middle of the side edge on iPad (GameOverlay.swift). Tips rotate underneath, Big Picture style.
 struct SplashView: View {
     @Environment(AppModel.self) private var app
     let game: URL
@@ -12,10 +12,10 @@ struct SplashView: View {
     private var name: String { app.displayName(game) }
 
     static let tips = [
-        "Hold the Dynamic Island any time for the MacShack menu. Quit there so the game can save.",
-        "Need to type a name? Hold the Dynamic Island, then Keyboard.",
-        "Unity games need JIT once per launch: keep the phone unlocked and LocalDevVPN on.",
-        "Controllers work in most games: connect one in iPhone Settings before you start.",
+        "Hold \(DeviceInfo.menuSpot) any time for the MacShack menu. Quit there so the game can save.",
+        "Need to type a name? Hold \(DeviceInfo.menuSpot), then Keyboard.",
+        "Unity and Intel games need JIT once per launch: keep the device unlocked and LocalDevVPN on.",
+        "Controllers work in most games: connect one in Settings > Bluetooth before you start.",
         "Hold a game in Local Games to set its own frame cap or prepare it again.",
     ]
 
@@ -30,7 +30,7 @@ struct SplashView: View {
     }
     private var hints: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Hold the Dynamic Island during the game for the MacShack menu: keyboard and quit.")
+            Text("Hold \(DeviceInfo.menuSpot) during the game for the MacShack menu: keyboard and quit.")
                 .font(.subheadline).foregroundStyle(.white.opacity(0.75))
         }
     }
@@ -55,30 +55,14 @@ struct SplashView: View {
             }
             LinearGradient(colors: [.black.opacity(0.15), .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
-            GeometryReader { geo in
-                // Landscape (the overlay above the game is landscape-only): diagram left, game and status right, so
-                // nothing is pushed off the top of a 440 pt tall screen.
-                if geo.size.width > geo.size.height {
-                    HStack(spacing: 36) {
-                        PhoneDiagram().frame(width: 180, height: 180)
-                        VStack(alignment: .leading, spacing: 14) { header; hints; status; tipView }
-                            .frame(maxWidth: 420, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    VStack(spacing: 22) {
-                        Spacer()
-                        header
-                        PhoneDiagram().frame(width: 190, height: 190)
-                        hints
-                        Spacer()
-                        status
-                        tipView
-                    }
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+            // Landscape only, like the overlay above the game: diagram left, game and status right, so nothing is
+            // pushed off the top of a 440 pt tall screen.
+            HStack(spacing: 36) {
+                PhoneDiagram().frame(width: 180, height: 180)
+                VStack(alignment: .leading, spacing: 14) { header; hints; status; tipView }
+                    .frame(maxWidth: 420, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(24)
             .foregroundStyle(.white)
         }

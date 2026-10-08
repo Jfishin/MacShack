@@ -1,7 +1,7 @@
 import Foundation
 
 // A Mac game folder copied into Staging whole: its one .app with the data beside it (Cyberpunk 2077: archive/, engine/,
-// r6/, tools/), the layout a game reads from the folder that holds its .app. Home lists the .app; Prepare unpacks the
+// r6/, tools/), the layout a game reads from the folder that holds its .app. Local Games lists the .app; Prepare unpacks the
 // folder: the data moves beside the installed game (Documents/Games) and the .app to Staging's top, where the installer
 // takes it. Only on Prepare, never while scanning: Files may still be copying. Names already in Documents/Games are
 // refused rather than mixing two games' data.
@@ -26,7 +26,7 @@ enum StagedFolder {
         let dest = staging.appendingPathComponent(app.lastPathComponent)
         if fm.fileExists(atPath: dest.path) { throw fail("Staging already has \(app.lastPathComponent).") }
         if let taken = data.first(where: { fm.fileExists(atPath: games.appendingPathComponent($0.lastPathComponent).path) }) {
-            throw fail("Documents/Games already has \(taken.lastPathComponent) (another game's data?). Move it away and Prepare again.")
+            throw fail("MacShack/Games already has \(taken.lastPathComponent) (another game's data?). Move it away and Prepare again.")
         }
         try fm.createDirectory(at: games, withIntermediateDirectories: true)
         for item in data {

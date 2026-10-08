@@ -11,9 +11,10 @@ struct MacShackApp: App {
     // The first screen, unless MacShack starts with arguments or relaunches itself into a game: then Local Games.
     private static let onHome = ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("--") } ||
         UserDefaults.standard.string(forKey: "pendingLaunch") != nil
-    // First run: onboarding until a valid signing identity and a pairing file are in (never for test launches). Once
-    // shown it stays until its last page is left.
-    @State private var onboarding = !MacShackApp.onHome && (!AppModel.identityValid || !AppModel.hasPairingFile)
+    // First run: onboarding until a valid signing identity and a pairing file are in, or the pairing page was skipped
+    // (never for test launches). Once shown it stays until its last page is left.
+    @State private var onboarding = !MacShackApp.onHome && (!AppModel.identityValid ||
+        (!AppModel.hasPairingFile && !UserDefaults.standard.bool(forKey: "onboarding.pairingSkipped")))
 
     var body: some Scene {
         WindowGroup {

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Rebuild Unity's Mono runtime (the exact revision a game ships, see README.md) with the MacShack
 # dual-mapping patch, on a Mac with Xcode + brew autoconf/automake/libtool. Output: build/libmonobdwgc-2.0.dylib
-# (macOS platform; prep/embed turns it into the iOS guest copy). ~10 min on an M-series Mac.
+# (macOS platform; prep/shackprep.py embed, or prepare_catalog.py via build/mono-catalog, turns it into the iOS guest
+# copy). ~10 min on an M-series Mac.
 set -e
 REV=${1:?usage: build.sh <unity-mono-commit> [srcdir]}
 SRC=${2:-$HOME/src/unity-mono}

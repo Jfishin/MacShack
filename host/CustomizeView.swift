@@ -22,7 +22,7 @@ struct CustomizeView: View {
             }
             Section {
                 slider("Hue", \.accentHue, accent); slider("Saturation", \.accentSat, accent); slider("Brightness", \.accentBri, accent)
-            } header: { Text("Custom accent") } footer: { Text("Buttons, links and selected tabs. Moving a slider switches to Custom.") }
+            } header: { Text("Custom accent") } footer: { Text("Buttons and links. Moving a slider switches to Custom.") }
             Section("Custom background") {
                 slider("Hue", \.bgHue, tint); slider("Tint", \.bgSat, tint)
             }
@@ -35,8 +35,8 @@ struct CustomizeView: View {
                     LabeledContent("Dimming") { Slider(value: $look.dim, in: 0...0.85) }
                     Button("Remove picture", role: .destructive) { look.removePicture() }
                 }
-            } header: { Text("Home background") } footer: {
-                Text("Shown behind your games on Home. Dimming keeps their names readable.")
+            } header: { Text("Local Games background") } footer: {
+                Text("Shown behind your games in Local Games. Dimming keeps their names readable.")
             }
         }
         .themed()

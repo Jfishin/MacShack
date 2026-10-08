@@ -35,6 +35,8 @@ enum DeviceInfo {
         #endif
     }()
     static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
+    // Where GameOverlay's menu button sits: iPads have no Dynamic Island.
+    static var menuSpot: String { isPad ? "the middle of the screen's side edge" : "the Dynamic Island" }
     static var model: String { gestalt("marketing-name") ?? "\(UIDevice.current.model) (\(identifier))" }
     // Under the model name: the owner's name from Settings > General > About ("Alex's iPhone") when iOS shares it, which it
     // only does to apps with a restricted entitlement; otherwise the identifier and model number ("iPhone18,2 · MFXM4LL/A").

@@ -365,7 +365,7 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
         ![m[@"version"] isEqual:@1] || !SafeComponent(m[@"executable"]) || ![m[@"files"] isKindOfClass:NSDictionary.class] ||
         ![m[@"signing"] isKindOfClass:NSDictionary.class] ||
         ![m[@"sourceFiles"] isKindOfClass:NSDictionary.class])
-        return InstallFail(error, @"The prepared game manifest is invalid. Reimport the game.");
+        return InstallFail(error, @"The prepared game manifest is invalid. Prepare the game again.");
     NSDictionary *signing = [ShackSigner signingContextWithError:error];
     if (!signing) return nil;
     if (![m[@"signing"][@"identifier"] isEqual:signing[@"identifier"]] ||
@@ -383,7 +383,7 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
         if (![relative isKindOfClass:NSString.class] || [relative hasPrefix:@"/"] ||
             [relative.pathComponents containsObject:@".."] || !Inside([code stringByAppendingPathComponent:relative].stringByResolvingSymlinksInPath, code) ||
             ![hashes[relative] isEqual:Digest([code stringByAppendingPathComponent:relative], error)])
-            return InstallFail(error, @"Prepared code is missing or changed. Reimport the game before launching.");
+            return InstallFail(error, @"Prepared code is missing or changed. Prepare the game again before launching.");
     }
     for (NSString *relative in m[@"sourceFiles"]) {
         if (![relative isKindOfClass:NSString.class] || [relative hasPrefix:@"/"] ||
@@ -421,7 +421,7 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
         NSString *source = reprepare ? installedPath : [StagingRoot() stringByAppendingPathComponent:[name stringByAppendingPathExtension:@"app"]];
         if (!SafeComponent(name) || ![appPath isEqual:source.stringByStandardizingPath] ||
             ![appPath.stringByResolvingSymlinksInPath isEqual:appPath])
-            return InstallFail(error, @"Prepare a real .app directory directly inside Documents/Staging or Documents/Games.");
+            return InstallFail(error, @"Prepare a real .app directory directly inside MacShack/Staging or MacShack/Games.");
         BOOL directory = NO;
         if (![fm fileExistsAtPath:source isDirectory:&directory] || !directory)
             return InstallFail(error, @"The staged .app directory is missing.");

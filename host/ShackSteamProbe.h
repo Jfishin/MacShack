@@ -1,6 +1,6 @@
 #import <Foundation/Foundation.h>
 
-// Steam client smoke test S1 (prep/steam-onehost/README.md): prepares and signs the macOS Steam client copied to
+// A developer check (--steam-load-probe): prepares and signs a macOS Steam client copied by hand to
 // Library/Application Support/Steam, dlopens each image and logs the outcome to Documents/Logs/steam-load.log.
 void ShackSteamLoadProbe(void);
 // Prepares and signs the Steam client tree at source (…/Steam, Valve's files) into guest (…/Steam, removed first): every

@@ -14,7 +14,7 @@ struct Palette: Codable, Equatable {
     }
 }
 
-// The chosen theme, the custom sliders and the Home picture, kept in UserDefaults and Application Support.
+// The chosen theme, the custom sliders and the Local Games picture, kept in UserDefaults and Application Support.
 @Observable
 @MainActor
 final class Appearance {
@@ -72,7 +72,7 @@ final class Appearance {
 }
 
 extension View {
-    // The theme's gradient (and, on Home, the picture) behind a screen. System theme without a picture leaves the
+    // The theme's gradient (and, in Local Games, the picture) behind a screen. System theme without a picture leaves the
     // stock look alone.
     func themed(picture: Bool = false) -> some View { modifier(Themed(picture: picture)) }
 }

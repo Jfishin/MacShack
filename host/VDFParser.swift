@@ -3,21 +3,12 @@ import Foundation
 // Steam setup (SteamClientManifest) reads Valve's text VDF with it; plain Foundation, so
 // host/probe/test_steam_setup.swift compiles it alone.
 
-// MARK: - Simple VDF Binary Parser
-
-/// Parses Valve Data Format (binary) used in PICS responses
+/// Parses Valve's text VDF (the Steam client manifest)
 enum VDFParser {
-    // VDF binary types
-    private static let typeNone: UInt8 = 0x00
-    private static let typeString: UInt8 = 0x01
-    private static let typeInt32: UInt8 = 0x02
-    private static let typeEnd: UInt8 = 0x08
-
-    /// Parse a text-format VDF / KeyValues blob into a nested dictionary.
-    /// Steam PICS sends *app* product info in this text format (`"key" "value"`
-    /// pairs and `"key" { ... }` sections) — package info uses the binary
-    /// format. Leaf values are always `String`. Standard VDF does not process
-    /// escape sequences, so a quoted string runs verbatim to the next `"`.
+    /// Parse a text-format VDF / KeyValues blob into a nested dictionary
+    /// (`"key" "value"` pairs and `"key" { ... }` sections). Leaf values are
+    /// always `String`. Standard VDF does not process escape sequences, so a
+    /// quoted string runs verbatim to the next `"`.
     static func parseTextVDF(from data: Data) -> [String: Any] {
         guard let text = String(data: data, encoding: .utf8) else { return [:] }
         let scalars = Array(text.unicodeScalars)
@@ -83,68 +74,5 @@ enum VDFParser {
         }
 
         return parseSection()
-    }
-
-    /// Extract app IDs from a binary VDF package info buffer
-    static func parsePackageAppIDs(from data: Data) -> [UInt32] {
-        var appIDs: [UInt32] = []
-        var offset = 0
-
-        // Look for "appids" section and extract UInt32 values
-        // This is a simplified parser that searches for known patterns
-        let searchKey = "appids"
-        if let range = findKey(searchKey, in: data) {
-            offset = range
-            // After "appids" key, we expect sub-keys with numeric names and uint32 values
-            while offset < data.count {
-                guard offset < data.count else { break }
-                let type = data[offset]
-                offset += 1
-
-                if type == typeEnd { break }
-
-                // Read key name (null-terminated string)
-                guard let (_, newOffset) = readNullTerminatedString(from: data, at: offset) else { break }
-                offset = newOffset
-
-                if type == typeInt32 {
-                    guard offset + 4 <= data.count else { break }
-                    let value = data[offset..<offset + 4].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-                    appIDs.append(UInt32(littleEndian: value))
-                    offset += 4
-                } else if type == typeString {
-                    guard let (_, newOff) = readNullTerminatedString(from: data, at: offset) else { break }
-                    offset = newOff
-                } else if type == typeNone {
-                    // Sub-section - skip or recurse
-                    continue
-                }
-            }
-        }
-
-        return appIDs
-    }
-
-    private static func findKey(_ key: String, in data: Data) -> Int? {
-        let keyBytes = Array(key.utf8) + [0] // null-terminated
-        let keyData = Data(keyBytes)
-        guard data.count >= keyData.count else { return nil }
-
-        for i in 0..<(data.count - keyData.count) {
-            if data[i..<i + keyData.count] == keyData {
-                return i + keyData.count
-            }
-        }
-        return nil
-    }
-
-    private static func readNullTerminatedString(from data: Data, at offset: Int) -> (String, Int)? {
-        var end = offset
-        while end < data.count && data[end] != 0 {
-            end += 1
-        }
-        guard end < data.count else { return nil }
-        let str = String(data: data[offset..<end], encoding: .utf8) ?? ""
-        return (str, end + 1)
     }
 }

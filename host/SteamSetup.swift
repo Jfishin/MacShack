@@ -1,11 +1,10 @@
 import SwiftUI
 import UIKit
 
-// Valve's macOS Steam client set up on this device from Valve's CDN (prep/steam-onehost/README.md,
-// "Setup on the device"): the pinned (or latest) manifest; the changed packages downloaded
-// into a cache, checked and unpacked into a staging copy; that copy prepared and signed into a new code folder; then both
-// swapped in, the only moment the live Steam changes. Steam's own data beside Steam.AppBundle (config, userdata,
-// steamapps, logs, sign-in) is never touched. Log: Documents/Logs/steam-setup.log.
+// Valve's macOS Steam client set up on this device from Valve's CDN: the pinned (or latest) manifest; the changed
+// packages downloaded into a cache, checked and unpacked into a staging copy; that copy prepared and signed into a new
+// code folder; then both swapped in, the only moment the live Steam changes. Steam's own data beside Steam.AppBundle
+// (config, userdata, steamapps, logs, sign-in) is never touched. Log: Documents/Logs/steam-setup.log.
 @Observable
 @MainActor
 final class SteamSetup {

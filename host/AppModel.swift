@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-// Local state behind the tabs: what is in Documents/Staging and Documents/Games, the on-device prepare, launching (one
-// attempt per process: the loader's hooks are process-wide), and the signing identity. Moved out of the old ContentView.
+// Local state behind the launcher, Local Games and Settings: what is in Documents/Staging and Documents/Games, the
+// on-device prepare, launching (one attempt per process: the loader's hooks are process-wide), and the signing identity.
 @Observable
 @MainActor
 final class AppModel {
@@ -28,8 +28,8 @@ final class AppModel {
     @ObservationIgnored private var autoLaunched = false
     var currentGame: String?
     var ended: String?   // the game that quit: MacShack is back, and another game needs a fresh process
-    var configOffer: (game: URL, rules: [AutoConfig.Rule])?   // Home asks to set up auto-config (AutoConfig.swift)
-    var stalePrepare: (url: URL, reason: String)?   // Home asks to prepare it again: the loader refused its prepared code
+    var configOffer: (game: URL, rules: [AutoConfig.Rule])?   // Local Games asks to set up auto-config (AutoConfig.swift)
+    var stalePrepare: (url: URL, reason: String)?   // Local Games asks to prepare it again: the loader refused its prepared code
     @ObservationIgnored private var hostRoot: UIViewController?
 
     var busy: Bool { (launched && ended == nil) || preparing || signingBusy }
@@ -99,7 +99,7 @@ final class AppModel {
         return found.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 
-    // `then` gets (success, message); Steam downloads use it to report the prepare result on their tile.
+    // `then` gets (success, message); the stale-prepare alert uses it to launch after a successful prepare.
     func prepare(_ url: URL, then done: ((Bool, String) -> Void)? = nil) {
         guard !busy else { done?(false, "MacShack is busy."); return }
         preparing = true
@@ -138,7 +138,7 @@ final class AppModel {
         let needsJIT = ShackInstaller.requiresJIT(atAppPath: url.path)
         let hostID = Bundle.main.bundleIdentifier ?? ""
         do { try ShackLoader.validateApp(atPath: url.path) }   // before the loader installs process-wide hooks
-        catch { stalePrepare = (url, error.localizedDescription); return }   // Home offers Prepare again
+        catch { stalePrepare = (url, error.localizedDescription); return }   // Local Games offers Prepare again
         launched = true
         currentGame = displayName(url)
         hostRoot = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first?.rootViewController
@@ -146,7 +146,7 @@ final class AppModel {
         let exe = Self.executable(of: url)
         current = (url, exe)
         Task {
-            if let id = SteamLaunch.appID(for: url) {
+            if let id = Self.appID(for: url) {
                 // Valve's own Steam library: with no steam_appid.txt in the working directory,
                 // SteamAPI_RestartAppIfNecessary asks Steam to relaunch the game and the game quits (Akane).
                 // It reads the file from the working directory, which Unity changes; Steam's own launch variables too.
@@ -154,13 +154,18 @@ final class AppModel {
                 setenv("SteamAppId", "\(id)", 1)
                 setenv("SteamGameId", "\(id)", 1)
             }
-            // HOME is the shared container now (ShackLoader): this game's Library from its old per-game home joins it.
-            for kept in mergeMove(from: Self.documents.appendingPathComponent("Homes/\(exe)/Library"),
-                                            to: URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")) {
-                NSLog("[MacShack] %@ stays in Homes/%@: the shared Library already has it", kept, exe)
-            }
             startGame(url, needsJIT: needsJIT, hostID: hostID)
         }
+    }
+
+    // A game's Steam app ID: steam_appid.txt in the bundle.
+    private static func appID(for game: URL) -> UInt32? {
+        for file in [game.appendingPathComponent("Contents/MacOS/steam_appid.txt"),
+                     game.appendingPathComponent("Contents/Resources/steam_appid.txt")] {
+            if let text = try? String(contentsOf: file, encoding: .utf8),
+               let id = UInt32(text.trimmingCharacters(in: .whitespacesAndNewlines)), id > 0 { return id }
+        }
+        return nil
     }
 
     private func startGame(_ url: URL, needsJIT: Bool, hostID: String) {
@@ -197,7 +202,7 @@ final class AppModel {
         ShackJITHelperStart { ok, log in
             try? log.write(to: Self.logs.appendingPathComponent("jit-helper.log"), atomically: true, encoding: .utf8)
             guard !ok else { return }
-            self.jitFailure = "JIT failed: \(log.split(separator: "\n").last ?? "unknown error"). Full log: Settings > Logs > jit-helper.log."
+            self.jitFailure = "JIT failed: \(log.split(separator: "\n").last ?? "unknown error"). Full log: Settings > Advanced > Logs > jit-helper.log."
             self.jitStatus = self.jitFailure ?? ""
         }
     }
@@ -212,7 +217,7 @@ final class AppModel {
         } catch { jitStatus = error.localizedDescription }
     }
 
-    // Out of Home without deleting anything: Documents/Games/<Name>.app (+ .args, .steam) -> Documents/Archive.
+    // Out of Local Games without deleting anything: Documents/Games/<Name>.app (+ .args) -> Documents/Archive.
     // Move it back with Files ("On My iPhone > MacShack") to restore.
     func archive(_ url: URL) {
         let fm = FileManager.default
@@ -220,23 +225,20 @@ final class AppModel {
         try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
         do {
             try fm.moveItem(at: url, to: dest.appendingPathComponent(url.lastPathComponent))
-            for ext in ["args", "steam"] {
-                let side = url.deletingPathExtension().appendingPathExtension(ext)
-                try? fm.moveItem(at: side, to: dest.appendingPathComponent(side.lastPathComponent))
-            }
+            let side = url.deletingPathExtension().appendingPathExtension("args")
+            try? fm.moveItem(at: side, to: dest.appendingPathComponent(side.lastPathComponent))
         } catch { NSLog("[MacShack] archive %@: %@", url.lastPathComponent, "\(error)") }
         scan()
     }
 
-    // For good: the .app (staged or installed), its .args/.steam and its prepared code in Library/Guests/<Name>.
-    // Saves (Documents/Homes, Application Support) stay, so a re-download continues. ponytail: the emptied
-    // Documents/Steam depot folder stays too (a few bytes; the next download of the game reuses it).
+    // For good: the .app (staged or installed), its .args and its prepared code in Library/Guests/<Name>.
+    // Saves (Library/Application Support, Preferences) stay, so preparing the game again continues.
     func delete(_ url: URL) {
         let fm = FileManager.default
         let name = url.deletingPathExtension().lastPathComponent
         let games = Self.documents.appendingPathComponent("Games", isDirectory: true)
         let guests = fm.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Guests/\(name)")
-        for item in [url, guests, games.appendingPathComponent("\(name).args"), games.appendingPathComponent("\(name).steam")]
+        for item in [url, guests, games.appendingPathComponent("\(name).args")]
             where fm.fileExists(atPath: item.path) {
             do { try fm.removeItem(at: item) } catch { NSLog("[MacShack] delete %@: %@", item.path, "\(error)") }
         }
@@ -322,7 +324,6 @@ final class AppModel {
         }
     }
 
-    // devicectl testing hooks, unchanged from the old ContentView.
     // The macOS Steam client is set up on this device: by SteamSetup, or copied by hand and prepared by --steam-load-probe.
     static var steamClientReady: Bool {
         FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/Guests/SteamClient/Steam/Contents/MacOS/steam_osx")
@@ -348,6 +349,7 @@ final class AppModel {
 
     func openBigPicture() { launchSteamClient(arguments: ["-gamepadui"]) }
 
+    // devicectl testing hooks.
     func handleLaunchArguments() {
         let args = ProcessInfo.processInfo.arguments
         if args.contains("--metal4-fx-probe") {
@@ -356,9 +358,6 @@ final class AppModel {
             // A fresh process exercises the native provider before guest hooks.
             DispatchQueue.global().async { ShackMetalFXProbe() }
             return
-        }
-        if let i = args.firstIndex(of: "--archive"), i + 1 < args.count {   // `--archive a.app,b.app`
-            args[i + 1].split(separator: ",").forEach { archive(Self.documents.appendingPathComponent("Games/\($0)")) }
         }
         scan()
         // The last game never ended cleanly (it crashed MacShack): its log may name a fix.
@@ -381,9 +380,9 @@ final class AppModel {
             else { steamSetup.start(.open) }
             return
         }
-        // Steam client smoke test S1: prepare the copied macOS Steam client and dlopen each image (Documents/Logs/steam-load.log).
+        // Prepare a hand-copied macOS Steam client and dlopen each image (Documents/Logs/steam-load.log).
         if args.contains("--steam-load-probe") { autoLaunched = true; DispatchQueue.global().async { ShackSteamLoadProbe() }; return }
-        // Steam client smoke test S2+: the prepared macOS Steam client, started like a game (Documents/Logs/steam_osx.log,
+        // The prepared macOS Steam client, started like a game (Documents/Logs/steam_osx.log,
         // Steam's own logs in Library/Application Support/Steam/logs). Arguments after --steam-run go to steam_osx.
         if let i = args.firstIndex(of: "--steam-run") {
             autoLaunched = true

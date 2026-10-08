@@ -137,7 +137,7 @@ static void (*shack_signal(int sig, void (*handler)(int)))(int) {
     return shack_sigaction(sig, &act, &old) ? SIG_ERR : old.sa_handler;
 }
 
-// A game ending (exit/_exit/_Exit, or main returning) must not end MacShack: the host goes back to Home and relaunches
+// A game ending (exit/_exit/_Exit, or main returning) must not end MacShack: the host returns to MacShack's own screen and relaunches
 // itself for the next game (one game per process). The calling thread never returns: a guest thread parks, the main
 // thread keeps running its run loop so the UI stays alive. MacShack's own exits use ShackExitProcess.
 void ShackGuestEnded(int code) {

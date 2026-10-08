@@ -640,7 +640,7 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
     ShackHooksAddGuest(app, path, code, gGame.translated, ^(int status) { gameEnded(status); });
     ShackHIDSetSecondGuestTest(ShackHooksIsSecondCaller);   // the game's pad callbacks apart from Steam's
     ShackHIDSetXbox2016(ShackWantsXbox2016(app));
-    // The game's own frame cap and render scale (the same settings as on MacShack's Home; the island menu sets them).
+    // The game's own frame cap and render scale (the same settings as in MacShack's Local Games; the island menu sets them).
     NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
     ShackMetalSetFrameCap(ShackGameFrameCap(name, gGame.translated));
     ShackAppKitSetRenderScale(ShackGameRenderScale(name, gGame.translated));

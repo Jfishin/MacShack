@@ -31,8 +31,8 @@ static NSString *ASBD(const AudioStreamBasicDescription *f) {
                 (unsigned)f->mFormatFlags, (unsigned)f->mChannelsPerFrame, (unsigned)f->mBitsPerChannel, (unsigned)f->mBytesPerFrame] : @"NULL";
 }
 
-// Everything the game has playing. A game that ends with _Exit/exit no longer ends the process (the host goes back to
-// Home), so the system would keep calling its audio callbacks; ShackAudioStopAll silences them when the game ends.
+// Everything the game has playing. A game that ends with _Exit/exit no longer ends the process (the host returns to
+// MacShack's own screen), so the system would keep calling its audio callbacks; ShackAudioStopAll silences them when the game ends.
 static NSMutableSet<NSValue *> *gQueues, *gUnits, *gGraphs;
 // Units already disposed: a Mac AudioUnit is a checked handle, so a game may stop one again after disposing it (FMOD
 // Studio tearing down a failed init); here it is freed memory. Such calls get kAudio_ParamError, as on a Mac.

@@ -1762,7 +1762,7 @@ index 3bdba69..0ed33c3 100644
 +/* MacShack: an image from the guest root (runtime/guest: the x86 libc++, libc++abi, libunwind and libstdc++ that
 + * stand in for the system's).  On a Mac those live in the shared cache, whose weak references dyld answers from
 + * the cache and the main executable's overrides only, never from another dylib: Unity 2019's UnityPlayer exports
-+ * its own operator new, and libc++ bound to it allocated strings that gbe's libsteam_api then freed with free(). */
++ * its own operator new, and libc++ bound to it allocated strings that a game's libsteam_api then freed with free(). */
 +static int dimg_is_guest_system(const DynImage *d)
 +{
 +    const char *root = getenv("OCERZ_GUEST_ROOT");

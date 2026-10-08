@@ -1,10 +1,11 @@
 #!/bin/bash
 # Intel game smoke test under AArchX (ocerz) native mode, the only mode iOS can use.
-# SECS (default 30) per game; logs in build/aarchx-smoke/. Pass game names to run a subset.
+# SECS (default 30) per game; logs in build/aarchx-smoke/. Pass game names to run a subset. STEAM_LIBRARY: a second
+# Steam library's steamapps/common (default: the one in ~/Library/Application Support/Steam).
 # DIAG=1: 4 s before the end, SIGINFO (ocerz dumps every guest thread) and `sample` the native stacks.
 # Build first: see prep/aarchx/README.md.
 cd "$(dirname "$0")/../../vendor/AArchX" || exit 1
-A=$PWD; S="$HOME/Library/Application Support/Steam/steamapps/common"; L=/Volumes/SSD2TB/SteamLibrary/steamapps/common
+A=$PWD; S="$HOME/Library/Application Support/Steam/steamapps/common"; L=${STEAM_LIBRARY:-$S}
 LOG=$A/../../build/aarchx-smoke; mkdir -p "$LOG"
 SECS=${SECS:-30}
 run() {

@@ -203,7 +203,7 @@ targets:
         SKIP_INSTALL: YES
         GCC_PREFIX_HEADER: ""
         OTHER_LDFLAGS: "-Wl,-reexport-lSystem -Wl,-reexport_framework,CFNetwork -L$(SDKROOT)/usr/lib/swift -Wl,-reexport-lswiftCore"
-  ShackSteamClient:   # the macOS Steam client's link gaps (prep/steam-onehost/README.md); only the Steam prepare links it
+  ShackSteamClient:   # the macOS Steam client's link gaps (prep/steam-onehost/ios-link-gaps.txt); only the Steam prepare links it
     type: library.dynamic
     platform: iOS
     sources: [shims/SteamClient]
@@ -236,7 +236,7 @@ targets:
       path: jithelper/Info.plist
       properties:
         CFBundleDisplayName: MacShack JIT
-        NSLocalNetworkUsageDescription: MacShack connects to this iPhone through LocalDevVPN to enable JIT.
+        NSLocalNetworkUsageDescription: MacShack connects to this device through LocalDevVPN to enable JIT.
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: MacShackJITRequestHandler

@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Wires the first screen (host/Launcher.swift) to MacShack. Local Games (Home) and Settings take its place rather than
+// Wires the first screen (host/Launcher.swift) to MacShack. Local Games (HomeView) and Settings take its place rather than
 // sit over it: a game's AppKit shim replaces the window's root view controller, and a presented page would stay on
 // top. Steam setup (missing or not current Steam) covers everything, then Big Picture opens.
 struct LauncherView: View {
@@ -18,6 +18,10 @@ struct LauncherView: View {
             case nil:
                 LauncherScreen(steamReady: AppModel.steamClientReady, modal: setupMode != nil, bigPicture: openBigPicture,
                                localGames: { page = .games }, settings: { page = .settings })
+                    // Errors raised here (Big Picture did not start) have no other place on this screen.
+                    .alert("Something went wrong", isPresented: Binding(get: { app.error != nil }, set: { if !$0 { app.error = nil } })) {
+                        Button("OK", role: .cancel) {}
+                    } message: { Text(app.error ?? "") }
             case .games: HomeView(close: { page = nil })
             case .settings: SettingsView(close: { page = nil }, setUpSteam: { page = nil; setupMode = $0 })
             }

@@ -349,7 +349,7 @@ double ShackSteamUIRenderScale(void) {
     // Frame cap (`-fpsCap.<Name> 30` or `-fpsCap 30` as launch arguments for devicectl runs).
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     ShackMetalSetFrameCap(ShackGameFrameCap(name, translate));
-    // File-backed memory tier (ShackSwap.c): `swapMB.<Name>`, else `swapMB`, else off (0). Opt-in per game (Home's
+    // File-backed memory tier (ShackSwap.c): `swapMB.<Name>`, else `swapMB`, else off (0). Opt-in per game (Local Games'
     // Memory swap): Stray ran 27 fps with it and 54 without (2026-09-27), so only games that run out of memory want it. Created with no
     // file protection (as Madeira does), so pages can be written back while the phone is locked.
     id ownSwap = [defaults objectForKey:[@"swapMB." stringByAppendingString:name]], anySwap = [defaults objectForKey:@"swapMB"];
@@ -441,7 +441,7 @@ double ShackSteamUIRenderScale(void) {
     NSString *exePath = [macos stringByAppendingPathComponent:@"steam_osx"];
     NSString *codePath = [code stringByAppendingPathComponent:@"Contents/MacOS/steam_osx"];
     if (![NSFileManager.defaultManager fileExistsAtPath:codePath]) {
-        if (error) *error = err(@"The Steam client is not prepared (run --steam-load-probe)."); return NO;
+        if (error) *error = err(@"Steam is not set up. Tap Set up Steam, or Settings > Repair Steam."); return NO;
     }
     NSString *logs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0] stringByAppendingPathComponent:@"Logs"];
     [NSFileManager.defaultManager createDirectoryAtPath:logs withIntermediateDirectories:YES attributes:nil error:nil];

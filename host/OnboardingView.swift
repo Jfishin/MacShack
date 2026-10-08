@@ -1,10 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// First run, before the launcher (README "Build" and prep/steam-onehost/README.md
-// "Setup on the device"): the signing
-// certificate, the JIT pairing file, then Steam, one landscape page each. Files come by AirDrop (MacShackApp's
-// onOpenURL) or the Files picker, both through AppModel.receive. No Back: Settings > JIT & signing replaces either file.
+// First run, before the launcher (README "Building" and "Using MacShack"): the signing certificate, the JIT pairing
+// file (Not now skips it), then Steam, one landscape page each. Files come by AirDrop (MacShackApp's onOpenURL) or the
+// Files picker, both through AppModel.receive. No Back: Settings > Advanced > JIT & signing replaces or adds either file.
 // ponytail: touch only; controller presses come with the launcher.
 struct OnboardingView: View {
     @Environment(AppModel.self) private var app
@@ -12,6 +11,7 @@ struct OnboardingView: View {
     @State private var page = 0
     @State private var picking = false
     @State private var settingUp = false
+    @AppStorage("onboarding.pairingSkipped") private var pairingSkipped = false   // MacShackApp stops asking for it
 
     private let titles = ["Certificate", "Pairing file", "Steam"]
 
@@ -60,9 +60,11 @@ struct OnboardingView: View {
     private var pairing: some View {
         StepPage(title: "Pairing file", done: app.pairingReady, doneText: "Pairing file imported.", status: app.jitStatus, busy: false,
                  text: "Games that compile code while they run (Unity Mono, Intel) need JIT. On your Mac, make this device's pairing file with idevice_pair (github.com/jkcoxson/idevice_pair), RPPairing format, save its text as pairingFile.plist, then AirDrop it here. Also install LocalDevVPN from the App Store and keep it on when such a game starts.",
-                 action: "Import pairing file", act: { picking = true },
-                 next: { if AppModel.steamClientReady { finish(false) } else { page = 2 } })
+                 action: "Import pairing file", act: { picking = true }, next: afterPairing,
+                 skip: { pairingSkipped = true; afterPairing() })
     }
+
+    private func afterPairing() { if AppModel.steamClientReady { finish(false) } else { page = 2 } }
 
     @ViewBuilder private var steamPage: some View {
         if settingUp {
@@ -85,6 +87,7 @@ struct OnboardingView: View {
 private struct StepPage: View {
     let title: String, done: Bool, doneText: String, status: String, busy: Bool, text: String, action: String
     let act: () -> Void, next: () -> Void
+    var skip: (() -> Void)? = nil   // a Not now beside the action
 
     var body: some View {
         ScrollView {
@@ -95,10 +98,13 @@ private struct StepPage: View {
                     Label(doneText, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                     Button("Continue", action: next).buttonStyle(.borderedProminent)
                 } else {
-                    Button(action: act) {
-                        if busy { ProgressView() } else { Text(action) }
+                    HStack(spacing: 12) {
+                        Button(action: act) {
+                            if busy { ProgressView() } else { Text(action) }
+                        }
+                        .buttonStyle(.borderedProminent).disabled(busy)
+                        if let skip { Button("Not now", action: skip).buttonStyle(.bordered) }
                     }
-                    .buttonStyle(.borderedProminent).disabled(busy)
                 }
                 if !status.isEmpty { Text(status).font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center) }
             }

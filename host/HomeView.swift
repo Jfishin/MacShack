@@ -93,7 +93,7 @@ struct GameTile: View {
     var body: some View {
         Button { app.launch(url) } label: {
             VStack(spacing: 6) {
-                ArtTile(title: name, aspect: 1, focused: focused) {
+                ArtTile(title: name, focused: focused) {
                     if let icon = await Artwork.icon(forApp: url) { return icon }
                     return nil
                 }
@@ -128,7 +128,7 @@ struct GameTile: View {
     }
 }
 
-// Frame cap and memory swap for one game, for a controller (Y on Home) as well as touch: left/right changes the
+// Frame cap and memory swap for one game, for a controller (Y in Local Games) as well as touch: left/right changes the
 // cap, X toggles swap, B closes. Same settings as the tile's context menu.
 struct GameOptions: View {
     @Environment(\.dismiss) private var dismiss
@@ -187,7 +187,7 @@ struct GameOptions: View {
             case .b: dismiss()
             default: break
             }
-            return true   // modal: nothing reaches Home underneath
+            return true   // modal: nothing reaches Local Games underneath
         }
     }
 }
@@ -216,7 +216,7 @@ struct StagedTile: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ArtTile(title: name, aspect: 1) { await Artwork.icon(forApp: url) }.opacity(0.6)
+            ArtTile(title: name) { await Artwork.icon(forApp: url) }.opacity(0.6)
             Text(name).font(.caption).lineLimit(2).multilineTextAlignment(.center)
             Button("Prepare") { app.prepare(url) }.buttonStyle(.borderedProminent).controlSize(.small).disabled(app.busy)
         }

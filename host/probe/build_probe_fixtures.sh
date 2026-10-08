@@ -27,7 +27,7 @@ otool -L "$OUT/machello.dylib" | tail -n +2 | awk '{print $1}' | while read -r d
 done
 codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$OUT/machello.dylib"
 
-# 3. Plain macOS executable for the loader self-test (patched by shackprep in Task 5).
+# 3. Plain macOS executable for the loader self-test (patched by shackprep).
 clang -isysroot "$MACSDK" -target arm64-apple-macos13.0 "$SRCROOT/host/probe/hello.c" -o "$OUT/hello"
 
 # 3b. Convert the hello executable to an iOS dylib with shackprep (same code path as real games).

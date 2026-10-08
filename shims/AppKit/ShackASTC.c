@@ -2,7 +2,7 @@
 // decoding to RGBA8 costs 4-8x the memory of the source, while the two formats share the 4x4 block grid, so a BC block
 // becomes one ASTC block: 1 byte per pixel, 2x BC1 and equal to BC3.
 //
-// Block types (single partition, 2-bit weights; ASTC spec section C.2, checked against Arm's astcenc in test_astc.py):
+// Block types (single partition, 2-bit weights; ASTC spec section C.2, checked against Arm's astcenc in host/probe/test_astc.c):
 //   T1  CEM 8, RGB, 8-bit endpoints: BC1's four-colour mode exactly (0, 1/3, 2/3, 1 are ASTC's 2-bit weights 0,21,43,64).
 //   T2  CEM 12, RGBA, 8-bit endpoints, one weight set: BC3 blocks whose alpha is constant.
 //   T3  CEM 12 dual plane, alpha on the second plane, endpoints 48 levels (trit + 4 bits, the most 45 bits hold):

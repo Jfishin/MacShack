@@ -15,8 +15,8 @@ static id Fail(NSError **error, NSString *message) {
     return nil;
 }
 
-// Read at load: once a game runs, the identity hooks make mainBundle answer for the game, and a download that
-// finishes after play would be signed from the game's bundle ("no embedded development profile").
+// Read at load: once a game runs, the identity hooks make mainBundle answer for the game, and a game Steam starts is
+// prepared while Steam is the running guest: it would be signed from Steam's bundle ("no embedded development profile").
 static NSBundle *gHostBundle;
 __attribute__((constructor)) static void captureHostBundle(void) { gHostBundle = NSBundle.mainBundle; }
 
