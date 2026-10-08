@@ -38,10 +38,15 @@ needed. Cache mode maps Rosetta's cache and exists only on a Mac.
 
 ## Build (Mac)
 
+`make apis` generates the API databases from the macOS SDK and reads its version with `xcrun --show-sdk-version`, which
+the Command Line Tools SDK does not answer: point `DEVELOPER_DIR` at a full Xcode. MacShack's databases come from the
+macOS 27 SDK (Xcode 27, a beta at the time of writing). The `prebuilt-deps` download in the main README carries them
+ready-made.
+
 ```sh
 git submodule update --init vendor/AArchX
 cd vendor/AArchX && git apply ../../prep/aarchx/macshack.patch
-export DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer  # CLT SDK lacks SDKVersion
+export DEVELOPER_DIR=<path to Xcode 27>.app/Contents/Developer
 make -j && make apis && bash tools/build_guest_cxx.sh   # guest x86 libc++ in runtime/guest
 bash ../../prep/aarchx/guest_libstdcxx.sh   # GNU libstdc++.6 (old Unity, Aragami, Blasphemous, Gungeon)
 echo 'int ocerz_libstdcxx_shim;' > /tmp/stdcxx.c && G=runtime/guest/usr/lib
@@ -60,20 +65,18 @@ After editing `vendor/AArchX`, regenerate the committed patch (it must stay byte
 cd vendor/AArchX && git add -N . && git diff -- . ':!runtime' ':!tests/unit/bin' ':!ocerz' > ../../prep/aarchx/macshack.patch; git reset -q
 ```
 
-`prep/aarchx/smoke.sh [game...]` runs local Steam Intel games for 30 s each in native mode; logs
-in `build/aarchx-smoke/`.
+Other MacShack tools here:
 
-## Status (2026-09-27, Mac, native mode)
+- `check_steam_api.c`: an Intel game's own Steam API under AArchX, compared with Rosetta (Steam running; steps in its
+  header, expect `steam api ok` and Rosetta's hash).
+- `gaps.py "Game.app"`: the Intel counterpart of `shackprep.py gaps2`. It sorts every import of a game's x86_64 Mach-Os
+  by what native mode would do with it (bridged, missing on the host, stub, not in the database); usage in its header.
+- `smoke.sh [game...]`: runs the Intel games in its own list (Shovel Knight, Cyber Shadow, Gravity Circuit, Akane,
+  Blasphemous, Hades) for 30 s each in native mode, from the Mac's Steam library (`STEAM_LIBRARY` names a second
+  library's `steamapps/common`); logs in `build/aarchx-smoke/`. `SECS` changes the time; `DIAG=1` dumps guest threads
+  and native stacks near the end.
 
-| Game | Result |
-|---|---|
-| Cyber Shadow (Chowdren, OpenGL) | Title screen at **60 fps** on the M4 Max and **on the iPhone** (see iOS port). |
-| Shovel Knight | Engine assertion (`ycAssert.cpp:101`) twice, then its int3. |
-| Akane (Unity 2018.2) | **Renders at 55-61 fps** (dips to ~30 while loading). FMOD loads (AudioUnit database, libgcc_s stand-in, `__isfinitef` family); **sound plays**. Later scene crashes on NULL faults. |
-| Gravity Circuit (LÖVE/LuaJIT) | Binds now; alignment fault (SIGBUS ADRALN) after 15 lines. |
-| Hades | SIGBUS outside the guest arena after ~600 log lines. |
-| Blasphemous (Unity 2017.4, non-PIE, Rewired) | Plays to its title at 60 fps on the iPhone (2026-09-28): GNU libstdc++ guest, non-PIE slide, and `ShackHID` keeping released IOHID queues alive (Rewired polls one after releasing it). |
-| Enter the Gungeon | Imports real GNU libstdc++ (`guest_libstdcxx.sh` supplies it; all 65 imports resolve). Not run yet. |
+What runs, Mac and device: [docs/compat-status.md](../../docs/compat-status.md).
 
 ## iOS port
 
@@ -84,105 +87,76 @@ arena is always the host's dual-mapped pool). `OCERZ_ARENA_GB=<n>` shrinks nativ
 identity arena (tested at 4 and 16 GB). API databases and the guest C++ runtime are found through
 `OCERZ_APIDB` and `OCERZ_GUEST_ROOT`, so they can live in the app bundle.
 
-**iPhone 17 Pro Max, 2026-09-27: Cyber Shadow runs its title screen at 60 fps** (59.7-60.9, its cap;
-sound bank 11 s vs 4 s on an M4 Max). Screenshot: logo drawn through the GL shim; the game then waits for
-input. What it took on the device, beyond the Mac work: bundle identity through MacShack's hooks
-(`ocerz_bridge_set_host_symbol` -> `ShackHookForGuestSymbol`), textual framework-path matching (no macOS
-framework exists on iOS to follow symlinks through), guest `gl*` through `ShackGLGetProcAddress`, and
-`shims/AppKit/ShackGLLegacy.m` (fixed-function client arrays, ARB shader objects, GLSL 1.x, desktop
-extension names). Device test: copy the .app to `Documents/Staging`, `.args` with
-`--shack-env=SHACK_OPENGL=1` (GL games) and `--shack-env=OCERZ_FPS=1` (frame counter), `--prepare`,
-`--launch`, log in `Documents/Logs/<exe>.log`; `pymobiledevice3 developer dvt screenshot` for a picture.
+On iOS, AArchX also relies on: bundle identity through MacShack's hooks (`ocerz_bridge_set_host_symbol` ->
+`ShackHookForGuestSymbol`), textual framework-path matching (no macOS framework exists on iOS to follow symlinks
+through), guest `gl*` through `ShackGLGetProcAddress`, and `shims/AppKit/ShackGLLegacy.m` (fixed-function client
+arrays, ARB shader objects, GLSL 1.x, desktop extension names).
+
+Device test: copy the `.app` to `Documents/Staging`, write an `.args` with `--shack-env=SHACK_OPENGL=1` (GL games) and
+`--shack-env=OCERZ_FPS=1` (frame counter), launch with `--prepare "<Name>"`, then `--launch "<Name>"`; the log is
+`Documents/Logs/<exe>.log`, and `pymobiledevice3 developer dvt screenshot` takes a picture.
 
 MacShack integration:
 
 - `project.yml` target `Ocerz` builds `vendor/AArchX/src` as `libOcerz.dylib` (a separate dylib keeps the
   LGPL library replaceable), `main.c`'s `main` renamed `ocerz_main`; the embed phase copies
-  `runtime/apis` and `runtime/guest` to `MacShack.app/AArchX/` when they have been built on the Mac.
-- `ShackInstaller`: an x86_64-only main executable installs as `translate: x86_64` with `requiresJIT`;
-  nothing is prepared or signed, since AArchX reads the original Mach-Os as data and only runs code it
+  `runtime/apis` and `runtime/guest` (and `apis32`/`guest32` for m32) to `MacShack.app/AArchX/` when they exist.
+- `ShackInstaller`: an x86_64-only (or i386-only) main executable installs as `translate: x86_64` (or `i386`) with
+  `requiresJIT`; nothing is prepared or signed, since AArchX reads the original Mach-Os as data and only runs code it
   generates into the pool. Its code root is its `Documents/Games` folder. (`test_installer.py` checks it.)
 - `ShackLoader`: after `ShackJITPoolSetup`, a translated game runs `ocerz_main -native <exe> <args>` on
-  the 64 MB `guest-main` thread with `OCERZ_JIT_POOL` (from `SHACK_JIT_POOL`), `OCERZ_ARENA_GB=16`,
-  `OCERZ_APIDB`/`OCERZ_GUEST_ROOT` in the bundle, and `ocerz_bridge_set_host_open` answering each macOS
+  the 64 MB `guest-main` thread with `OCERZ_JIT_POOL` (from `SHACK_JIT_POOL`), `OCERZ_ARENA_GB` (the largest of 16, 8
+  or 4 GB that leaves 4 GB of address space free beside it), `OCERZ_STUB_MISSING=1` (an import no bridge covers becomes
+  a logged stub), `OCERZ_APIDB`/`OCERZ_GUEST_ROOT` in the bundle, and `ocerz_bridge_set_host_open` answering each macOS
   install name with the library `+[ShackPrep hostLibraryForInstallName:]` maps it to (the same shim or
   iOS framework an arm64 game's load command is rewritten to).
-- The pool is `--shack-jit-mb` (default 128 MB); raise it if AArchX logs "JIT code arena full".
+- The pool is `--shack-jit-mb` (Intel games default to 512 MB, MonoKickstart games to 1 GB); raise it if AArchX logs
+  "JIT code arena full". AArchX never reuses its pool: a full pool runs new code interpreted.
 
-## Device notes (2026-09-27, iPhone)
+## Tips
 
-- Aragami (Unity 2017.2, non-PIE, GNU libstdc++): loads, slides, starts Mono; then exits because it ships
-  only desktop-GL shaders (`-force-metal`: "not built from editor") and the CGL shim is a stub. Needs CGL on
-  ShackGL plus GLSL 4.10 core → ES 3.00. Unity games with Metal shaders get `-force-metal` automatically.
-- Akane: skipping the intro ran Mono's Boehm `GC_thread_exit_proc` natively (guest `pthread_cleanup_push`
-  records sit on the host thread's `__cleanup_stack`); the `pthread_exit` special now runs them as guest code.
-- Hades (Game.macOS.app, Metal via The Forge): runs at 60 fps. It was ~1 fps until packuswb/pmaddubsw/pmulhw
-  (its video decoder, ~8 M/s) were inlined as NEON instead of running in exec_one. Diagnose such stalls with
-  `--shack-env=OCERZ_PERFSTAT=1` (SLOWOP table every 15 s); remaining slow ops there: pshuflw, cvttps2dq, cmpps,
-  rcpps, movmskpd.
-- Celeste (MonoKickstart, x86 Mono JIT, FNA3D on GL, FMOD 1.10): boots to the menus and plays with saves.
-  Needed: GSS API database, leaf-name dlopen through LC_RPATH (dyld order), x86_64 gbe_fork as its Steam API
-  (it quits on "Steam not found!"), thread_get_state flavor 5, base-vertex draws in ShackGL. Audio is silent:
-  Audio: FMOD 1.10's multiband EQ blew up to NaN because the fused dec/inc+jcc emitters dropped scalar
-  results carried around a loop with a fixed l0 mapping; they now defer to emit_jcc (check_l0loop.c).
-  Celeste's x86 Mono JIT fills ~150 MB of translations in its first 20 s and ~1 MB/s after: MonoKickstart
-  games get a 1 GB pool (~18 s to prepare). AArchX never reuses its pool; each block carries a ~50-word
-  prologue and 50-130-word epilogue, so sharing those (or flushing when full) is the real fix.
-- Bisecting a translation bug: `OCERZ_ARENA_AT=0x9000000000` pins guest addresses, then
-  `OCERZ_INTERP_LO/HI` interprets a range; a range that fixes the output holds the bad block
-  (`OCERZ_JITDIS=<file> OCERZ_JITDIS_LO/HI` dumps its arm64; Homebrew llvm-mc disassembles). Rebuild with
-  `rm src/jit.o` first: macOS make compares whole seconds.
-- Bridge traces (`OCERZ_BRIDGELOG_MATCH=open|stat`, words separated by `|`) print the first argument as a string.
-- Subnautica (Unity 2019, GLSL 150 only): **plays** (2026-09-28) on ShackGL's CGL. Its DXT textures (black: iOS has
-  no S3TC) are re-encoded as ASTC; the loading screen's mip upload reads past its buffer into a guard page (padded in
-  ShackGL); a guest `abort()` now `_exit`s (it waited on threads Boehm had stopped, and froze). The Waterscape
-  compute/geometry shader errors are harmless: on GL the game uses its baked water. Underwater renders black (open).
-  Aragami (Unity 2017, GL only, -force-glcore via AutoConfig): "Press Any Button". Both needed Carbon's
-  SetSystemUIMode / Event Manager stubs and the self-contained x86 gbe.
-- emit_sse_misc inlines movshdup/movsldup, pshuflw/pshufhw, movmskps/pd, cmpps/pd (0-7), cvttps2dq (x86's
-  0x80000000 for out of range and NaN), rcpps/rsqrtps (estimate + one Newton step, within x86's 1.5*2^-12),
-  psrldq/pslldq, haddps/pd, blendps/pd. Hades's exec_one share: 0.29% -> 0.08% of instructions. Left: imul with
-  a memory operand, shifts by cl / of memory, ptest (flag-setting forms in the integer core).
-- Cuphead (Unity 2017.4, Rewired input, CSteamworks): Rewired's `dlopen(".../CoreFoundation.framework/CoreFoundation")`
-  returned NULL: iOS's framework folders are flat, so realpath kept the unversioned name no stub carries. The API-DB
-  install-name match now runs before realpath (`tests/unit/test_canon.c`, part of `make unit`). Its old Steam API
-  (`SteamClient017`) then needed gbe's `steam_interfaces.txt`, which the installer writes.
-  Its pad needed two more: Rewired imports CoreText by its old path under ApplicationServices (`ApplicationServices.framework/
-  Frameworks/CoreText.framework/CoreText`; a moved sub-framework now matches the top-level one, as macOS's symlink does), and asks
-  that handle for CoreFoundation's `CFStringGetTypeID` (a virtual system library's handle now also reaches the other
-  system libraries, standing in for its dependents; `check_dlsym_deps.c`). Mono's `MONO_LOG_LEVEL=debug`
-  `MONO_LOG_MASK=dll` (devicectl `--environment-variables`) shows each P/Invoke that fails to resolve.
+- `OCERZ_BRIDGELOG_MATCH=open|stat` (words separated by `|`) prints each matching call's first argument as a string.
+- Mono's `MONO_LOG_LEVEL=debug MONO_LOG_MASK=dll` (devicectl `--environment-variables`, or `--shack-env=`) shows each
+  P/Invoke that fails to resolve.
+- A slow Intel game: `--shack-env=OCERZ_PERFSTAT=1` names the ops left to the interpreter.
+- Unity games on GL log compute and geometry shader errors (Subnautica's Waterscape) that can be harmless: on GL the
+  game falls back to what it baked.
+- More debugging variables and the bisection method: [docs/compat-playbook.md](../../docs/compat-playbook.md).
 
+## 32-bit (i386) Mac games: m32 (experimental)
 
-## 32-bit (i386) Mac games: m32 (experimental, 2026-09-30)
-
-The code is `src/m32*.c` and `include/ocerz/m32*.h` in AArchX (inside `macshack.patch`), plus two hooks: `main.c`
-routes an i386-only program to `m32_run`, and `ocerz_dyldapi_dispatch` hands a 32-bit cpu's trap to `m32_trap`.
+m32 runs i386-only Mac programs. No i386 game is confirmed playable on a device yet; Batman: Arkham Asylum (Feral)
+launches. The code is `src/m32*.c` and `include/ocerz/m32*.h` in AArchX (inside `macshack.patch`), plus two hooks:
+`main.c` routes an i386-only program to `m32_run`, and `ocerz_dyldapi_dispatch` hands a 32-bit cpu's trap to
+`m32_trap`.
 
 - The guest runs as i386 in a flat 4 GB window (`ocerz_mem_init(0, 4 GB)`); it never holds a host address. Host
   objects reach it as 8-byte handle cells at 0xE0000000-0xF0000000, guest objects with a host twin (CFSTR literals,
   CF-typed data it only takes the address of) as aliases (`m32_handle.c`).
-- Imports from system libraries are addresses in the DYLDAPI trap window; each export's two notations come from
-  `runtime/apis32` (`make apis32`: `tools/sdkgen.sh --guest i386`, the SDK headers parsed as i386 10.14 beside arm64).
-  Guest-only classes: `s` C string, `P` one pointer written back, `W`/`V` one long written back, `Q` data whose
-  layouts differ (needs a special). The generic crossing is `m32_cross.c`; hand-written ones are `m32_libsystem.c`
-  (layouts, mmap, setjmp, signals, compiler-rt), `m32_stdio.c` (printf/scanf, heap, malloc zones, errno),
-  `m32_thread.c` (pthreads with host twins, TLV), `m32_cf.c`, `m32_dyld.c` (dlopen, dyld APIs, images),
-  `m32_gl.c` (mapped GL buffers, CGL), `m32_audio.c` (CoreAudio render callbacks: FMOD's output).
+- Imports from system libraries are addresses in the DYLDAPI trap window (`m32_bridge.c`); each export's two notations
+  come from `runtime/apis32` (`make apis32`: `tools/sdkgen.sh --guest i386`, the SDK headers parsed as i386 10.14 beside
+  arm64; read by `m32_db.c`). Guest-only classes: `s` C string, `P` one pointer written back, `W`/`V` one long written
+  back, `Q` data whose layouts differ (needs a special). The generic crossing is `m32_cross.c`; hand-written ones are
+  `m32_libsystem.c` (layouts, mmap, setjmp, signals, compiler-rt), `m32_stdio.c` (printf/scanf, heap, malloc zones,
+  errno), `m32_thread.c` (pthreads with host twins, TLV), `m32_cf.c`, `m32_dyld.c` (dlopen, dyld APIs, images),
+  `m32_gl.c` (mapped GL buffers, CGL), `m32_audio.c` (CoreAudio render callbacks: FMOD's output), `m32_zlib.c` (zlib
+  and bzip2 streams). `m32_callback.c` lets host code call guest function pointers; `m32_leaf.c` serves hot small libc
+  calls straight from the JIT, with no crossing.
+- Objective-C 1 runtime for i386 guests: `m32_objc.c` (guest classes, proxies and paired host classes),
+  `m32_objc_types.c` (type encodings), `m32_objc_exc.c` and `m32_catch.m` (setjmp-based `@try`, host NSExceptions
+  rethrown into the guest), `m32_blocks.c` (blocks in both directions).
+- C++ exceptions: `m32_unwind.c` is the Itanium two-phase unwinder over the guest images' `__eh_frame`, calling each
+  frame's own personality routine in the guest.
 - Guest dylibs load from `@executable_path`/`@loader_path`/`@rpath` and `runtime/guest32` (`OCERZ_GUEST32_ROOT`), with
   dyld-info or classic relocations (libgcc_s from MacPorts has no dyld info). Weak symbols coalesce to the first
   definition in load order, as dyld does.
-- Heap: a dlmalloc mspace in the window (`OCERZ_M32_HEAP_MB`, default 1024) until the program registers its own
-  malloc zone (tcmalloc in Batman); then malloc and friends run the guest zone through generated i386 thunks and
-  free goes by who owns the pointer.
+- Heap: a dlmalloc mspace in the window (first segment `OCERZ_M32_HEAP_MB`, default 16 MB; more come as needed) until
+  the program registers its own malloc zone (tcmalloc in Batman); then malloc and friends run the guest zone through
+  generated i386 thunks and free goes by who owns the pointer.
 - Guest GNU libstdc++: `prep/aarchx/guest32_libstdcxx.sh` (MacPorts GCC 15.2 i386 runtime, SHA-256 pinned).
-- Diagnostics: `OCERZ_M32LOG=imports,calls,images`; `OCERZ_M32_KEEP_GOING=1` runs with unresolved imports.
+- Diagnostics: `OCERZ_M32LOG=imports,calls,images` (also `keys`, `monitors`); `OCERZ_M32_KEEP_GOING=1` runs with
+  unresolved imports.
 
-Checks (Mac): `make apis32 && bash tests/m32/dbcheck.sh && make check-m32` (13 programs in `tests/m32`, built with
-`clang -arch i386 -Wl,-ld_classic` against generated stub `.tbd`s), also with `OCERZ_NOJIT=1`.
-
-Batman (Mac, `ocerz -native` on the phone's copy): loads (1,641 imports, 5 guest dylibs), runs its and libstdc++'s
-initializers and ~134 M guest instructions, registers tcmalloc, then calls through a handle (an ObjC IMP from
-`method_setImplementation`): the Objective-C 1 runtime (M2) is next. Open: C++ exceptions (GCC's i386 unwinder reads
-DWARF via keymgr only; Apple-linked games need LLVM libunwind for i386), the JIT arena filling at ~88 KB per i386
-block (1 GB for 11.8k blocks), `AppKit`/`QuartzCore`/`AVFoundation` i386 header parse errors, x87 in the JIT.
+Checks (Mac): `make apis32 && bash tests/m32/dbcheck.sh && make check-m32` (34 programs in `tests/m32`, each with an
+`.expected` output, built with `clang -arch i386 -Wl,-ld_classic` against generated stub `.tbd`s; `tests/m32/build.sh`
+uses Xcode 26 from `/Applications/Xcode.app`, whose linker still links i386), also with `OCERZ_NOJIT=1`.

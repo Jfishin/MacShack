@@ -1,5 +1,12 @@
 # One-process Steam (Mac prototype)
 
+This is the Mac prototype the iOS implementation grew from (`host/ShackSteamClient.m`, `shims/SteamClient`). The notes
+below are the prototype's; the iOS code differs where iOS forces it (no fibers, MacShack's AppKit shim).
+
+`gen_stubs.py` generates `shims/SteamClient`'s stubs (libShackSteamClient) from `ios-link-gaps.txt`, the Steam
+client's iOS link gaps; `check_gaps.py <Steam.AppBundle/Steam> <MacShack.app/Frameworks>` checks a Steam build for new
+gaps (want `hard 0` for the images Steam loads).
+
 iOS gives MacShack one process: no `fork`, no `posix_spawn`. Valve's macOS Steam client is 9 processes (steam_osx,
 Steam Helper = CEF browser, its GPU/renderer/utility children, crashpad, ipcserver), and every game it starts is another.
 This prototype runs steam_osx, the Steam Helper browser (CEF `--single-process`) and a game Steam launches in **one**

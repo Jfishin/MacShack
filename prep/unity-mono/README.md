@@ -35,6 +35,9 @@ cp prep/unity-mono/build/libmonobdwgc-2.0.dylib <prepped Game.app>/Contents/Fram
 # copy in host/Guests/<Name>/Contents/Frameworks/) and rebuild the host.
 ```
 
+Embedding into `host/Guests` is the legacy path; on-device Prepare is the normal one, and it takes the runtime from the
+catalog below.
+
 ## Verify on the Mac (system Mono 6.12 class libs work with this runtime)
 
 ```
@@ -45,8 +48,8 @@ SHACK_JIT_POOL_MB=64 <mono-src>/mono/mini/mono-boehm hello.exe
 The pool's RX side is mapped without write permission, so any missed write site faults instead of silently
 working. To simulate the phone's mmap (no executable memory at all), build a `__interpose` dylib that strips
 `MAP_JIT`/`PROT_EXEC` and load it with `DYLD_INSERT_LIBRARIES`: the unpatched path then dies at its first
-generated instruction, the pool path completes (verified 2026-09-25 with interfaces, generics, dynamic methods,
-expression trees, 8 JIT threads, exceptions, async).
+generated instruction, the pool path completes (interfaces, generics, dynamic methods, expression trees, 8 JIT threads,
+exceptions, async).
 
 ## Host runtime catalog
 
@@ -60,9 +63,7 @@ cp prep/unity-mono/build/libmonobdwgc-2.0.dylib build/mono-catalog/dc7ab1aa/
 ```
 
 `build.sh` writes one shared output path, so stage each successful output before building another revision.
-The current catalog also contains `43035fcf`, copied from the existing Silksong build's
-`mono/mini/.libs/libmonoboehm-2.0.1.dylib`, stripped with `strip -x`, and assigned the install ID
-`@executable_path/../Frameworks/MonoEmbedRuntime/osx/libmonobdwgc-2.0.dylib`.
+The prebuilt-deps download carries the catalog (currently 0c500f44, 43035fcf, 7de96da4, dc7ab1aa).
 
 The host build invokes `prepare_catalog.py SOURCE DESTINATION SIGNING_IDENTITY`, using
 `build/mono-catalog` as its source and `MacShack.app/Frameworks/MonoRuntimes` as its destination.
@@ -72,12 +73,11 @@ and signs the installed guest copy with the host's identifier. Missing revisions
 
 ### Runtime-only build details
 
-The 2026-09-26 Big Hops build applied the existing nine-file `dualmap.patch` without changes, including the SDK26
-`_Bool` and `objc_super.super_class` compile fixes. Its initial `autogen.sh` generated `configure`, then started
-fetching every managed-library submodule. That broad fetch was interrupted; only `external/bdwgc` and its
-`libatomic_ops` submodule were needed for the JIT runtime. After configuring with the flags in `build.sh`, the
-runtime and `mono-boehm` executable linked successfully. The later `mono/native` target failed because the
-unfetched `external/corefx` sources were absent. This does not affect the completed JIT runtime artifact.
+`dualmap.patch` applied to `dc7ab1aa` unchanged, its SDK 26 compile fixes (`_Bool`, `objc_super.super_class`)
+included. `autogen.sh` fetches every managed-library submodule; only `external/bdwgc` and
+its `libatomic_ops` submodule are needed for the JIT runtime. After configuring with the flags in `build.sh`, the
+runtime and `mono-boehm` link. The later `mono/native` target fails without `external/corefx`, and the runtime does not
+need it.
 
 For an already configured checkout, build just the runtime prerequisites and runtime with the same compiler flags:
 
@@ -94,10 +94,9 @@ strip -x build/mono-catalog/dc7ab1aa/libmonobdwgc-2.0.dylib
 install_name_tool -id '@executable_path/../Frameworks/MonoEmbedRuntime/osx/libmonobdwgc-2.0.dylib' build/mono-catalog/dc7ab1aa/libmonobdwgc-2.0.dylib
 ```
 
-Big Hops validation: the rebuilt runtime exports exactly the shipped runtime's 2139 symbols. The existing stress
+Validation (`dc7ab1aa`): the rebuilt runtime exports exactly the shipped runtime's 2139 symbols. The existing stress
 fixture passed with a 64 MB dual mapping and again with the interposer that strips executable mmap/mprotect
 requests: `stress ok 40038350616`, six stripped requests. It covers dynamic methods, expression trees, interfaces,
 generics, switch tables, exceptions, async, and eight JIT threads. The fixture used system Mono 6.12 class libraries
 and the previously built arm64 `libmono-native.dylib` through the new prefix's `libmono-native-compat.dylib` symlink;
-that helper is only for the Mac test and is not the replacement guest runtime. Evidence and copies of the fixture
-are in `build/mono-catalog/dc7ab1aa/`. Device behavior remains untested for this revision.
+that helper is only for the Mac test and is not the replacement guest runtime.

@@ -13,11 +13,17 @@ installing the app is described in [README.md](README.md); debugging a game is d
   find out why instead of forcing it. Any command that deletes on someone's device needs their yes first.
 - Never commit or log a development `.p12` or its password.
 - Ask before launching or preparing games on a device someone else is using: it kills whatever they have open.
+- To copy a large folder (a game) into the app's `Documents` on a device, use `prep/devsync.py <device-id> <local-dir>
+  <remote-dir-under-Documents>`: it compares sizes and copies only what is missing, with retries, so it can be rerun
+  after an interruption. It reads the bundle ID from `MACSHACK_BUNDLE_ID` or `Signing.xcconfig`; options are in its
+  docstring.
+- `samples/MiniCocoa` is the smallest AppKit + Metal guest app (`samples/MiniCocoa/build.sh` builds `MiniCocoa.app`), for
+  trying the prepare and launch path without a game.
 
 ## Mac-side checks
 
-Commands run from the repository root. `/tmp/t` is just a scratch binary. Every other `host/probe/test_*` file gives its
-own build line in its header.
+Commands run from the repository root. `/tmp/t` is just a scratch binary. Where a row says "header", the build line is
+in that file's first lines.
 
 ### Installer and preparation
 
@@ -25,23 +31,29 @@ own build line in its header.
 |---|---|
 | Native on-device prep (unsigned, no game or key needed) | `python3 host/probe/test_native_prep.py` |
 | Transactional installer (fake signer) | `python3 host/probe/test_installer.py` |
-| Case-insensitive guest paths (mounts a case-sensitive APFS image) | see the header of `host/probe/test_case_paths.m` |
+| ShackPrep's Mach-O edits and gap reports | `python3 prep/test_shackprep.py` |
+| Case-insensitive guest paths (mounts a case-sensitive APFS image) | header of `host/probe/test_case_paths.m` |
+| A whole game folder copied into Staging | `swiftc -parse-as-library host/StagedFolder.swift host/probe/test_staged_folder.swift -o /tmp/t && /tmp/t` (expect `staged folder ok`) |
 | Launch arguments games need (known fixes, log rules) | `swiftc -parse-as-library host/AutoConfig.swift host/probe/test_auto_config.swift -o /tmp/t && /tmp/t` |
+| Command line of native Swift games | `swiftc -parse-as-library host/GuestArguments.swift host/probe/test_guest_arguments.swift -o /tmp/t && /tmp/t` (expect `guest arguments ok`) |
+| Developer ID trust for `SHACK_MAC_CODESIGN` (needs a Developer ID-signed Mach-O) | header of `host/probe/test_mac_code_trust.m` |
+| libcurl stubs (iOS simulator) | header of `host/probe/test_curl_stub.c` (expect `curl stub ok`) |
 | App icon (ICNS) parser | `swiftc -parse-as-library host/ICNS.swift host/probe/test_icns.swift -o /tmp/t && /tmp/t "<Game.app>/Contents/Resources/<icon>.icns"` |
-| Steam client setup: Valve's manifest, unpacking, compared with Valve's own install (downloads ~412 MB once) | see the header of `host/probe/test_steam_setup.swift` (expect `steam setup ok`) |
 
 Incoming apps go to `Documents/Staging`, installed data lives in `Documents/Games`, and signed guest code in
-`Library/Guests`. Launch arguments a game needs belong in `host/AutoConfig.swift`; the device keeps each game's custom
-`.args` in `Library/GameConfigs/<bundle id>.args`. Every host install invalidates prepared games (the install record
-pins the host executable's hash), so prepare each game again after installing a new build.
+`Library/Guests`. Launch arguments a game needs belong in `host/AutoConfig.swift`. A game's own arguments live in
+`Documents/Games/<Name>.args`, one per line; MacShack keeps a copy in `Library/GameConfigs/<bundle id>.args`, which
+survives Delete and is put back at launch when the game's `.args` is missing or still the default. Every host install
+invalidates prepared games (the install record pins the host executable's hash), so prepare each game again after
+installing a new build (`--prepare "<Name>"` or **Prepare again**).
 
 ### Signing
 
 | Check | Command |
 |---|---|
 | ZSign fixture (needs pkg-config and OpenSSL; no real key) | `python3 host/probe/test_signing.py --test-zsign` |
-| Signing a built host app | `python3 host/probe/test_signing.py --host-app build/Build/Products/Debug-iphoneos/MacShack.app --output /tmp/<new-unique-directory>` |
-| On the device | launch with `--on-device-sign-probe` (or the in-app button), then read `Documents/Logs/on-device-signing.log` |
+| Signing a built host app | `python3 host/probe/test_signing.py --host-app build/Build/Products/Release-iphoneos/MacShack.app --output /tmp/<new-unique-directory>` |
+| On the device (uses the development `.p12` imported on first run) | launch with `--on-device-sign-probe` (or the in-app button), then read `Documents/Logs/on-device-signing.log` |
 
 What the signing path relies on: iOS 27 loads a same-team, developer-signed dylib from outside the app bundle when its
 **code-signing identifier** matches the installed profile's app bundle identifier; entitlements on the dylib are
@@ -55,15 +67,35 @@ or iOS kills dyld on a cached invalid page.
 |---|---|
 | Textures and views (BC decoding) | `clang -fobjc-arc -DSHACK_BC_TEST shims/AppKit/ShackGLTexture.m shims/AppKit/ShackASTC.c host/probe/test_bc.m -framework Foundation -o /tmp/t && /tmp/t` |
 | S3TC-to-ASTC transcoder against Arm's reference decoder | `host/probe/test_astc.c` (its header lists the astc-encoder build) |
-| Main-nib parsing | `host/probe/test_nib.m` (build line in its header) |
+| GLSL 1.x shaders on OpenGL ES 3 (iOS simulator; a folder of shaders) | header of `host/probe/test_glsl_legacy.m` |
+| Virtual display geometry (`SHACK_DISPLAY_SIZE`) | `clang host/probe/test_display_profile.c -framework CoreGraphics -o /tmp/t && /tmp/t` |
+| Layer autoresizing (iOS simulator; Chromium's layer tree) | header of `host/probe/test_layer_resize.m` (expect `layer resize ok`) |
+| Main-nib parsing | header of `host/probe/test_nib.m` |
+| Quit sequence (`terminate:`, `applicationShouldTerminate:`) | `clang -fobjc-arc shims/AppKit/ShackTerminate.m host/probe/test_terminate.m -framework Foundation -o /tmp/t && /tmp/t` (expect `terminate ok`) |
+| MacShack's first screen (iOS simulator preview) | header of `host/probe/test_launcher.swift` |
 
 ### Input
 
 | Check | Command |
 |---|---|
-| On-screen controller touch mapping (simulator) | see the header of `host/probe/test_touch_controls.swift` |
+| On-screen controller touch mapping (simulator) | header of `host/probe/test_touch_controls.swift` |
 | On-screen controller pad (Mac; also `xcrun simctl spawn booted` for iOS) | `clang -fobjc-arc host/ShackTouchPad.m host/probe/test_touch_pad.m -framework GameController -framework Foundation -o /tmp/t && /tmp/t` |
 | Virtual HID gamepad, both pad identities | `clang -fobjc-arc -DSHACK_HID_TEST shims/IOKit/ShackHID.m host/probe/test_shack_hid.m -framework Foundation -framework GameController -o /tmp/t && /tmp/t && SHACK_HID_PAD=xbox2016 /tmp/t` |
+| Text input (`interpretKeyEvents:`) | `clang -fobjc-arc shims/AppKit/ShackTextInput.m host/probe/test_textinput.m -framework Foundation -o /tmp/t && /tmp/t` (expect `text input ok`) |
+| Key events from Steam's on-screen keyboard (`CGEventPost`, iOS simulator) | header of `host/probe/test_cg_keys.m` (expect `cg keys ok`) |
+
+### Steam
+
+| Check | Command |
+|---|---|
+| Steam client setup: Valve's manifest, unpacking, compared with Valve's own install (downloads ~412 MB once) | header of `host/probe/test_steam_setup.swift` (expect `steam setup ok`) |
+| In-process semaphores and shared memory for Steam (`shims/SteamClient/SteamIPC.c`) | `clang host/probe/test_steam_ipc.c shims/SteamClient/SteamIPC.c -o /tmp/t && /tmp/t` (expect `steam ipc ok`) |
+| Steam's pthread keys beyond the process's 512 (`shims/SteamClient/SteamTSD.c`) | `clang host/probe/test_steam_tsd.c shims/SteamClient/SteamTSD.c -o /tmp/t && /tmp/t` (expect `steam tsd ok`) |
+| An Intel game's Steam API under AArchX (Steam running) | header of `prep/aarchx/check_steam_api.c` (expect `steam api ok` with the same hash as Rosetta) |
+
+New users get Steam from `host/SteamSetup.swift` (onboarding's last page, or **Set up Steam** on the first screen). A
+Steam copied in by hand (no setup stamp) is never replaced unless someone taps **Update to latest Steam** or **Repair
+Steam** in Settings, or launches with `--steam-setup`.
 
 ### Memory and Metal
 
@@ -87,12 +119,13 @@ The built-in JIT: with `Documents/StikJIT/pairingFile.plist` on the device, laun
 against MacShack; its log is `Documents/Logs/jit-helper.log`. Without a pairing file, run the same script in StikDebug
 (Enable Script). Either way the device must stay unlocked and LocalDevVPN must be active.
 
-What the JIT design rests on (iPhone 17 Pro Max, iOS 27):
+What the JIT design rests on (tested on iPhone 17 Pro Max, iOS 27):
 
 - Debugger-allocated RX memory plus a `vm_remap` RW alias survives repeated rewrites, including after the debugger
-  detaches. Both same-address rewrite paths fail: ordinary RW mmap never acquires execute, and debugger-allocated RX
-  loses maximum execute when changed to RW (a later `mprotect` to RX fails with `EACCES`). A blanket prepare-on-flush
-  hook is therefore not an option.
+  detaches. This proves the allocator, not that Mono's same-address code manager can use it. Both same-address rewrite
+  paths fail: ordinary RW mmap never acquires execute, and debugger-allocated RX loses maximum execute when changed to
+  RW (a later `mprotect` to RX fails with `EACCES`). A blanket prepare-on-flush hook is therefore not an option, and
+  Unity's Mono is rebuilt or trapped instead (below).
 - `CS_DEBUGGED` is not proof of a live debugger connection or of executable memory. Read back VM protections and
   execute known code: `mprotect` can return success while execute permission is stripped.
 - Stock StikDebug/StikJIT preparation writes `0x69` at each page start; it must not be applied to already-written code
@@ -117,24 +150,27 @@ The build prefix's `libmono-native-compat.dylib` must point at the arm64 `mono/n
 `mono_codeman_rw ()`, while pointers and relocations stay on the RX address. New code-write sites in Mono must use it
 too, or they fault on the unwritable RX side (which is how the Mac test catches them). The pool comes from
 `ShackJITPoolSetup` in the host via `SHACK_JIT_POOL`, or `SHACK_JIT_POOL_MB=<n>` for a mapping made on the Mac.
-Revisions with no rebuild run on their own Mono: `host/ShackTrapJIT.c` replays its stores into the pool (an unhandled
-store logs `[ShackTrapJIT] unhandled instruction`).
+Revisions with no rebuild run on their own Mono: `host/ShackTrapJIT.c` replays its stores into the pool. Its decoder
+handles STR/STUR/STP (general and SIMD registers), STXR/STXP/STLR, CAS and the LSE atomics; any other store logs
+`[ShackTrapJIT] unhandled instruction`.
 
 ### AArchX (Intel games)
 
 Build steps, the AArchX test suites and MacShack's `check_*` programs are in
-[prep/aarchx/README.md](prep/aarchx/README.md). `prep/aarchx/smoke.sh <game>` runs an Intel game on the Mac for 30 s.
-After editing `vendor/AArchX`, regenerate `prep/aarchx/macshack.patch` with the command given there.
+[prep/aarchx/README.md](prep/aarchx/README.md). `prep/aarchx/smoke.sh [game...]` runs the Intel games in its own list
+on the Mac for 30 s each, from the Mac's Steam library (`STEAM_LIBRARY` names a second library's `steamapps/common`). After editing `vendor/AArchX`, regenerate
+`prep/aarchx/macshack.patch` with the command given there.
 
 ## Rules for changes
 
-- **Game-specific patches are a last resort.** They live in `prep/patch_<game>_*.py`, verify the original bytes before
-  writing and are idempotent. Check: copy the Mac original to a scratch path, run the script twice, and expect
-  `patched N site(s)`, then `already patched`.
+- **Game-specific patches are a last resort** (none at the moment). They live in `prep/patch_<game>_*.py`, verify the
+  original bytes before writing and are idempotent. Check: copy the Mac original to a scratch path, run the script
+  twice, and expect `patched N site(s)`, then `already patched`.
 - **Fix shims, not games.** A shim that fakes a system object must expose exactly the real object's properties and side
   effects (run loop sources, initial values): games probe them and trust the answer.
-- **Mark vendored edits.** Local edits inside code we vendor (`vendor/*`) are marked `MacShack:` and
-  listed in that directory's README or patch.
+- **Keep changes to other projects' code as patches.** They live under `prep/` (`prep/aarchx/macshack.patch`,
+  `prep/zsign-*.patch`, `prep/unity-mono/dualmap.patch`), applied to the pinned upstream source, never as commits
+  inside `vendor/*`. Mark each AArchX change `MacShack:`.
 - Update [docs/compat-status.md](docs/compat-status.md) when a game's state changes, with the date.
 - One commit per finding; the message says what broke and why the change fixes it.
 - No game content in the repository, ever.
