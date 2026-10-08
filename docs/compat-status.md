@@ -5,7 +5,8 @@ state was last observed; a later commit may have changed it, so re-test before t
 build prepared and signed on the device. "Intel" = x86_64 build translated by AArchX. Method and triage: [compat-playbook.md](compat-playbook.md).
 
 Rows before 2026-10-07 were tested with gbe_fork standing in for Steam outside Big Picture and for Intel games. This
-build has no gbe: games that need Steam there now quit until Intel games reach the real Steam (rows that say gbe).
+build has no gbe: Intel games from Big Picture use Valve's real Steam API (Celeste, 10-07); games started from Local
+Games have no Steam behind them, so those that need Steam quit (rows that say gbe).
 
 ## Native arm64
 

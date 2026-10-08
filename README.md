@@ -106,7 +106,9 @@ build steps will be written here once they are final. Meanwhile, you can get eve
 - Your development certificate as a `.p12` file with a password: Keychain Access > My Certificates > the Apple
   Development certificate > Export. Xcode creates that certificate the first time it signs an app for your account,
   so this comes after your first build.
-- Your device's pairing file, made on your Mac with iloader or [idevice_pair](https://github.com/jkcoxson/idevice_pair).
+- Your device's pairing file in the RPPairing (Remote Pairing) format, made on your Mac with
+  [idevice_pair](https://github.com/jkcoxson/idevice_pair) and saved as `pairingFile.plist`. An older pairing file
+  stops JIT with "missing public_key".
 - Your Steam account.
 
 A Bluetooth controller is nice to have; MacShack also has an on-screen pad.
