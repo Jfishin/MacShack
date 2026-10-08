@@ -161,6 +161,19 @@ Build steps, the AArchX test suites and MacShack's `check_*` programs are in
 on the Mac for 30 s each, from the Mac's Steam library (`STEAM_LIBRARY` names a second library's `steamapps/common`). After editing `vendor/AArchX`, regenerate
 `prep/aarchx/macshack.patch` with the command given there.
 
+### Windows games (MacShack Play)
+
+| Check | Command |
+|---|---|
+| Set up Windows games against the pinned downloads: verify, lay out, apply the ntdll patch, sign with the fake signer (downloads Madeira and Valve's files once) | header of `host/probe/test_windows_setup.swift` (expect `windows setup ok`) |
+| Steam Play switched on and off on a scratch Steam folder | `clang -fobjc-arc -Ihost host/ShackSteamPlay.m host/probe/test_steam_play.m -framework Foundation -o /tmp/t && /tmp/t` (expect `steam play ok`) |
+| MacShack and MacShack Play's Mach bridge | `clang -fobjc-arc -Ihost host/ShackPlayMach.m host/probe/test_play_mach.m -framework Foundation -o /tmp/t && /tmp/t` (expect `play mach ok`) |
+| The engine's own folder and executable path in Play | header of `host/probe/test_engine_bundle.m` (expect `engine bundle ok`) |
+| Madeira's engine has every symbol Play uses | `sh host/probe/test_engine_symbols.sh <Madeira-0.1.3.ipa>` (expect `engine symbols ok`) |
+| Steam Play patch sites for another Steam build (needs capstone) | `python3 prep/steam-onehost/steamplay_sites.py <steamclient.dylib>`, then update `kSites` in `host/ShackSteamPlay.m` |
+| The Windows kit zip (maintainers) | `windows-kit/release.sh` (see [windows-kit/README.md](windows-kit/README.md)), then pin the printed sha256 in `host/WindowsKit.swift` |
+| On the device | launch with `--play-steam-wine` (expect `PASS` in `Documents/Logs/play-run.txt`) or `--play-run cube-x64.exe` |
+
 ## Rules for changes
 
 - **Game-specific patches are a last resort** (none at the moment). They live in `prep/patch_<game>_*.py`, verify the
@@ -171,6 +184,10 @@ on the Mac for 30 s each, from the Mac's Steam library (`STEAM_LIBRARY` names a 
 - **Keep changes to other projects' code as patches.** They live under `prep/` (`prep/aarchx/macshack.patch`,
   `prep/zsign-*.patch`, `prep/unity-mono/dualmap.patch`), applied to the pinned upstream source, never as commits
   inside `vendor/*`. Mark each AArchX change `MacShack:`.
+- **`windows-kit/` is GPL-3.0 and stays separate.** Nothing in it is compiled into MacShack or MacShack Play; the
+  device downloads its release zip. Changes to NotProton's code are patches there
+  (`windows-kit/lsteamclient/macshack-unixlib.patch`). Changing `windows-kit/` means a new kit release (`KIT_VERSION`
+  + 1) and its sha256 pinned in `host/WindowsKit.swift`. Valve's Windows files are never committed or put in the kit.
 - Update [docs/compat-status.md](docs/compat-status.md) when a game's state changes, with the date.
 - One commit per finding; the message says what broke and why the change fixes it.
 - No game content in the repository, ever.
