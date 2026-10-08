@@ -17,7 +17,8 @@ Big Picture, sign-in, downloads, cloud saves and controllers, the way they work 
   code for iOS and signs it on the device; the game's files stay untouched.
 - **Intel Mac games** are translated to ARM as they run, by [AArchX](https://github.com/mont127/AArchX).
 - **Windows games** (optional) run in **MacShack Play**, a companion app, on Will Faust's Madeira (Wine) engine. Set
-  them up once, then install them from Big Picture and press Play, as on a Steam Deck. *Early, but real games play.*
+  them up once, then install them from Big Picture and press Play, as on a Steam Deck. *Early, but real games play;*
+  how well a game runs mostly depends on Madeira.
 - **Steam, built in.** Valve's macOS Steam client runs inside MacShack in Big Picture mode, set up on the device from
   Valve's servers. When you set up Windows games, Steam Play compatibility tools are enabled by
   [NotProton](https://github.com/NotProtonNot/NotProton); until then Steam stays exactly as Valve ships it.
