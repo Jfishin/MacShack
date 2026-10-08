@@ -16,10 +16,11 @@ sign-in, downloads, cloud saves and controllers, the way they work on a Mac.
 - **Apple silicon Mac games run natively:** Unity, Unreal, Godot, GameMaker, SDL and more. MacShack adapts each game's
   code for iOS and signs it on the device; the game's files stay untouched.
 - **Intel Mac games** are translated to ARM as they run, by [AArchX](https://github.com/mont127/AArchX).
-- **Windows games** run in **MacShack Play**, a companion app, on Will Faust's Madeira (Wine) engine. Install them from
-  Big Picture and press Play, as on a Steam Deck. *Early, but real games play.*
+- **Windows games** (optional) run in **MacShack Play**, a companion app, on Will Faust's Madeira (Wine) engine. Set
+  them up once, then install them from Big Picture and press Play, as on a Steam Deck. *Early, but real games play.*
 - **Steam, built in.** Valve's macOS Steam client runs inside MacShack in Big Picture mode, set up on the device from
-  Valve's servers. Steam Play compatibility tools are enabled by [NotProton](https://github.com/NotProtonNot/NotProton).
+  Valve's servers. When you set up Windows games, Steam Play compatibility tools are enabled by
+  [NotProton](https://github.com/NotProtonNot/NotProton); until then Steam stays exactly as Valve ships it.
 - **Local Games:** any Mac game you copy in yourself. Place games in MacShack's `Staging` folder and prepare them on
   the device.
 - **Controllers:** any Bluetooth controller, or MacShack's on-screen Xbox-style pad.
@@ -78,20 +79,22 @@ Windows game ──► Steam Play ──► MacShack Play ──► Madeira (Win
   all run inside MacShack's one process. Details: [prep/steam-onehost/README.md](prep/steam-onehost/README.md).
 - **MacShack Play.** Windows games run in a second app that takes the foreground with Game Mode (more memory, CPU and GPU
   priority), while Steam keeps running in MacShack behind it. Steam Play starts the game there, and the game talks to
-  that same Steam.
+  that same Steam through NotProton's Steam bridge. The Windows parts are downloaded by your device when you set them
+  up (see [Windows games](#windows-games-optional)); the parts MacShack builds itself are in [windows-kit/](windows-kit/).
 
 ## Building
 
-MacShack is source only for now: you build it on a Mac and install it with your own Apple developer account. The
-build steps will be written here once they are final. Meanwhile, you can get everything below ready.
+MacShack is source only for now: you build it on a Mac and install it with your own Apple developer account.
+
+### What you need
 
 **On your Mac**
 
 - Xcode 26.4 or newer (Mac App Store), signed in to your Apple Account (Xcode > Settings > Accounts).
-- [Homebrew](https://brew.sh), then XcodeGen and the GitHub CLI: `brew install xcodegen gh`.
+- [Homebrew](https://brew.sh), then XcodeGen: `brew install xcodegen`.
 - An Apple developer account. A free one works, with limits: apps stop opening after 7 days until you install them
   again, at most 3 apps can be installed through it at once, and it can register 10 new App IDs a week. MacShack uses
-  two App IDs (the app and its JIT extension); MacShack Play, for Windows games, is a second app.
+  two App IDs (the app and its JIT extension); MacShack Play, for Windows games, is a third, and a second installed app.
 
 **On your iPhone or iPad**
 
@@ -99,7 +102,7 @@ build steps will be written here once they are final. Meanwhile, you can get eve
 - Developer Mode on: Settings > Privacy & Security > Developer Mode. It appears after the device has been connected to
   Xcode once.
 - LocalDevVPN from the App Store. Games that need JIT (Unity Mono, Intel and Windows games) start only while it is on.
-- Free space: about 420 MB for Steam, plus your games.
+- Free space: about 420 MB for Steam, about 400 MB more for Windows games, plus your games.
 
 **For MacShack's first run** (it asks for these, sent over with AirDrop):
 
@@ -113,14 +116,86 @@ build steps will be written here once they are final. Meanwhile, you can get eve
 
 A Bluetooth controller is nice to have; MacShack also has an on-screen pad.
 
-## Getting games onto the device
+### Build and install
 
-MacShack runs games you own. There are two ways to get them in:
+```sh
+git clone --recurse-submodules https://github.com/Jfishin/MacShack.git && cd MacShack
+git -C vendor/AArchX apply ../../prep/aarchx/macshack.patch
+curl -LO https://github.com/Jfishin/MacShack/releases/download/prebuilt-deps/macshack-prebuilt-deps.tar.gz
+tar -xzf macshack-prebuilt-deps.tar.gz
+```
 
-- **Steam Big Picture** (recommended). Press **Steam Big Picture** on MacShack's first screen, then install and play as
-  on a Mac. Windows games install to the "MacShack Play" library and run in MacShack Play.
-- **Local Games.** Copy a Mac game (its `.app`, or the whole game folder) into MacShack's `Staging` folder with the Files
-  app or Finder, then tap **Prepare** in Local Games.
+The `prebuilt-deps` download holds Unity's Mono rebuilt for MacShack's JIT and AArchX's data for Intel games, which
+take special tools to build. Both can be rebuilt from `prep/unity-mono` and `prep/aarchx`; sources and licenses are in
+`build/prebuilt-deps-NOTICE.txt`.
+
+Create `Signing.local.xcconfig` in the same folder (git ignores it) with your team ID and a bundle ID of your own:
+
+```
+DEVELOPMENT_TEAM = ABCDE12345
+MACSHACK_BUNDLE_ID = com.yourname.macshack
+```
+
+Your team ID is in Xcode > Settings > Accounts, or at developer.apple.com under Membership. Then generate the project,
+build and install (`xcrun devicectl list devices` shows your device's ID):
+
+```sh
+xcodegen generate
+xcodebuild -project MacShack.xcodeproj -scheme MacShack -configuration Release \
+  -destination 'generic/platform=iOS' -allowProvisioningUpdates -derivedDataPath build build
+xcrun devicectl device install app --device <device-id> build/Build/Products/Release-iphoneos/MacShack.app
+```
+
+For Windows games, build and install **MacShack Play** the same way, now or later, with `-scheme MacShackPlay` and
+`build/Build/Products/Release-iphoneos/MacShackPlay.app`. You can also open `MacShack.xcodeproj` in Xcode and run
+either scheme on your device.
+
+## Using MacShack
+
+### First run
+
+MacShack walks you through three steps:
+
+1. **Signing certificate.** AirDrop your `.p12` and enter its password. MacShack signs each game on your device with it.
+2. **Pairing file.** AirDrop `pairingFile.plist`, for JIT.
+3. **Set up Steam.** MacShack downloads Valve's macOS Steam client from Valve (about 420 MB), prepares it on your
+   device and opens Big Picture. Sign in with your Steam account.
+
+After that, MacShack opens to three buttons: **Steam Big Picture**, **Local Games** and **Settings**. Hold the Dynamic
+Island during a game for MacShack's menu (frame rate, keyboard, quit).
+
+### Mac games
+
+- **From Steam Big Picture** (recommended): install and play as on a Mac. Apple silicon games are prepared on your
+  device the first time they start; Intel games are translated as they run. Both use Valve's own Steam, so cloud saves
+  and achievements work as on a Mac.
+- **From Local Games:** copy a Mac game you own (its `.app`, or the whole game folder) into MacShack's `Staging` folder
+  with the Files app or Finder, then tap **Prepare** in Local Games. Steam isn't running behind these games, so a game
+  that requires Steam won't start this way.
+
+### Windows games (optional)
+
+Until you set them up, Steam is exactly as Valve ships it for Mac: Windows games show in your library but can't be
+installed.
+
+1. Build and install **MacShack Play** (above).
+2. Open MacShack Play and tap **Set up Windows games**. It opens MacShack's Windows games screen (also in MacShack's
+   Settings). It shows who made each piece, then downloads and checks:
+
+   | Piece | Downloaded from |
+   |---|---|
+   | Windows engine: [Madeira](https://github.com/willfaust/Madeira) 0.1.3 by Will Faust (Wine, FEX-Emu, DXMT) | Will Faust's own release, unmodified |
+   | Windows kit: Steam bridge, `steam.exe` and helpers ([windows-kit/](windows-kit/)) | this repository's `windows-kit` release |
+   | Steam's Windows files | Valve's servers |
+
+   Each download is checked against a pinned checksum. MacShack then applies NotProton's small patch to your copy of
+   the engine and signs the engine with your certificate for MacShack Play.
+3. **Restart MacShack** (swipe it away in the app switcher and open it again). Steam now offers Windows games: install
+   one to the "MacShack Play" library and press Play. It runs in MacShack Play, with Steam behind it in MacShack.
+
+**Remove Windows games** on the same screen deletes the Windows parts (about 400 MB) and turns Steam back to stock at
+its next start. Installed Windows games are kept, so they come back if you set up again, unless you choose to delete
+them too.
 
 ## Contributing and docs
 
@@ -140,15 +215,19 @@ MacShack stands on these projects:
 | [fishhook](https://github.com/facebook/fishhook) | `host/vendor/fishhook.c` | BSD-3-Clause |
 | Unity's Mono fork | `prep/unity-mono` (patch only) | MIT, some third-party parts BSD |
 | GNU libstdc++ (for x86 games) | fetched by `prep/aarchx/guest_libstdcxx.sh` and `guest32_libstdcxx.sh` | GPLv3 with the GCC Runtime Library Exception |
-| [Madeira](https://github.com/willfaust/Madeira) by Will Faust: Wine, FEX-Emu and DXMT for iOS (MacShack Play's engine) | not in this repository | GPL-3.0 |
-| [NotProton](https://github.com/NotProtonNot/NotProton) (Steam Play on macOS): MacShack Play follows its approach and runs its launcher files | not in this repository | GPL-3.0 |
+| [Madeira](https://github.com/willfaust/Madeira) by Will Faust: Wine, FEX-Emu and DXMT for iOS (MacShack Play's engine) | downloaded by your device from Will's release, unmodified | GPL-3.0-or-later with the Madeira Converter Exception; Wine LGPL-2.1+ |
+| [NotProton](https://github.com/NotProtonNot/NotProton) (Steam Play on macOS): its Steam bridge, `ntdll` detour and `steam.exe`, the approach MacShack Play follows | `windows-kit/`, built from NotProton v1.0.3 | GPL-3.0 |
+| [Proton](https://github.com/ValveSoftware/Proton) by Valve: `lsteamclient` and `steam_helper`, through NotProton | `windows-kit/` | Steamworks SDK license; BSD-3-Clause |
+| Wine, LLVM and mingw-w64 runtime parts inside the Windows kit's programs | `windows-kit/` (texts in the kit's `licenses/`) | their own licenses |
 
 Thanks also to [StikDebug](https://github.com/StikDebug/StikDebug) and
 [idevice_pair](https://github.com/jkcoxson/idevice_pair), which make JIT possible on a stock iPhone.
 
-Valve's Steam client, Madeira, NotProton and the games themselves are not part of this repository.
+Valve's Steam client and Windows files, Madeira and the games themselves are not part of this repository: your device
+downloads them from their makers.
 
 ## License
 
-MacShack's own code is released under the [MIT License](LICENSE). Third-party components keep their own licenses
-(table above).
+MacShack's own code is released under the [MIT License](LICENSE), except `windows-kit/`, which is GPL-3.0-or-later
+(see its LICENSE) because it builds on NotProton. MacShack and MacShack Play never compile or link anything from it.
+Third-party components keep their own licenses (table above).
