@@ -33,6 +33,12 @@ your device.
 
 ## Screenshots
 
+<p align="center">
+  <img src="docs/images/tunic-big-picture.gif" width="800"
+       alt="From MacShack's first screen into Steam Big Picture, then launching TUNIC to its title screen with the performance HUD">
+  <br><em>From the first screen to TUNIC, through Steam Big Picture (real time, iPad Pro M5)</em>
+</p>
+
 <table>
   <tr>
     <td><img src="docs/images/first-screen.jpg" alt="MacShack's first screen on an iPad: Steam Big Picture, Local Games and Settings"></td>
