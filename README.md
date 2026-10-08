@@ -3,8 +3,8 @@
 **Play the Mac and Windows games you own on an iPhone or iPad. No jailbreak.**
 
 <p align="center">
-  <img src="docs/images/hero.png" width="820"
-       alt="Screenshot to add: a game running full screen on the iPhone in landscape">
+  <img src="docs/images/hero.jpg" width="820"
+       alt="Cyberpunk 2077 running full screen on an iPhone 17 Pro Max, with MacShack's on-screen controller">
 </p>
 
 MacShack is an iOS app that runs desktop games on Apple's mobile devices. Mac games built for Apple silicon run natively;
@@ -35,24 +35,14 @@ your device.
 
 <table>
   <tr>
-    <td><img src="docs/images/launcher.png" alt="Screenshot to add: MacShack's first screen: Steam Big Picture, Local Games, Settings"></td>
-    <td><img src="docs/images/big-picture.png" alt="Screenshot to add: Steam Big Picture inside MacShack"></td>
-    <td><img src="docs/images/touch-controls.png" alt="Screenshot to add: a game with the on-screen controller"></td>
+    <td><img src="docs/images/first-screen.jpg" alt="MacShack's first screen on an iPad: Steam Big Picture, Local Games and Settings"></td>
+    <td><img src="docs/images/big-picture.jpg" alt="Steam Big Picture running inside MacShack on an iPad"></td>
+    <td><img src="docs/images/touch-controls.jpg" alt="Factorio on an iPad with MacShack's on-screen controller"></td>
   </tr>
   <tr>
     <td align="center">First screen</td>
     <td align="center">Steam Big Picture</td>
-    <td align="center">On-screen controller</td>
-  </tr>
-  <tr>
-    <td><img src="docs/images/game-native.png" alt="Screenshot to add: an Apple silicon Mac game"></td>
-    <td><img src="docs/images/game-intel.png" alt="Screenshot to add: an Intel Mac game"></td>
-    <td><img src="docs/images/game-windows.png" alt="Screenshot to add: a Windows game in MacShack Play"></td>
-  </tr>
-  <tr>
-    <td align="center">Mac game (Apple silicon)</td>
-    <td align="center">Mac game (Intel)</td>
-    <td align="center">Windows game</td>
+    <td align="center">Factorio with the on-screen controller</td>
   </tr>
 </table>
 

@@ -13,7 +13,7 @@ Hades II · Lies of P · Mina the Hollower · Parking Garage Rally Circuit · St
 
 **Apple silicon, Unity Mono (needs JIT)**
 
-Big Hops · Death Must Die · Feed the Deep · Haste · Hollow Knight: Silksong · OKKO The Exiled · Rubinite ·
+Big Hops Together · Death Must Die · Feed the Deep · Haste · Hollow Knight: Silksong · OKKO The Exiled · Rubinite ·
 Slots & Daggers · Soulstone Survivors · Super Money Ring (demo) · Valheim
 
 **Intel (AArchX, needs JIT)**
@@ -29,8 +29,7 @@ Steam: Valve's macOS client (Apple silicon, Chromium/CEF), in Big Picture
 
 Windows games run on [Madeira](https://github.com/willfaust/Madeira) by Will Faust, inside MacShack Play. How well a
 Windows game runs mostly depends on Madeira itself. MacShack's Windows support is experimental: a game can run worse
-here than in Madeira's own app. Tested on Madeira 0.1.3 (10-08): 100 Ninja Cats plays from Big Picture; KORRIDOR
-exits before Unity starts; Death's Door runs about 13 s at 21 fps, then stops (illegal instruction in FEX's code).
+here than in Madeira's own app.
 
 ## Details
 
@@ -42,7 +41,7 @@ differ now, so retest those from Big Picture.
 
 | Game | Engine | State | Notes |
 |---|---|---|---|
-| Big Hops | Unity 6, Mono | Playable (9-26), 60 fps cap, touch, audio | Black boot until the phone is rotated |
+| Big Hops Together | Unity 6, Mono | Playable (9-26), 60 fps cap, touch, audio | Black boot until the phone is rotated |
 | Lies of P | Unreal 4.27 | Playable with gamepad and sound (9-25) | Throttles thermally after about 5 min; texture pool is 70% of reported VRAM |
 | Hollow Knight: Silksong | Unity, Mono | Plays (10-08); touch, audio, gamepad | |
 | Slots & Daggers | Unity, stock Mono | Playable (9-27), about 42 fps | On the game's own Mono via ShackTrapJIT |
