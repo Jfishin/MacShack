@@ -82,51 +82,34 @@ Windows game ──► Steam Play ──► MacShack Play ──► Madeira (Win
 
 ## Building
 
-MacShack is source only for now: you build it on a Mac and install it with your own Apple developer account.
+MacShack is source only for now: you build it on a Mac and install it with your own Apple developer account. The
+build steps will be written here once they are final. Meanwhile, you can get everything below ready.
 
-**You need:**
+**On your Mac**
 
-- A Mac with Xcode 26.4 or newer, [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`), the
-  [GitHub CLI](https://cli.github.com) and Python 3.
-- An iPhone or iPad on iOS 26 or later, with Developer Mode on.
-- An Apple developer account. A free one works: its profiles last 7 days, so you install again each week. MacShack uses
-  two App IDs, the app and its JIT extension (`<bundle id>.jit`).
-- For games that need JIT (Unity Mono and Intel games): your device's pairing file, made on the Mac with
-  [idevice_pair](https://github.com/jkcoxson/idevice_pair), and LocalDevVPN from the App Store. Other games need neither.
+- Xcode 26.4 or newer (Mac App Store), signed in to your Apple Account (Xcode > Settings > Accounts).
+- [Homebrew](https://brew.sh), then XcodeGen and the GitHub CLI: `brew install xcodegen gh`.
+- An Apple developer account. A free one works, with limits: apps stop opening after 7 days until you install them
+  again, at most 3 apps can be installed through it at once, and it can register 10 new App IDs a week. MacShack uses
+  two App IDs (the app and its JIT extension); MacShack Play, for Windows games, is a second app.
 
-**Get the source and its prebuilt parts:**
+**On your iPhone or iPad**
 
-```sh
-git clone --recurse-submodules https://github.com/Jfishin/MacShack.git && cd MacShack
-git -C vendor/AArchX apply ../../prep/aarchx/macshack.patch
-gh release download prebuilt-deps -p macshack-prebuilt-deps.tar.gz -R Jfishin/MacShack && tar -xzf macshack-prebuilt-deps.tar.gz
-```
+- iOS 26 or later (tested on iOS 27, iPhone 17 Pro Max and iPad Pro M5).
+- Developer Mode on: Settings > Privacy & Security > Developer Mode. It appears after the device has been connected to
+  Xcode once.
+- LocalDevVPN from the App Store. Games that need JIT (Unity Mono, Intel and Windows games) start only while it is on.
+- Free space: about 420 MB for Steam, plus your games.
 
-The `prebuilt-deps` download holds Unity's Mono rebuilt for MacShack's JIT and AArchX's data for Intel games. Both can
-be rebuilt from `prep/unity-mono` and `prep/aarchx`; sources and licenses are in `build/prebuilt-deps-NOTICE.txt`.
+**For MacShack's first run** (it asks for these, sent over with AirDrop):
 
-**Set your signing.** Create `Signing.local.xcconfig` (git ignores it) with your team ID and a bundle ID of your own:
+- Your development certificate as a `.p12` file with a password: Keychain Access > My Certificates > the Apple
+  Development certificate > Export. Xcode creates that certificate the first time it signs an app for your account,
+  so this comes after your first build.
+- Your device's pairing file, made on your Mac with iloader or [idevice_pair](https://github.com/jkcoxson/idevice_pair).
+- Your Steam account.
 
-```
-DEVELOPMENT_TEAM = ABCDE12345
-MACSHACK_BUNDLE_ID = com.yourname.macshack
-```
-
-**Build and install** (`xcrun devicectl list devices` shows your device ID):
-
-```sh
-xcodegen generate
-xcodebuild -project MacShack.xcodeproj -scheme MacShack -configuration Release \
-  -destination 'generic/platform=iOS' -allowProvisioningUpdates -derivedDataPath build build
-xcrun devicectl device install app --device <device-id> build/Build/Products/Release-iphoneos/MacShack.app
-```
-
-**First run** walks you through three things:
-
-1. **Signing certificate.** MacShack signs each game on the device with your Apple Development identity. In Keychain
-   Access, export the identity Xcode built MacShack with as a `.p12` with a password, and AirDrop it to the device.
-2. **Pairing file.** AirDrop the pairing file to the device, for JIT.
-3. **Steam.** MacShack downloads Valve's macOS Steam client (about 420 MB) and opens Big Picture.
+A Bluetooth controller is nice to have; MacShack also has an on-screen pad.
 
 ## Getting games onto the device
 
