@@ -59,7 +59,7 @@ struct OnboardingView: View {
 
     private var pairing: some View {
         StepPage(title: "Pairing file", done: app.pairingReady, doneText: "Pairing file imported.", status: app.jitStatus, busy: false,
-                 text: "Games that compile code while they run (Unity Mono, Intel) need JIT. On your Mac, make this device's pairing file with idevice_pair (github.com/jkcoxson/idevice_pair), then AirDrop it here. Also install LocalDevVPN from the App Store and keep it on when such a game starts.",
+                 text: "Games that compile code while they run (Unity Mono, Intel) need JIT. On your Mac, make this device's pairing file with idevice_pair (github.com/jkcoxson/idevice_pair), RPPairing format, save its text as pairingFile.plist, then AirDrop it here. Also install LocalDevVPN from the App Store and keep it on when such a game starts.",
                  action: "Import pairing file", act: { picking = true },
                  next: { if AppModel.steamClientReady { finish(false) } else { page = 2 } })
     }

@@ -51,6 +51,16 @@ static void say(NSString *line) {
     NSLog(@"[SteamClient] %@", line);
 }
 
+// The launch splash (GameOverlay.swift) over Big Picture while a game Steam started gets going: Steam stops waiting for
+// its window after ~15 s and shows the game's page with Resume, while JIT set-up and translation can take 30 (Celeste,
+// 10-07). Up with the game's bundle path; down after the splash's usual first-frame wait once the game's window has the
+// screen or the game ends (ShackMetal's own first-frame notice went to Steam's UI long ago; ShackGL's comes from the game).
+static void splash(NSString *gameApp) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:gameApp ? @"ShackSteamGameStarting" : @"ShackGameFirstFrame" object:gameApp];
+    });
+}
+
 // The images that make up the helper "process": itself, Chromium, its private tier0/vstdlib/SDL3.
 static BOOL callerIsHelper(const void *ra) {
     Dl_info info;
@@ -411,6 +421,7 @@ static void gameEnded(int status) {
     if (gGame.state != 1) return;
     gGame.status = status; gGame.state = 2;
     say([NSString stringWithFormat:@"game ended (%d): back to Steam", status]);
+    splash(nil);
     void (*stopAudio)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAudioStopAll");   // its sounds would play on
     if (stopAudio) stopAudio();
     // Steam's again: its app thread (events, its own pump), the pads without the game's callbacks (its code stays loaded
@@ -632,6 +643,7 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
     int e = pthread_create(&gGame.thread, &at, gameThread, (void *)CFBridgingRetain(codeExe));
     if (e) { gGame.state = 0; say([NSString stringWithFormat:@"pthread_create: %d", e]); return e; }
     say([NSString stringWithFormat:@"%@ runs in-process as pid %d (%d arguments)", app.lastPathComponent, kGamePid, gGame.argc]);
+    splash(app);
     return 0;
 }
 
@@ -763,11 +775,10 @@ static void *translatedGameSymbol(const char *name) {
         if (!strcmp(name, stand_ins[i].name)) answer = stand_ins[i].fn;
     for (size_t i = 0; i < sizeof ipc / sizeof *ipc && !answer; i++)
         if (!strcmp(name, ipc[i])) answer = dlsym(gSteamShim, name);
+    if (answer) fprintf(stderr, "[SteamClient] the Intel game's %s: Steam's answer\n", name);   // once: AArchX asks once
     Dl_info d;
-    void *own = answer ? NULL : dlsym(gSteamShim, name);
+    void *own = answer ? NULL : dlsym(gSteamShim, name);   // not logged: dozens of AppKit constants; a stub logs its first call
     if (own && dladdr(own, &d) && d.dli_fbase == gSteamShimBase && dlsym(RTLD_DEFAULT, name) == own) answer = own;
-    static _Atomic int told;   // diagnostic: once per symbol (AArchX asks once), the first 40
-    if (answer && told++ < 40) fprintf(stderr, "[SteamClient] the Intel game's %s: Steam's answer\n", name);
     return answer;
 }
 
@@ -809,6 +820,7 @@ void ShackSteamClientInstall(NSString *bundle, NSString *code) {
         pid_t owner = window ? windowOwner(window) : getpid();
         if (owner == announced) return;
         announced = owner;
+        if (owner == kGamePid) splash(nil);   // the game's window is up
         id sleep = [NSUserDefaults.standardUserDefaults objectForKey:@"steamSleep"];
         BOOL asleep = owner == kGamePid && (!sleep || [sleep boolValue]);
         ShackCVSleepLinksOf(asleep ? "/Guests/SteamClient/" : NULL);

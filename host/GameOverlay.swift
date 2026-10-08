@@ -191,9 +191,10 @@ struct GameOverlayView: View {
 enum GameOverlay {
     private static var window: UIWindow?
     private static var firstFrameObserver: NSObjectProtocol?
+    private static var steamGameObserver: NSObjectProtocol?
 
-    // Shown at launch with the splash on top (a game; the Steam client draws its own); the island button stays for the
-    // whole run.
+    // Shown at launch with the splash on top (a game; the Steam client draws its own, and the splash comes up for a game
+    // Steam starts: ShackSteamClient.m); the island button stays for the whole run.
     static func show(game: URL?, name: String? = nil, app: AppModel) {
         guard window == nil, let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
         let model = GameOverlayModel()
@@ -204,6 +205,13 @@ enum GameOverlay {
         model.splashGame = game
         firstFrameObserver = NotificationCenter.default.addObserver(forName: Notification.Name("ShackGameFirstFrame"), object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { model.firstFrame() }
+        }
+        steamGameObserver = NotificationCenter.default.addObserver(forName: Notification.Name("ShackSteamGameStarting"), object: nil, queue: .main) { note in
+            let path = note.object as? String
+            MainActor.assumeIsolated {
+                model.splashShownAt = .now
+                model.splashGame = path.map { URL(fileURLWithPath: $0) }
+            }
         }
         let w = PassthroughWindow(windowScene: scene)
         w.model = model
@@ -221,8 +229,9 @@ enum GameOverlay {
 
     static func hide() {
         ShackTouchPadSetConnected(false)
-        if let firstFrameObserver { NotificationCenter.default.removeObserver(firstFrameObserver) }
+        for observer in [firstFrameObserver, steamGameObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(observer) }
         firstFrameObserver = nil
+        steamGameObserver = nil
         window?.isHidden = true
         window = nil
     }

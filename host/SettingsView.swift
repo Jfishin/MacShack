@@ -109,7 +109,7 @@ struct JITSigningView: View {
                     }
                 if !app.jitStatus.isEmpty { Text(app.jitStatus).font(.footnote) }
             } header: { Text("JIT") } footer: {
-                Text("Unity games need JIT. With a pairing file (from idevice_pair, or the one StikDebug uses) MacShack enables it itself: keep LocalDevVPN connected and Developer Mode on. After a reboot the first launch also downloads and mounts the Developer Disk Image.")
+                Text("Unity games need JIT. With an RPPairing file (idevice_pair's RPPairing format, or the one StikDebug uses) MacShack enables it itself: keep LocalDevVPN connected and Developer Mode on. After a reboot the first launch also downloads and mounts the Developer Disk Image.")
             }
         }
         .themed()

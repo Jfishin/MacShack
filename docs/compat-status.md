@@ -37,7 +37,7 @@ build has no gbe: games that need Steam there now quit until Intel games reach t
 |---|---|---|---|
 | Cyber Shadow | Chowdren, OpenGL | Title screen at 60 fps | First game up on the phone |
 | Hades | The Forge, Metal | Locked 60 fps (9-27) | Needed inlined SSE integer ops; judders under "thermal serious" |
-| Celeste | MonoKickstart, FNA3D GL | Plays, audio fixed (9-27) | A 256 MB pool filled in minutes; MonoKickstart games now get 1 GB. Real fix (shared block prologues or a pool flush) not done |
+| Celeste | MonoKickstart, FNA3D GL | Plays from Big Picture on Valve's Steam API (10-07), ~56 fps; audio fixed (9-27) | A 256 MB pool filled in minutes; MonoKickstart games now get 1 GB. Real fix (shared block prologues or a pool flush) not done |
 | Akane | Unity 2018.2, Mono | "PRESS ANY KEY" at 60 fps (9-27) | `-force-metal`. Its intro quit was Valve's `RestartAppIfNecessary`; retest pending |
 | Subnautica | Unity 2019.4, GL only | Plays (9-28) | BC/DXT re-encoded to ASTC; underwater is black (suspect non-sRGB drawable or RGBA32F targets); needs a GPU trace |
 | Aragami | Unity 2017.2, GL only | Title screen (9-28) | CGL layer, GLSL 410 to ES |

@@ -264,7 +264,7 @@ environment): AArchX resolves an ordinary bridged call through `ShackHookForGues
 changes), which asks `translatedGameSymbol` in host/ShackSteamClient.m while a translated game Steam started runs; its
 own handlers (`sem_open`, `shm_open`, `semctl`, `popen`) call libOcerz's imports, rebound at the game's start. The
 game's log shows `[SteamClient] the Intel game's <call>: Steam's answer` and Valve's `[S_API] SteamAPI_Init(): Loaded
-'<path>'`. Not yet run on a phone (10-07). The phone's Steam folder must keep the x86_64 slices (SteamSetup's download
+'<path>'`. On the phone (10-07) Celeste from Big Picture connects (Steam logs `Game process updated` for its app ID and caches the account) and plays. The phone's Steam folder must keep the x86_64 slices (SteamSetup's download
 does; a Steam copied by hand and thinned to arm64 does not). i386 games have no such path: Valve ships no 32-bit
 steamclient.
 
