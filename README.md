@@ -8,8 +8,8 @@
 </p>
 
 MacShack is an iOS app that runs desktop games on Apple's mobile devices. Mac games built for Apple silicon run natively;
-Intel Mac games and Windows games are translated as they run. Valve's own Steam client comes with it: Big Picture,
-sign-in, downloads, cloud saves and controllers, the way they work on a Mac.
+Intel Mac games and Windows games are translated as they run. MacShack sets up Valve's own Steam client on your device:
+Big Picture, sign-in, downloads, cloud saves and controllers, the way they work on a Mac.
 
 ## What it does
 
@@ -25,7 +25,7 @@ sign-in, downloads, cloud saves and controllers, the way they work on a Mac.
   the device.
 - **Controllers:** any Bluetooth controller, or MacShack's on-screen Xbox-style pad.
 - **Per-game tuning:** frame-rate cap, render scale, resolution, memory swap and launch options. Hold the Dynamic Island
-  during a game for MacShack's menu.
+  during a game (on iPad, the middle of the screen's side edge) for MacShack's menu.
 
 MacShack contains no games and no Valve software. You bring the games you own, and Steam is downloaded from Valve on
 your device.
@@ -34,12 +34,12 @@ your device.
 
 <table>
   <tr>
-    <td><img src="docs/images/launcher.png" alt="Screenshot to add: the launcher's Steam page"></td>
+    <td><img src="docs/images/launcher.png" alt="Screenshot to add: MacShack's first screen: Steam Big Picture, Local Games, Settings"></td>
     <td><img src="docs/images/big-picture.png" alt="Screenshot to add: Steam Big Picture inside MacShack"></td>
     <td><img src="docs/images/touch-controls.png" alt="Screenshot to add: a game with the on-screen controller"></td>
   </tr>
   <tr>
-    <td align="center">The launcher</td>
+    <td align="center">First screen</td>
     <td align="center">Steam Big Picture</td>
     <td align="center">On-screen controller</td>
   </tr>
@@ -76,7 +76,8 @@ Windows game ──► Steam Play ──► MacShack Play ──► Madeira (Win
 - **Intel games.** AArchX translates x86-64 code to ARM inside MacShack and routes the game's system calls to the same
   shims. Details: [prep/aarchx/README.md](prep/aarchx/README.md).
 - **Steam.** iOS allows an app no child processes, so Valve's Steam client, its Chromium interface and the game it starts
-  all run inside MacShack's one process. Details: [prep/steam-onehost/README.md](prep/steam-onehost/README.md).
+  all run inside MacShack's one process. Details: [docs/compat-playbook.md](docs/compat-playbook.md#steam-inside-the-game)
+  and the Mac prototype it grew from, [prep/steam-onehost/README.md](prep/steam-onehost/README.md).
 - **MacShack Play.** Windows games run in a second app that takes the foreground with Game Mode (more memory, CPU and GPU
   priority), while Steam keeps running in MacShack behind it. Steam Play starts the game there, and the game talks to
   that same Steam through NotProton's Steam bridge. The Windows parts are downloaded by your device when you set them
@@ -102,7 +103,8 @@ MacShack is source only for now: you build it on a Mac and install it with your 
 - Developer Mode on: Settings > Privacy & Security > Developer Mode. It appears after the device has been connected to
   Xcode once.
 - LocalDevVPN from the App Store. Games that need JIT (Unity Mono, Intel and Windows games) start only while it is on.
-- Free space: about 420 MB for Steam, about 400 MB more for Windows games, plus your games.
+- Free space: Steam is a 420 MB download and its setup needs 3 GB free; Windows games take about 400 MB more; plus your
+  games.
 
 **For MacShack's first run** (it asks for these, sent over with AirDrop):
 
@@ -162,7 +164,8 @@ MacShack walks you through three steps:
    device and opens Big Picture. Sign in with your Steam account.
 
 After that, MacShack opens to three buttons: **Steam Big Picture**, **Local Games** and **Settings**. Hold the Dynamic
-Island during a game for MacShack's menu (frame rate, keyboard, quit).
+Island during a game for MacShack's menu (frame rate, keyboard, quit); on iPad, hold the middle of the screen's side
+edge, where the island would be.
 
 ### Mac games
 
