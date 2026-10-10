@@ -10,3 +10,8 @@ NSString *PlaySteamPrepare(NSURL *group, mach_port_t ipc, NSString **error);
 // Windows games, lsteamclient; play/PlaySteam.m).
 // `ipc` is MacShack's ipcserver port (from the bridge); `say` gets each step. Returns a one-line verdict.
 NSString *PlaySteamProbe(NSURL *group, mach_port_t ipc, uint32_t appID, unsigned seconds, void (^say)(NSString *line));
+// A Mac game's own Steam API (a game Steam started, in MacShack Play): Play's steamclient set as above, seeing `pid`
+// (Steam's stand-in for the game); each image under codeRoot that loads Valve's steamclient.dylib gets Play's signed
+// steamclient_g, Steam's ipcserver through libShackSteamClient, and its SteamAPI_Init result logged. Call after the
+// game's hooks are in and before its images load. Returns a report line.
+NSString *PlaySteamForGame(NSURL *group, mach_port_t ipc, NSString *codeRoot, pid_t pid);

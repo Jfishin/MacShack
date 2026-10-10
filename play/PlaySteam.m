@@ -12,7 +12,8 @@
 // named semaphores and shared memory) is MacShack's, its port from the bridge. Steam's images in this process see it as
 // the stand-in pid MacShack's Steam knows (ShackPlaySteamPid).
 
-static pid_t steamPid(void) { return ShackPlaySteamPid; }
+static pid_t gPid = ShackPlaySteamPid;   // what MacShack's Steam knows this process as (a Mac game: its stand-in pid)
+static pid_t steamPid(void) { return gPid; }
 static void rebindSteamImage(const struct mach_header *h, intptr_t slide) {   // before the image's initializers
     Dl_info info;
     const char *slash = dladdr(h, &info) && info.dli_fname ? strrchr(info.dli_fname, '/') : NULL;
@@ -101,4 +102,48 @@ NSString *PlaySteamProbe(NSURL *group, mach_port_t ipc, uint32_t appID, unsigned
     SAY(@"user and pipe released (%d)", released);
     return loggedOn && steamID && steamApp == appID ? [NSString stringWithFormat:@"PASS: logged on to MacShack's Steam from Play as app %u", appID]
                                                     : @"PARTIAL: connected, but not every answer is right (above)";
+}
+
+// A Mac game's own Steam API in Play, as MacShack gives one in its process (ShackSteamClient.m gameImageAdded): Valve's
+// steamclient is not signed for this app, so the game's libsteam_api gets Play's signed copy; Steam's ipcserver comes
+// from libShackSteamClient (its port from MacShack); libsteam_api and the steamclient set see the stand-in pid.
+static char gGameCode[PATH_MAX];
+static NSString *gSteamMacOS;
+static kern_return_t (*gShimLookUp)(mach_port_t, const char *, mach_port_t *);
+static void *(*gameOrigDlopen)(const char *, int);   // the image's dlopen as it loaded (ShackHooks')
+static void *gameDlopen(const char *path, int mode) {
+    const char *slash = path ? strrchr(path, '/') : NULL;
+    if (!slash || strcmp(slash + 1, "steamclient.dylib")) return gameOrigDlopen(path, mode);
+    void *handle = gameOrigDlopen([gSteamMacOS stringByAppendingPathComponent:@"steamclient_g.dylib"].fileSystemRepresentation, mode);
+    NSLog(@"[MacShack Play] the game's Steam API: %s", handle ? "Play's steamclient_g" : dlerror());
+    return handle;
+}
+static int (*realSteamInit)(const char *, char *);
+static int gameSteamInit(const char *versions, char *message) {   // ESteamAPIInitResult: 0 OK, 1 failed, 2 no Steam, 3 versions
+    char mine[1024] = "";
+    int result = realSteamInit(versions, message ?: mine);
+    NSLog(@"[MacShack Play] the game's SteamAPI_Init: %d %s", result, message ?: mine);
+    return result;
+}
+static void rebindGameImage(const struct mach_header *h, intptr_t slide) {
+    Dl_info info;
+    char real[PATH_MAX];
+    size_t n = strlen(gGameCode);
+    if (!n || !dladdr(h, &info) || !info.dli_fname || !realpath(info.dli_fname, real) || strncmp(real, gGameCode, n) || real[n] != '/') return;
+    struct rebinding r[] = {{"dlopen", gameDlopen, (void **)&gameOrigDlopen}, {"bootstrap_look_up", gShimLookUp, NULL},
+                            {"SteamInternal_SteamAPI_Init", gameSteamInit, (void **)&realSteamInit}, {"getpid", steamPid, NULL}};
+    rebind_symbols_image((void *)h, slide, r, strcmp(strrchr(real, '/'), "/libsteam_api.dylib") ? 3 : 4);
+}
+
+NSString *PlaySteamForGame(NSURL *group, mach_port_t ipc, NSString *codeRoot, pid_t pid) {
+    NSString *error = nil, *macos = PlaySteamPrepare(group, ipc, &error);
+    if (!macos) return [@"Steam for the game: FAILED: " stringByAppendingString:error];
+    void *shim = dlopen("@rpath/libShackSteamClient.dylib", RTLD_NOW | RTLD_GLOBAL);
+    gShimLookUp = shim ? dlsym(shim, "bootstrap_look_up") : NULL;
+    if (!gShimLookUp || !realpath(codeRoot.fileSystemRepresentation, gGameCode))
+        return @"Steam for the game: FAILED: no bootstrap_look_up in libShackSteamClient, or no code root";
+    gPid = pid;
+    gSteamMacOS = macos;
+    _dyld_register_func_for_add_image(rebindGameImage);   // after the game's hooks, before its images load
+    return [NSString stringWithFormat:@"Steam for the game: Play's steamclient in %@, pid %d", macos, pid];
 }

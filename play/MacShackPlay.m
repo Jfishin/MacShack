@@ -1,5 +1,6 @@
 #import "MadeiraEngine.h"
 #import "MacShackPlay-Swift.h"
+#import "PlayActions.h"
 #import "PlaySteam.h"
 #import "ShackGameLaunch.h"
 #import "ShackHome.h"
@@ -39,6 +40,9 @@ static CFAbsoluteTime g_start;
 static NSURL *g_group;
 static mach_port_t g_session;   // MacShack's session port, once the hello worked
 static _Atomic bool g_finished;   // over: leave when iOS moves Play to the background
+static _Atomic bool g_quitAsked;  // a Mac game was asked to quit (once)
+static BOOL g_steamForGame;      // a Mac game Steam started: its own Steam API (runMacGame)
+static mach_port_t g_steamIPC;   // MacShack's Steam ipcserver, for it
 static _Atomic bool g_background;   // Play is not in front (another app, e.g. MacShack for Steam's Stop)
 static UILabel *g_status;   // main queue
 static UIButton *g_home;    // main queue: the way to MacShack's Windows games screen, while no program or probe has started
@@ -225,7 +229,7 @@ static void reportExit(int status) {
 }
 
 // Steam's Stop reaches Play through ping replies: the program ends with this process.
-static void watchForQuit(void) {
+static void watchForQuit(void (^quit)(void)) {
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 2 * NSEC_PER_SEC, NSEC_PER_SEC / 4);
@@ -233,10 +237,7 @@ static void watchForQuit(void) {
         ShackPlayMessage reply;
         if (ShackPlayCall(g_session, ShackPlayPing, 0, 2000, &reply) != KERN_SUCCESS || reply.value != ShackPlayQuit) return;
         dispatch_source_cancel(timer);
-        note(@"Steam asked the program to stop");
-        reportExit(0);
-        if (atomic_load(&g_background)) ShackExitProcess(0);   // MacShack is in front already (its Stop): just end
-        backToMacShack();
+        quit();
     });
     dispatch_resume(timer);
 }
@@ -332,7 +333,12 @@ static void runGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
     BOOL audio = [session setCategory:AVAudioSessionCategoryPlayback mode:AVAudioSessionModeDefault
                               options:AVAudioSessionCategoryOptionMixWithOthers error:&error] && [session setActive:YES error:&error];
     note(@"audio session (playback, mix with others): %@", audio ? @"active" : error.localizedDescription);
-    if (meetMacShack()) { askJIT(); watchForQuit(); }
+    if (meetMacShack()) { askJIT(); watchForQuit(^{
+        note(@"Steam asked the program to stop");
+        reportExit(0);
+        if (atomic_load(&g_background)) ShackExitProcess(0);   // MacShack is in front already (its Stop): just end
+        backToMacShack();
+    }); }
     if (query[@"steam"].length) note(@"%@", steamForWine());
     if (query[@"winedebug"].length) setenv("WINEDEBUG", query[@"winedebug"].UTF8String, 1);   // Wine's debug channels, for a diagnosis
     note(@"%@", ShackVAReport(NO));
@@ -558,6 +564,27 @@ static void runCore(NSUInteger seconds) {   // g_queue
     backToMacShack();
 }
 
+// The game is asked to quit as the Mac's Quit does (it saves first); if it has not ended 15 s later Play ends it.
+// From the island menu's Quit, Steam's Stop, or --play-mac-seconds.
+static void askGameToQuit(NSString *why) {   // g_queue
+    if (atomic_load(&g_finished) || atomic_exchange(&g_quitAsked, true)) return;
+    void (*quit)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAppKitRequestQuit");   // libShackAppKit
+    note(@"%@: asking the game to quit%@", why, quit ? @"" : @" (no ShackAppKitRequestQuit)");
+    if (quit) dispatch_async(dispatch_get_main_queue(), ^{ quit(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), g_queue, ^{
+        if (atomic_load(&g_finished)) return;
+        note(@"the game did not quit within 15 s: Play ends it");
+        note(@"%@", ShackHomePrefsSync());
+        reportExit(-2);
+        backToMacShack();
+    });
+}
+void PlayRequestGameQuit(void) { dispatch_async(g_queue, ^{ askGameToQuit(@"the island menu's Quit"); }); }
+void PlayToggleKeyboard(void) {
+    void (*toggle)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAppKitToggleKeyboard");   // libShackAppKit
+    if (toggle) toggle();
+}
+
 // The shims MacShack links (so they are loaded before the game, as there): a game's own images link them too.
 static void loadShims(void) {
     for (NSString *n in @[@"AppKit", @"Carbon", @"CG", @"CV", @"IOKit", @"CoreAudio", @"AudioToolbox", @"OpenGL", @"Security", @"AVFoundation", @"System"]) {
@@ -573,6 +600,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     waitForGameMode();
     MadeiraEngineReleasePoolSpace();   // no Madeira pool will come: the space is the game's
     BOOL met = meetMacShack();
+    if (met) watchForQuit(^{ dispatch_async(g_queue, ^{ askGameToQuit(@"Steam's Stop"); }); });
     NSDictionary *launch = g_group ? [NSDictionary dictionaryWithContentsOfURL:[g_group URLByAppendingPathComponent:@"Launch/current.plist"]] : nil;
     NSString *refused = !launch ? @"no launch note" : [launch[@"translate"] boolValue] ? @"Intel games do not run in MacShack Play yet"
                       : [launch[@"requiresJIT"] boolValue] ? @"games that need JIT do not run in MacShack Play yet" : nil;
@@ -583,6 +611,15 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
         return;
     }
     note(@"%@", ShackVAReport(NO));
+    if ([launch[@"steam"] boolValue]) {   // a game Steam started: Steam's launch environment and its own Steam API
+        NSDictionary<NSString *, NSString *> *env = launch[@"env"];
+        for (NSString *key in env) setenv(key.UTF8String, env[key].UTF8String, 1);
+        ShackPlayMessage reply;
+        kern_return_t kr = met ? ShackPlayCall(g_session, ShackPlaySteamIPC, 0, 5000, &reply) : MACH_SEND_INVALID_DEST;
+        g_steamForGame = YES;   // PlaySteamForGame below, once the game's hooks are in
+        g_steamIPC = kr == KERN_SUCCESS ? reply.port.name : MACH_PORT_NULL;
+        note(@"Steam's launch environment: %lu variables; ipcserver port %@", (unsigned long)env.count, MACH_PORT_VALID(g_steamIPC) ? @"from MacShack" : @"NONE");
+    }
     [NSNotificationCenter.defaultCenter addObserverForName:@"ShackGuestExited" object:nil queue:nil usingBlock:^(NSNotification *n) {
         int code = [n.userInfo[@"code"] intValue];
         dispatch_async(g_queue, ^{ note(@"the game ended (%d)", code); note(@"%@", ShackHomePrefsSync()); reportExit(code); backToMacShack(); });
@@ -597,6 +634,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
         backToMacShack();
         return;
     }
+    if (g_steamForGame) note(@"%@", PlaySteamForGame(g_group, g_steamIPC, launch[@"code"], [launch[@"steamPid"] intValue]));
     ShackWatchStart([ready[@"watch"] boolValue]);
     dispatch_async(dispatch_get_main_queue(), ^{   // as MacShack: its run loop turns while the game's initializers load
         NSError *e = nil;
@@ -606,17 +644,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     NSUInteger seconds = (NSUInteger)query[@"seconds"].integerValue;
     if (!seconds) return;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * NSEC_PER_SEC), g_queue, ^{
-        if (atomic_load(&g_finished)) return;
-        void (*quit)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAppKitRequestQuit");   // libShackAppKit: the island menu's Quit
-        note(@"%lu s: asking the game to quit%@", (unsigned long)seconds, quit ? @"" : @" (no ShackAppKitRequestQuit)");
-        if (quit) dispatch_async(dispatch_get_main_queue(), ^{ quit(); });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), g_queue, ^{
-            if (atomic_load(&g_finished)) return;
-            note(@"the game did not quit within 15 s: Play ends it");
-            note(@"%@", ShackHomePrefsSync());
-            reportExit(-2);
-            backToMacShack();
-        });
+        askGameToQuit([NSString stringWithFormat:@"%lu s", (unsigned long)seconds]);
     });
 }
 
