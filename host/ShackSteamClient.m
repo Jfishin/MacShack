@@ -1075,6 +1075,11 @@ void ShackSteamClientInstall(NSString *bundle, NSString *code) {
         }), "B@:");
         class_addMethod(gGameAppClass, sel_registerName("forceTerminate"), class_getMethodImplementation(gGameAppClass, sel_registerName("terminate")), "B@:");
         objc_registerClassPair(gGameAppClass);
+        // Steam's Stop finds the game again by its pid, then terminates it (the shim has no such lookup: nil, no Stop).
+        class_addMethod(object_getClass(running), sel_registerName("runningApplicationWithProcessIdentifier:"), imp_implementationWithBlock(^id(id cls, pid_t pid) {
+            if (pid == kGamePid) return gGame.state == 1 ? [gGameAppClass new] : nil;
+            return pid == getpid() ? [cls valueForKey:@"currentApplication"] : nil;
+        }), "@@:i");
         class_replaceMethod(workspace, sel_registerName("launchApplicationAtURL:options:configuration:error:"), (IMP)steamLaunchApplication, "@@:@Q@^@");
     }
 }
