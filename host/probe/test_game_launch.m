@@ -29,6 +29,13 @@ int main(void) {
         check(!strcmp(getenv("SHACK_TEST_ENV") ?: "", "a=b"), "--shack-env sets the variable");
         [@"--shack-gputrace\n--shack-jit-mb=256\n" writeToFile:plain atomically:YES encoding:NSUTF8StringEncoding error:NULL];
         check([ShackGuestArgs(plain, &watch, &jit, &trace) isEqual:@[]] && trace == -1 && jit == 256, "GPU traces on request, JIT size");
+        // A launch from Steam carries Steam's arguments: used as they are, no .args file read or written.
+        NSString *never = [dir stringByAppendingPathComponent:@"Never.args"];
+        watch = YES; jit = 7; trace = 7;
+        check([ShackLaunchArgs(@{@"args": @[@"-x", @"--shack-watch"], @"argsFile": never}, &watch, &jit, &trace) isEqual:(@[@"-x", @"--shack-watch"])] &&
+              !watch && !jit && !trace && ![fm fileExistsAtPath:never], "Steam's arguments as they are");
+        [@"-windowed\n" writeToFile:plain atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        check([ShackLaunchArgs(@{@"argsFile": plain}, &watch, &jit, &trace) isEqual:@[@"-windowed"]], "else the game's .args");
         [fm removeItemAtPath:dir error:NULL];
         puts("game launch ok");
     }

@@ -151,6 +151,14 @@ NSArray<NSString *> *ShackGuestArgs(NSString *path, BOOL *watchOut, int *jitMBOu
     return a;
 }
 
+NSArray<NSString *> *ShackLaunchArgs(NSDictionary *launch, BOOL *watchOut, int *jitMBOut, int *traceSecOut) {
+    NSArray *given = launch[@"args"];
+    if (![given isKindOfClass:NSArray.class]) return ShackGuestArgs(launch[@"argsFile"], watchOut, jitMBOut, traceSecOut);
+    *watchOut = NO; *traceSecOut = 0;
+    if (jitMBOut) *jitMBOut = 0;
+    return given;
+}
+
 NSDictionary *ShackGamePrepareProcess(NSDictionary *launch, NSError **error) {
     // The guest sees its bundle at a standardized path, as on a Mac, where the two agree: directory listings give
     // /private/var/..., which -stringByStandardizingPath turns into /var/... GameMaker's file sandbox compares the two
@@ -175,7 +183,7 @@ NSDictionary *ShackGamePrepareProcess(NSDictionary *launch, NSError **error) {
     NSLog(@"[MacShack] code=%@ data=%@", codePath, appPath);
     // Before ShackHooksInstall: it creates the Metal device, and a GPU trace needs MTL_CAPTURE_ENABLED set before that.
     BOOL watchArg = NO; int jitMB = 0, traceSec = 0;
-    NSArray *args = ShackGuestArgs(launch[@"argsFile"], &watchArg, &jitMB, &traceSec);
+    NSArray *args = ShackLaunchArgs(launch, &watchArg, &jitMB, &traceSec);
     if (!jitMB) jitMB = translate ? ShackTranslatedJITMB(appPath) : 128;
     NSLog(@"[MacShack] args %@", [args componentsJoinedByString:@" "]);
     if (traceSec) {

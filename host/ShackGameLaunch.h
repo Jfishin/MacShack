@@ -17,6 +17,9 @@ BOOL ShackStartGuest(NSString *codePath, NSString *argv0, NSArray<NSString *> *_
                      int *_Nullable rcOut, NSError **error);
 // A game's .args: one argument per line, MacShack's --shack-* tokens applied and left out (ShackGameLaunch.m).
 NSArray<NSString *> *ShackGuestArgs(NSString *path, BOOL *watchOut, int *_Nullable jitMBOut, int *traceSecOut);
+// The game's arguments from a launch dictionary: "args" as given (Steam's own, with nothing read or written), else its
+// .args file (ShackGuestArgs). Without "args", MacShack's tokens in the file set *watchOut, *jitMBOut, *traceSecOut.
+NSArray<NSString *> *ShackLaunchArgs(NSDictionary *launch, BOOL *watchOut, int *_Nullable jitMBOut, int *traceSecOut);
 // stdout and stderr into logPath; the previous log stays as <name>.prev.log.
 void ShackRedirectOutput(NSString *logPath);
 NS_ASSUME_NONNULL_END
