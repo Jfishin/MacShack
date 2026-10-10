@@ -627,7 +627,10 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     loadShims();
     __block NSDictionary *ready;
     __block NSError *error;
-    dispatch_sync(dispatch_get_main_queue(), ^{ ready = ShackGamePrepareProcess(launch, &error); });
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [PlayOverlay showWithName:query[@"name"] ?: @""];   // the island menu and touch controls, before the game looks for pads
+        ready = ShackGamePrepareProcess(launch, &error);
+    });
     if (!ready) {
         note(@"not started: %@", error.localizedDescription);
         reportExit(126);
