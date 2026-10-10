@@ -72,6 +72,12 @@ int main(int argc, const char **argv) {
         NSString *intelForPlay = App(root, @"IntelForPlay", [NSString stringWithUTF8String:argv[2]]);
         Check(![ShackInstaller playCodeRootForAppPath:intelForPlay guests:guests identifier:@"com.example.fixture.play" error:&error] &&
               [error.localizedDescription containsString:@"Intel"], @"Intel games refused in Play");
+        // The App Group's container comes as /private/var/..., and NSString's path resolving drops /private: freshly signed
+        // code must still be seen inside its own folder (the phone said "Prepared code is missing or changed").
+        Check([root hasPrefix:@"/var/"], @"test root under /var, as the phone's containers");
+        NSString *privateGuests = [[@"/private" stringByAppendingString:root] stringByAppendingPathComponent:@"Group2/Guests"];
+        Check([ShackInstaller playCodeRootForAppPath:data guests:privateGuests identifier:@"com.example.fixture.play" error:&error] != nil,
+              error.description ?: @"Play code root under a /private path");
         // A universal static library beside the code (Coromon's Firebase frameworks) is neither prepared nor signed.
         NSString *withArchive = App(root, @"Archive", fixture);
         NSString *archiveDir = [withArchive stringByAppendingPathComponent:@"Contents/Plugins/Static.framework"];

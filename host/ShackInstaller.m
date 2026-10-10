@@ -381,12 +381,14 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
         ![m[@"infoHash"] isEqual:Digest([appPath stringByAppendingPathComponent:@"Contents/Info.plist"], error)])
         return InstallFail(error, @"The installed game metadata changed or its data folder is missing.");
     NSString *code = [root stringByAppendingPathComponent:generation];
+    // Resolved as the files below are: a root given as /private/var/... (the App Group's container) loses /private there.
+    NSString *codeResolved = code.stringByResolvingSymlinksInPath;
     NSDictionary *hashes = m[@"files"];
     if (!hashes[[@"Contents/MacOS" stringByAppendingPathComponent:m[@"executable"]]])
         return InstallFail(error, @"The prepared main executable is absent from the manifest.");
     for (NSString *relative in hashes) {
         if (![relative isKindOfClass:NSString.class] || [relative hasPrefix:@"/"] ||
-            [relative.pathComponents containsObject:@".."] || !Inside([code stringByAppendingPathComponent:relative].stringByResolvingSymlinksInPath, code) ||
+            [relative.pathComponents containsObject:@".."] || !Inside([code stringByAppendingPathComponent:relative].stringByResolvingSymlinksInPath, codeResolved) ||
             ![hashes[relative] isEqual:Digest([code stringByAppendingPathComponent:relative], error)])
             return InstallFail(error, @"Prepared code is missing or changed. Prepare the game again before launching.");
     }
