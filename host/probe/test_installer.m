@@ -78,6 +78,19 @@ int main(int argc, const char **argv) {
         NSString *privateGuests = [[@"/private" stringByAppendingString:root] stringByAppendingPathComponent:@"Group2/Guests"];
         Check([ShackInstaller playCodeRootForAppPath:data guests:privateGuests identifier:@"com.example.fixture.play" error:&error] != nil,
               error.description ?: @"Play code root under a /private path");
+        // Steam's library behind a link (MacShack's Application Support becomes a link into the App Group): a game
+        // reached through it prepares and verifies as one reached directly.
+        NSString *realSteam = [root stringByAppendingPathComponent:@"RealSupport/Steam/steamapps/common"];
+        NSString *linkedSupport = [root stringByAppendingPathComponent:@"LinkedSupport"];
+        Check([fm createDirectoryAtPath:realSteam withIntermediateDirectories:YES attributes:nil error:nil] &&
+              [fm createSymbolicLinkAtPath:linkedSupport withDestinationPath:[root stringByAppendingPathComponent:@"RealSupport"] error:nil], @"linked library");
+        NSString *linkedGame = App(root, @"LinkedGame", fixture);
+        Check([fm moveItemAtPath:linkedGame toPath:[realSteam stringByAppendingPathComponent:@"LinkedGame.app"] error:nil], @"game into the real library");
+        NSString *throughLink = [linkedSupport stringByAppendingPathComponent:@"Steam/steamapps/common/LinkedGame.app"];
+        Check([ShackInstaller steamGameCodeRootForAppPath:throughLink error:&error] != nil, error.description ?: @"Steam game through a linked folder");
+        Check([ShackInstaller steamGameCodeRootForAppPath:throughLink error:&error] != nil, error.description ?: @"and again (reused)");
+        Check([ShackInstaller playCodeRootForAppPath:throughLink guests:guests identifier:@"com.example.fixture.play" error:&error] != nil,
+              error.description ?: @"Play's copy through a linked folder");
         // A universal static library beside the code (Coromon's Firebase frameworks) is neither prepared nor signed.
         NSString *withArchive = App(root, @"Archive", fixture);
         NSString *archiveDir = [withArchive stringByAppendingPathComponent:@"Contents/Plugins/Static.framework"];
