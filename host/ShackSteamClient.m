@@ -41,7 +41,7 @@ static volatile int gHelperState;   // 0 not started, 1 running, 2 ended
 static int gHelperArgc, gHelperStatus;
 static char **gHelperArgv;
 // A game Steam started, running in this process (below): its stand-in process.
-static struct { volatile int state; int status, argc, kq; char **argv, **envp; pthread_t thread; id delegate; NSString *app; char code[PATH_MAX]; int jitMB; BOOL translated; } gGame = { .kq = -1 };
+static struct { volatile int state; int status, argc, kq; char **argv, **envp; pthread_t thread; id delegate; NSString *app; char code[PATH_MAX]; int jitMB; BOOL translated, inPlay, ranInProcess; } gGame = { .kq = -1 };
 NSString *ShackSteamClientGameName(void) { return gGame.state == 1 ? gGame.app.lastPathComponent.stringByDeletingPathExtension : nil; }   // the island menu's game
 // A Windows program Steam started through the Steam Play tool (ShackSteamPlay.m): it runs in MacShack Play (ShackPlay.m),
 // this is its stand-in process. The tool's other verbs (install scripts, getcompatpath) end at once as kToolPid.
@@ -102,7 +102,10 @@ static int steamKill(pid_t pid, int sig) {
         return 0;
     }
     if (pid == kGamePid) {
-        if (sig) say([NSString stringWithFormat:@"kill(game, %d): ignored, a game in this process quits from its own menu", sig]);
+        if (sig && gGame.inPlay && gGame.state == 1) {   // a game in MacShack Play: it is asked to quit
+            say([NSString stringWithFormat:@"kill(game, %d): MacShack Play asks it to quit", sig]);
+            ShackPlayRequestQuit();
+        } else if (sig) say([NSString stringWithFormat:@"kill(game, %d): ignored, a game in this process quits from its own menu", sig]);
         if (gGame.state != 1) { errno = ESRCH; return -1; }
         return 0;
     }
@@ -645,10 +648,84 @@ static void answerTranslatedGame(void) {
     say(@"the Intel game's Steam API: Valve's x86 steamclient, answered in-process");
 }
 
+// A native Mac game in MacShack Play (Settings > Advanced, "Run Mac games in MacShack Play"; `-playMacGames YES`): its
+// code prepared and signed for Play into the App Group, Steam's arguments and launch environment in the launch note
+// (container paths spelled through the shared home: Play cannot read MacShack's container), Play opened. Steam keeps
+// the stand-in pid until Play reports the end; nothing of the game loads here, so another game may follow.
+// Returns 0, or -1 to run it in-process instead (Intel, JIT, or not prepared for Play).
+static NSString *viaSharedHome(NSString *value) {
+    NSString *group = ShackHomeGroup();
+    if (!group) return value;
+    for (NSString *home in @[NSHomeDirectory(), [@"/private" stringByAppendingString:NSHomeDirectory()]])
+        for (NSString *folder in @[@"/Library/Application Support", @"/Library/Logs"])
+            value = [value stringByReplacingOccurrencesOfString:[home stringByAppendingString:folder]
+                                                     withString:[group stringByAppendingFormat:@"/Home%@", folder]];
+    return value;
+}
+static void playGameEnded(int status, NSString *exe) {   // the bridge's queue: Play reported the end, or its process went
+    if (gGame.state != 1) return;
+    gGame.status = status; gGame.state = 2; gGame.inPlay = NO;
+    say([NSString stringWithFormat:@"the game in MacShack Play ended (%d): back to Steam", status]);
+    if (gGame.kq >= 0) {
+        struct kevent ev;
+        EV_SET(&ev, kGamePid, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+        origKevent(gGame.kq, &ev, 1, NULL, 0, NULL);
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:@"ShackSteamGameEnded" object:nil];
+    });
+    NSString *group = ShackHomeGroup(), *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    if (group && exe) {   // the game's log where devicectl and AutoConfig read it
+        NSString *mine = [docs stringByAppendingFormat:@"/Logs/%@.log", exe];
+        [NSFileManager.defaultManager removeItemAtPath:mine error:NULL];
+        [NSFileManager.defaultManager copyItemAtPath:[group stringByAppendingFormat:@"/Logs/%@.log", exe] toPath:mine error:NULL];
+    }
+    ShackHomePrefsSync();
+    ShackHomeMirrorLogs();
+}
+static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
+    NSString *group = ShackHomeGroup();
+    if (!group) return -1;
+    NSError *failure = nil;
+    NSString *code = [ShackInstaller playCodeRootForAppPath:app guests:[group stringByAppendingPathComponent:@"Guests"]
+                                                identifier:[ShackPlayHostBundleID() stringByAppendingString:@".play"] steam:YES error:&failure];
+    NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
+    NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[group stringByAppendingFormat:@"/Guests/Play.Steam.%@/current.plist", name]];
+    if (!code || [manifest[@"requiresJIT"] boolValue]) {
+        say([NSString stringWithFormat:@"%@ stays in MacShack: %@", name, code ? @"it needs JIT" : failure.localizedDescription]);
+        return -1;
+    }
+    NSMutableArray<NSString *> *args = [NSMutableArray array];
+    for (int i = 1; argv[i]; i++) [args addObject:viaSharedHome(@(argv[i]))];
+    NSMutableDictionary<NSString *, NSString *> *env = [NSMutableDictionary dictionary];
+    for (char **e = envp; e && *e; e++) {
+        NSString *pair = @(*e);
+        NSRange eq = [pair rangeOfString:@"="];
+        NSString *key = eq.location == NSNotFound ? nil : [pair substringToIndex:eq.location];
+        if ([key hasPrefix:@"Steam"] || [key hasPrefix:@"STEAM"]) env[key] = viaSharedHome([pair substringFromIndex:NSMaxRange(eq)]);
+    }
+    NSDictionary *launch = @{@"app": app, @"code": code, @"logs": [group stringByAppendingPathComponent:@"Logs"], @"args": args,
+        @"translate": @NO, @"requiresJIT": @NO, @"fpsCap": @(ShackGameFrameCap(name, NO)), @"renderScale": @(ShackGameRenderScale(name, NO)),
+        @"swapMB": @0, @"steam": @YES, @"steamPid": @(kGamePid), @"env": env};
+    NSString *notes = [group stringByAppendingPathComponent:@"Launch"];
+    [NSFileManager.defaultManager createDirectoryAtPath:notes withIntermediateDirectories:YES attributes:nil error:NULL];
+    if (![launch writeToFile:[notes stringByAppendingPathComponent:@"current.plist"] atomically:YES]) { say(@"launch note not written"); return -1; }
+    NSString *exe = [NSDictionary dictionaryWithContentsOfFile:[app stringByAppendingPathComponent:@"Contents/Info.plist"]][@"CFBundleExecutable"];
+    gGame.app = app;
+    gGame.inPlay = YES;
+    gGame.state = 1;
+    ShackHomePrefsSync();   // the game's settings for Play
+    say([NSString stringWithFormat:@"%@ runs in MacShack Play as pid %d (%lu arguments, %lu Steam variables)", name, kGamePid,
+         (unsigned long)args.count, (unsigned long)env.count]);
+    ShackPlayStart(@"mac", @{@"name": name, @"steam": @"1"}, ^(int status) { playGameEnded(status, exe); });
+    return 0;
+}
+
 // Runs the game whose executable is path (in app, a bundle in Steam's library) with argv and envp (taken, they live for
 // the process). 0, or the errno Steam reports.
 static int startSteamGame(NSString *app, NSString *path, char **argv, char **envp) {
-    if (gGame.state) { say(@"a game already ran in this MacShack run; restart MacShack for another"); return EAGAIN; }
+    if (gGame.state == 1) { say(@"a game is running; Steam starts another only after it ends"); return EAGAIN; }
+    if (gGame.ranInProcess) { say(@"a game already ran in this MacShack run; restart MacShack for another"); return EAGAIN; }   // its code stays loaded
     // One spelling for the game's paths: Steam's library sits behind Application Support's link into the shared home,
     // and checks that compare the bundle with listings inside it (GameMaker's) need the resolved one. The bundle is
     // resolved once and the executable's place inside it kept as Steam gave it (a link inside the bundle stays a link).
@@ -657,6 +734,10 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
     app = app.stringByResolvingSymlinksInPath;
     path = [app stringByAppendingString:inside];
     say([NSString stringWithFormat:@"Steam starts %@: preparing it", app.lastPathComponent]);
+    if ([NSUserDefaults.standardUserDefaults boolForKey:@"playMacGames"]) {
+        int routed = startSteamGameInPlay(app, argv, envp);
+        if (routed >= 0) return routed;
+    }
     NSError *failure = nil;
     NSString *code = [ShackInstaller steamGameCodeRootForAppPath:app error:&failure];
     if (!code) { say([@"the game could not be prepared: " stringByAppendingString:failure.localizedDescription]); return ENOEXEC; }
@@ -698,6 +779,7 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
     ShackAppKitSetRenderScale(ShackGameRenderScale(name, gGame.translated));
     gGame.state = 1;
     pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 64 << 20);
+    gGame.ranInProcess = YES;
     int e = pthread_create(&gGame.thread, &at, gameThread, (void *)CFBridgingRetain(codeExe));
     if (e) { gGame.state = 0; say([NSString stringWithFormat:@"pthread_create: %d", e]); return e; }
     say([NSString stringWithFormat:@"%@ runs in-process as pid %d (%d arguments)", app.lastPathComponent, kGamePid, gGame.argc]);
