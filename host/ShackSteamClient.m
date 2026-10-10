@@ -995,8 +995,21 @@ static void *translatedGameSymbol(const char *name) {
     return answer;
 }
 
+// `ps -x -o pid=,ppid=` for Steam (libShackSteamClient's popen): this process and, as its children, the stand-ins of
+// what Steam started that still run. Steam's Stop signals the game's tree it finds there (steamKill).
+static char *steamProcessList(void) {
+    pid_t me = getpid();
+    NSMutableString *list = [NSMutableString stringWithFormat:@"%d 1\n", me];
+    if (gHelperState == 1) [list appendFormat:@"%d %d\n", kHelperPid, me];
+    if (gGame.state == 1) [list appendFormat:@"%d %d\n", kGamePid, me];
+    if (gWindows.state == 1) [list appendFormat:@"%d %d\n", kWindowsPid, me];
+    return strdup(list.UTF8String);
+}
+
 void ShackSteamClientInstall(NSString *bundle, NSString *code) {
     gBundle = bundle; gCode = code;
+    void (*setProcessList)(char *(*)(void)) = (void (*)(char *(*)(void)))dlsym(RTLD_DEFAULT, "ShackSteamSetProcessList");
+    if (setProcessList) setProcessList(steamProcessList);
     // The private images (the helper's, a game's Steam API) report Steam's originals: tier0 finds steamui and steam.cfg
     // beside its own image.
     NSMutableDictionary<NSString *, NSString *> *aliases = [NSMutableDictionary dictionary];

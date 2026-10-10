@@ -5,6 +5,8 @@
 // Steam trusts it (popen "/usr/sbin/lsof -F up -i TCP@127.0.0.1:<port>"; without it the UI never connects). It is
 // answered here, in lsof's -F up format: this process, if one of its own TCP sockets uses the port (another app on the
 // device is not vouched for), else nothing. Mac original: prep/steam-onehost/onehost.m.
+// Steam's Stop looks for a game's process tree first (popen "/bin/ps -x -o pid=,ppid="), then signals it: answered with
+// this process and the stand-ins of what Steam started, from the host (ShackSteamSetProcessList).
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -53,21 +55,29 @@ static int ownSocketUsesPort(int port) {   // this process's own sockets, by the
     return 0;
 }
 
+static char *(*processList)(void);   // malloc'd `ps -o pid=,ppid=` lines
+void ShackSteamSetProcessList(char *(*list)(void)) { processList = list; }
+
 enum { kAnswers = 16 };   // ponytail: a fixed table; Steam closes each answer right after reading it
 static FILE *answers[kAnswers];
 static pthread_mutex_t answersLock = PTHREAD_MUTEX_INITIALIZER;
 
 FILE *popen(const char *command, const char *mode) {
     (void)mode;
-    int port;
-    if (!command || sscanf(command, "/usr/sbin/lsof -F up -i TCP@127.0.0.1:%d", &port) != 1) {
+    int port, len;
+    char answer[64], *buffer;
+    if (command && !strcmp(command, "/bin/ps -x -o pid=,ppid=")) {
+        buffer = processList ? processList() : NULL;
+        if (!buffer) { snprintf(answer, sizeof answer, "%d 1\n", getpid()); buffer = strdup(answer); }
+        len = buffer ? (int)strlen(buffer) : 0;
+    } else if (command && sscanf(command, "/usr/sbin/lsof -F up -i TCP@127.0.0.1:%d", &port) == 1) {
+        len = ownSocketUsesPort(port) ? snprintf(answer, sizeof answer, "p%d\nu%d\n", getpid(), getuid()) : 0;
+        buffer = strdup(len ? answer : " ");
+    } else {
         refused("popen", command);
         errno = EPERM;
         return NULL;
     }
-    char answer[64];
-    int len = ownSocketUsesPort(port) ? snprintf(answer, sizeof answer, "p%d\nu%d\n", getpid(), getuid()) : 0;
-    char *buffer = strdup(len ? answer : " ");
     FILE *f = fmemopen(buffer, len ? (size_t)len : 1, "r");
     if (f && !len) fgetc(f);   // an empty answer: lsof found nothing
     pthread_mutex_lock(&answersLock);
