@@ -515,10 +515,10 @@ static NSString *InPlaceCodeRoot(NSString *name, NSString *appPath, NSString *ro
         return InPlaceCodeRoot(name, appPath, [GuestRoot() stringByAppendingPathComponent:name], nil, YES, error);
     }
 }
-+ (NSString *)playCodeRootForAppPath:(NSString *)appPath guests:(NSString *)guests identifier:(NSString *)identifier error:(NSError **)error {
++ (NSString *)playCodeRootForAppPath:(NSString *)appPath guests:(NSString *)guests identifier:(NSString *)identifier steam:(BOOL)steam error:(NSError **)error {
     @synchronized(self) {
         appPath = appPath.stringByResolvingSymlinksInPath;   // one spelling for the checks: the library may sit behind a link
-        NSString *name = [@"Play." stringByAppendingString:appPath.lastPathComponent.stringByDeletingPathExtension];
+        NSString *name = [(steam ? @"Play.Steam." : @"Play.") stringByAppendingString:appPath.lastPathComponent.stringByDeletingPathExtension];
         return InPlaceCodeRoot(name, appPath, [guests stringByAppendingPathComponent:name], identifier, NO, error);
     }
 }

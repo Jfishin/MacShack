@@ -13,7 +13,8 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable NSString *)steamGameCodeRootForAppPath:(NSString *)appPath error:(NSError **)error;
 /// The same for MacShack Play, which runs Mac games too: a game whose data stays where it is (the App Group's Games),
 /// its arm64 code prepared and signed with Play's identifier into guests/Play.<app name>. Intel games are refused here.
-+ (nullable NSString *)playCodeRootForAppPath:(NSString *)appPath guests:(NSString *)guests identifier:(NSString *)identifier error:(NSError **)error;
+/// steam: a game Steam installed (guests/Play.Steam.<app name>), so the same game staged in Local Games keeps its own copy.
++ (nullable NSString *)playCodeRootForAppPath:(NSString *)appPath guests:(NSString *)guests identifier:(NSString *)identifier steam:(BOOL)steam error:(NSError **)error;
 /// That game's install record (requiresJIT, translate), in Library/Guests/Steam.<app name>.
 + (nullable NSDictionary *)steamGameManifestForAppPath:(NSString *)appPath;
 + (BOOL)requiresJITAtAppPath:(NSString *)appPath;

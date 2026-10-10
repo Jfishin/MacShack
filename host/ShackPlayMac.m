@@ -39,7 +39,7 @@ void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs) {
     if (![fm fileExistsAtPath:shared] && ![fm copyItemAtPath:app toPath:shared error:&error]) { say([@"copy into the App Group failed: " stringByAppendingString:error.localizedDescription]); return; }
     if ([fm fileExistsAtPath:args]) { [fm removeItemAtPath:sharedArgs error:NULL]; [fm copyItemAtPath:args toPath:sharedArgs error:NULL]; }
     NSString *code = [ShackInstaller playCodeRootForAppPath:shared guests:[group stringByAppendingPathComponent:@"Guests"]
-                                                identifier:[ShackPlayHostBundleID() stringByAppendingString:@".play"] error:&error];
+                                                identifier:[ShackPlayHostBundleID() stringByAppendingString:@".play"] steam:NO error:&error];
     if (!code) { say([@"not prepared for Play: " stringByAppendingString:error.localizedDescription]); return; }
     NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[group stringByAppendingFormat:@"/Guests/Play.%@/current.plist", name]];
     NSMutableDictionary *launch = [@{@"app": shared, @"code": code, @"logs": [group stringByAppendingPathComponent:@"Logs"], @"argsFile": sharedArgs,

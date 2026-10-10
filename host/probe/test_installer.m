@@ -60,23 +60,23 @@ int main(int argc, const char **argv) {
         // MacShack Play's copy: prepared in place into another Guests folder and signed with Play's identifier, reused
         // while unchanged, beside MacShack's own; Intel games are refused there for now.
         NSString *guests = [root stringByAppendingPathComponent:@"Group/Guests"];
-        NSString *playCode = [ShackInstaller playCodeRootForAppPath:data guests:guests identifier:@"com.example.fixture.play" error:&error];
+        NSString *playCode = [ShackInstaller playCodeRootForAppPath:data guests:guests identifier:@"com.example.fixture.play" steam:NO error:&error];
         Check(playCode != nil && [playCode hasPrefix:[guests stringByAppendingPathComponent:@"Play.Native/"]], error.description ?: @"Play code root");
         Check([signedIdentifiers.lastObject isEqual:@"com.example.fixture.play"], @"signed with Play's identifier");
         NSDictionary *playManifest = [NSDictionary dictionaryWithContentsOfFile:[guests stringByAppendingPathComponent:@"Play.Native/current.plist"]];
         Check([playManifest[@"signing"][@"identifier"] isEqual:@"com.example.fixture.play"] && [playManifest[@"dataPath"] isEqual:data], @"Play manifest");
         NSUInteger signings = signedIdentifiers.count;
-        Check([[ShackInstaller playCodeRootForAppPath:data guests:guests identifier:@"com.example.fixture.play" error:&error] isEqual:playCode] &&
+        Check([[ShackInstaller playCodeRootForAppPath:data guests:guests identifier:@"com.example.fixture.play" steam:NO error:&error] isEqual:playCode] &&
               signedIdentifiers.count == signings, @"Play code reused while unchanged");
         Check([ShackInstaller preparedCodeRootForAppPath:data error:&error] != nil, @"MacShack's own code still valid beside Play's");
         NSString *intelForPlay = App(root, @"IntelForPlay", [NSString stringWithUTF8String:argv[2]]);
-        Check(![ShackInstaller playCodeRootForAppPath:intelForPlay guests:guests identifier:@"com.example.fixture.play" error:&error] &&
+        Check(![ShackInstaller playCodeRootForAppPath:intelForPlay guests:guests identifier:@"com.example.fixture.play" steam:NO error:&error] &&
               [error.localizedDescription containsString:@"Intel"], @"Intel games refused in Play");
         // The App Group's container comes as /private/var/..., and NSString's path resolving drops /private: freshly signed
         // code must still be seen inside its own folder (the phone said "Prepared code is missing or changed").
         Check([root hasPrefix:@"/var/"], @"test root under /var, as the phone's containers");
         NSString *privateGuests = [[@"/private" stringByAppendingString:root] stringByAppendingPathComponent:@"Group2/Guests"];
-        Check([ShackInstaller playCodeRootForAppPath:data guests:privateGuests identifier:@"com.example.fixture.play" error:&error] != nil,
+        Check([ShackInstaller playCodeRootForAppPath:data guests:privateGuests identifier:@"com.example.fixture.play" steam:NO error:&error] != nil,
               error.description ?: @"Play code root under a /private path");
         // Steam's library behind a link (MacShack's Application Support becomes a link into the App Group): a game
         // reached through it prepares and verifies as one reached directly.
@@ -89,8 +89,15 @@ int main(int argc, const char **argv) {
         NSString *throughLink = [linkedSupport stringByAppendingPathComponent:@"Steam/steamapps/common/LinkedGame.app"];
         Check([ShackInstaller steamGameCodeRootForAppPath:throughLink error:&error] != nil, error.description ?: @"Steam game through a linked folder");
         Check([ShackInstaller steamGameCodeRootForAppPath:throughLink error:&error] != nil, error.description ?: @"and again (reused)");
-        Check([ShackInstaller playCodeRootForAppPath:throughLink guests:guests identifier:@"com.example.fixture.play" error:&error] != nil,
+        Check([ShackInstaller playCodeRootForAppPath:throughLink guests:guests identifier:@"com.example.fixture.play" steam:NO error:&error] != nil,
               error.description ?: @"Play's copy through a linked folder");
+        // The same game from Steam and from Local Games: two copies for Play, neither preparing the other's again.
+        NSString *steamCopy = [ShackInstaller playCodeRootForAppPath:throughLink guests:guests identifier:@"com.example.fixture.play" steam:YES error:&error];
+        Check([steamCopy hasPrefix:[guests stringByAppendingPathComponent:@"Play.Steam.LinkedGame/"]], error.description ?: @"Steam's copy for Play");
+        NSUInteger before = signedIdentifiers.count;
+        Check([[ShackInstaller playCodeRootForAppPath:throughLink guests:guests identifier:@"com.example.fixture.play" steam:NO error:&error] length] &&
+              [[ShackInstaller playCodeRootForAppPath:throughLink guests:guests identifier:@"com.example.fixture.play" steam:YES error:&error] isEqual:steamCopy] &&
+              signedIdentifiers.count == before, @"both copies reused, none prepared again");
         // A universal static library beside the code (Coromon's Firebase frameworks) is neither prepared nor signed.
         NSString *withArchive = App(root, @"Archive", fixture);
         NSString *archiveDir = [withArchive stringByAppendingPathComponent:@"Contents/Plugins/Static.framework"];
