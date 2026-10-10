@@ -1,12 +1,15 @@
 #import "MadeiraEngine.h"
 #import "MacShackPlay-Swift.h"
 #import "PlaySteam.h"
+#import "ShackGameLaunch.h"
 #import "ShackHooks.h"
 #import "ShackJIT.h"
 #import "ShackPlay.h"
 #import "ShackTouchPad.h"
 #import "ShackVAReport.h"
+#import "ShackWatch.h"
 #import <AVFAudio/AVFAudio.h>
+#import <dlfcn.h>
 #import <GameController/GameController.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -21,7 +24,8 @@
 // MacShack (host/ShackPlay.m) opens <its bundle id>.play://run?exe=... (a Windows program with Madeira's engine,
 // play/MadeiraEngine.m), ://probe?minutes=N (the bridge checks, `--play-probe`), ://steam?appid=N&seconds=S
 // (Valve's steamclient logs on to MacShack's Steam, play/PlaySteam.m) or ://core?seconds=N (the checks for Mac games in
-// Play: address space, HOME, links, audio; `--play-core`). Either way Play meets MacShack through their App
+// Play: address space, HOME, links, audio; `--play-core`) or ://mac?name=N[&seconds=S] (a Mac game MacShack prepared,
+// host/ShackPlayMac.m). Either way Play meets MacShack through their App
 // Group's Mach service and has it start JIT for this pid, reports to Documents/Logs/play-<mode>.txt and the App
 // Group's play-<mode>-play.txt, then goes back to MacShack and exits once iOS moves it to the background, so each
 // program gets a fresh process. Play ends through ShackExitProcess: once a Mac game's hooks are in, a plain exit is the game's.
@@ -558,12 +562,73 @@ static void runCore(NSUInteger seconds) {   // g_queue
     backToMacShack();
 }
 
+// The shims MacShack links (so they are loaded before the game, as there): a game's own images link them too.
+static void loadShims(void) {
+    for (NSString *n in @[@"AppKit", @"Carbon", @"CG", @"CV", @"IOKit", @"CoreAudio", @"AudioToolbox", @"OpenGL", @"Security", @"AVFoundation", @"System"]) {
+        NSString *path = [g_frameworks stringByAppendingFormat:@"/libShack%@.dylib", n];
+        if (!dlopen(path.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL)) note(@"shim %@: %s", n, dlerror());
+    }
+}
+
+// A Mac game MacShack prepared for Play (host/ShackPlayMac.m), from its launch note: started as MacShack starts one
+// (ShackGameLaunch.m), its end reported to MacShack, then back. Intel and JIT games come later.
+static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
+    note(@"MacShack Play: Mac game %@ (pid %d), MacShack is %@", query[@"name"], getpid(), g_macshack);
+    waitForGameMode();
+    MadeiraEngineReleasePoolSpace();   // no Madeira pool will come: the space is the game's
+    BOOL met = meetMacShack();
+    NSDictionary *launch = g_group ? [NSDictionary dictionaryWithContentsOfURL:[g_group URLByAppendingPathComponent:@"Launch/current.plist"]] : nil;
+    NSString *refused = !launch ? @"no launch note" : [launch[@"translate"] boolValue] ? @"Intel games do not run in MacShack Play yet"
+                      : [launch[@"requiresJIT"] boolValue] ? @"games that need JIT do not run in MacShack Play yet" : nil;
+    if (refused) {
+        note(@"refused: %@", refused);
+        if (met) reportExit(EINVAL);
+        backToMacShack();
+        return;
+    }
+    note(@"%@", ShackVAReport(NO));
+    [NSNotificationCenter.defaultCenter addObserverForName:@"ShackGuestExited" object:nil queue:nil usingBlock:^(NSNotification *n) {
+        int code = [n.userInfo[@"code"] intValue];
+        dispatch_async(g_queue, ^{ note(@"the game ended (%d)", code); reportExit(code); backToMacShack(); });
+    }];
+    loadShims();
+    __block NSDictionary *ready;
+    __block NSError *error;
+    dispatch_sync(dispatch_get_main_queue(), ^{ ready = ShackGamePrepareProcess(launch, &error); });
+    if (!ready) {
+        note(@"not started: %@", error.localizedDescription);
+        reportExit(126);
+        backToMacShack();
+        return;
+    }
+    ShackWatchStart([ready[@"watch"] boolValue]);
+    dispatch_async(dispatch_get_main_queue(), ^{   // as MacShack: its run loop turns while the game's initializers load
+        NSError *e = nil;
+        if (ShackStartGuest(ready[@"codePath"], ready[@"exePath"], ready[@"args"], nil, NULL, &e)) return;
+        dispatch_async(g_queue, ^{ note(@"not started: %@", e.localizedDescription); reportExit(126); backToMacShack(); });
+    });
+    NSUInteger seconds = (NSUInteger)query[@"seconds"].integerValue;
+    if (!seconds) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)seconds * NSEC_PER_SEC), g_queue, ^{
+        if (atomic_load(&g_finished)) return;
+        void (*quit)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAppKitRequestQuit");   // libShackAppKit: the island menu's Quit
+        note(@"%lu s: asking the game to quit%@", (unsigned long)seconds, quit ? @"" : @" (no ShackAppKitRequestQuit)");
+        if (quit) dispatch_async(dispatch_get_main_queue(), ^{ quit(); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), g_queue, ^{
+            if (atomic_load(&g_finished)) return;
+            note(@"the game did not quit within 15 s: Play ends it");
+            reportExit(-2);
+            backToMacShack();
+        });
+    });
+}
+
 static void start(UIOpenURLContext *context) {   // main queue: one probe or program per process
     static BOOL started;
     NSURL *url = context.URL;
     NSString *mode = url.host;
     if (started || !([mode isEqualToString:@"probe"] || [mode isEqualToString:@"run"] || [mode isEqualToString:@"steam"] ||
-                     [mode isEqualToString:@"core"])) return;
+                     [mode isEqualToString:@"core"] || [mode isEqualToString:@"mac"])) return;
     // iOS sets sourceApplication only for apps of the same team: MacShack opens Play for runs, so another app (or none
     // iOS names) gets nothing, and a program or probe never starts from a link elsewhere. The line shows what the first
     // run on a device gets. A bare <id>.play:// (no mode) only shows the home, from anyone.
@@ -583,6 +648,9 @@ static void start(UIOpenURLContext *context) {   // main queue: one probe or pro
         dispatch_async(g_queue, ^{ runGame(query); });
     } else if ([mode isEqualToString:@"steam"]) {
         dispatch_async(g_queue, ^{ runSteam(query); });
+    } else if ([mode isEqualToString:@"mac"]) {
+        g_status.hidden = YES;   // the game's window replaces this view; the island menu's own window brings controls later
+        dispatch_async(g_queue, ^{ runMacGame(query); });
     } else if ([mode isEqualToString:@"core"]) {
         NSUInteger seconds = query[@"seconds"].integerValue > 0 ? (NSUInteger)query[@"seconds"].integerValue : 30;
         dispatch_async(g_queue, ^{ runCore(seconds); });

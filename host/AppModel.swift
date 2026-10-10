@@ -376,6 +376,12 @@ final class AppModel {
         var play: (mode: String, query: [String: String])?
         if args.contains("--play-probe") { play = ("probe", ["minutes": value("--play-probe").flatMap { UInt($0) }.map(String.init) ?? "10"]) }
         if args.contains("--play-core") { play = ("core", ["seconds": value("--play-core").flatMap { UInt($0) }.map(String.init) ?? "30"]) }
+        // `--play-mac <Name> [--play-mac-seconds N] [--play-mac-runs N]`: an installed Local Games game in MacShack Play
+        // (host/ShackPlayMac.m), asked to quit after N seconds, N times in a row.
+        if let name = value("--play-mac") {
+            let seconds = value("--play-mac-seconds").flatMap { UInt($0) } ?? 0, runs = value("--play-mac-runs").flatMap { UInt($0) } ?? 1
+            DispatchQueue.global().async { ShackPlayMacRun(name, seconds, max(runs, 1)) }
+        }
         if let exe = value("--play-run") {
             var query = ["exe": exe]
             for (flag, key) in [("--play-jit", "jitMB"), ("--play-seconds", "seconds"), ("--play-screen", "screen")] {
