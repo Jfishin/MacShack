@@ -89,3 +89,54 @@ NSString *ShackHomeEnsure(void) {
     NSLog(@"[MacShack] shared home: %@", report);
     return report;
 }
+
+static NSDate *modified(NSString *path) { return [NSFileManager.defaultManager attributesOfItemAtPath:path error:NULL].fileModificationDate; }
+// a later than b: a date copied onto a file comes back a fraction of a microsecond off, so 10 ms or less is the same time.
+static BOOL later(NSDate *a, NSDate *b) { return a && (!b || [a timeIntervalSinceDate:b] > 0.01); }
+
+NSString *ShackPrefsSync(NSString *localPrefs, NSString *sharedPrefs, NSArray<NSString *> *skipPrefixes) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtPath:sharedPrefs withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSMutableSet<NSString *> *domains = [NSMutableSet set];
+    for (NSString *folder in @[localPrefs, sharedPrefs])
+        for (NSString *name in [fm contentsOfDirectoryAtPath:folder error:NULL])
+            if ([name.pathExtension isEqualToString:@"plist"]) [domains addObject:name.stringByDeletingPathExtension];
+    int in = 0, out = 0;
+    for (NSString *domain in domains) {
+        BOOL skip = NO;
+        for (NSString *prefix in skipPrefixes) skip |= [domain hasPrefix:prefix];
+        if (skip) continue;
+        NSString *file = [domain stringByAppendingPathExtension:@"plist"];
+        NSString *mine = [localPrefs stringByAppendingPathComponent:file], *theirs = [sharedPrefs stringByAppendingPathComponent:file];
+        NSDate *mineDate = modified(mine), *theirsDate = modified(theirs);
+        CFStringRef app = (__bridge CFStringRef)domain;
+        if (later(theirsDate, mineDate)) {
+            NSDictionary *values = [NSDictionary dictionaryWithContentsOfFile:theirs];
+            if (!values) continue;
+            CFPreferencesSetMultiple((__bridge CFDictionaryRef)values, NULL, app, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+            CFPreferencesAppSynchronize(app);
+            in++;
+        } else if (later(mineDate, theirsDate)) {
+            CFArrayRef keys = CFPreferencesCopyKeyList(app, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+            NSDictionary *values = keys ? CFBridgingRelease(CFPreferencesCopyMultiple(keys, app, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)) : @{};
+            if (keys) CFRelease(keys);
+            NSData *data = [NSPropertyListSerialization dataWithPropertyList:values format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+            if (!data || ![data writeToFile:theirs options:NSDataWritingAtomic error:NULL]) continue;
+            [fm setAttributes:@{NSFileModificationDate: mineDate} ofItemAtPath:theirs error:NULL];
+            out++;
+        }
+    }
+    return [NSString stringWithFormat:@"settings: %d in, %d out", in, out];
+}
+
+// ShackHomePrefsSync runs at a game's end too, after its hooks made mainBundle the game's: gHostID, read at load,
+// still names MacShack's own domains to skip.
+NSString *ShackHomePrefsSync(void) {
+    NSString *group = ShackHomeGroup();
+    if (!group) return @"settings: no App Group container";
+    NSString *report = ShackPrefsSync([NSHomeDirectory() stringByAppendingPathComponent:@"Library/Preferences"],
+                                      [group stringByAppendingPathComponent:@"Home/Library/Preferences"],
+                                      @[@"com.apple.", gHostID ?: @"-", @"com.valvesoftware.", @"org.chromium.", @".GlobalPreferences", @"group."]);
+    NSLog(@"[MacShack] %@", report);
+    return report;
+}

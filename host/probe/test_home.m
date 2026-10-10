@@ -51,6 +51,28 @@ int main(void) {
         chmod([h3 stringByAppendingPathComponent:@"Library/Application Support"].fileSystemRepresentation, 0755);
         check(!linkOf(as3) && [readText([as3 stringByAppendingPathComponent:@"Kept/file"]) isEqual:@"kept"], "refused: the folder and its data stay");
         check([refused containsString:@"refused"], "refused: reported");
+        // Settings: newer wins in both directions, and a sync right after changes nothing. The values go through the
+        // Mac's real cfprefsd (a throwaway domain, removed at the end); the decisions read file dates in scratch folders.
+        NSString *domain = [@"com.example.shackprefs." stringByAppendingString:NSUUID.UUID.UUIDString];
+        CFStringRef app = (__bridge CFStringRef)domain;
+        NSString *local = [scratch stringByAppendingPathComponent:@"localPrefs"], *shared = [scratch stringByAppendingPathComponent:@"sharedPrefs"];
+        NSString *file = [domain stringByAppendingPathExtension:@"plist"];
+        NSString *localFile = [local stringByAppendingPathComponent:file], *sharedFile = [shared stringByAppendingPathComponent:file];
+        [fm createDirectoryAtPath:local withIntermediateDirectories:YES attributes:nil error:NULL];
+        CFPreferencesSetAppValue(CFSTR("volume"), (__bridge CFNumberRef)@7, app);
+        CFPreferencesAppSynchronize(app);
+        [@{} writeToFile:localFile atomically:YES];   // stands for cfprefsd's file: only its date counts
+        check([ShackPrefsSync(local, shared, @[]) containsString:@"0 in, 1 out"] &&
+              [[NSDictionary dictionaryWithContentsOfFile:sharedFile][@"volume"] isEqual:@7], "local newer: exported");
+        check([ShackPrefsSync(local, shared, @[]) containsString:@"0 in, 0 out"], "right after: nothing to do");
+        [@{@"volume": @9} writeToFile:sharedFile atomically:YES];
+        [fm setAttributes:@{NSFileModificationDate: [NSDate dateWithTimeIntervalSinceNow:60]} ofItemAtPath:sharedFile error:NULL];
+        check([ShackPrefsSync(local, shared, @[@"com.example."]) containsString:@"0 in, 0 out"], "skipped prefixes are left alone");
+        check([ShackPrefsSync(local, shared, @[]) containsString:@"1 in, 0 out"] &&
+              [CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("volume"), app)) isEqual:@9], "shared newer: imported");
+        CFPreferencesSetMultiple(NULL, (__bridge CFArrayRef)@[@"volume"], app, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+        CFPreferencesAppSynchronize(app);
+        [fm removeItemAtPath:[NSHomeDirectory() stringByAppendingFormat:@"/Library/Preferences/%@", file] error:NULL];
         [fm removeItemAtPath:scratch error:NULL];
         puts("home move ok");
     }

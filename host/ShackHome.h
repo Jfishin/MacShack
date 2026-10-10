@@ -15,4 +15,11 @@ NSString *ShackHomeLink(NSString *container, NSString *home, NSArray<NSString *>
 NSString *ShackHomeEnsure(void);
 // <App Group> (group.<MacShack's bundle id>), or nil.
 NSString *_Nullable ShackHomeGroup(void);
+// Game settings between the apps: cfprefsd keeps each app's own; <home>/Library/Preferences/<domain>.plist carries
+// them across. For each domain (file in either folder, none of skipPrefixes): the newer side wins; an export also gives
+// the shared file the local file's date, so the next sync changes nothing. Returns "settings: N in, M out".
+NSString *ShackPrefsSync(NSString *localPrefs, NSString *sharedPrefs, NSArray<NSString *> *skipPrefixes);
+// The app's own (container Library/Preferences, <App Group>/Home/Library/Preferences; MacShack's own domains, Apple's,
+// Valve's and Chromium's skipped). At app start, and at each game's start and end.
+NSString *ShackHomePrefsSync(void);
 NS_ASSUME_NONNULL_END

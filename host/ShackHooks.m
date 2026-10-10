@@ -235,8 +235,8 @@ static char **gHostArgv;
 // domain for every game (Valheim's `language` = "English" made Soulstone Survivors' `new CultureInfo` throw at boot).
 // Guest code (images under Guests/, as ShackWatch tells them) gets the game's domain; the host keeps its own.
 // ponytail: callers are told apart by return address, so a guest reaching defaults only through a system library
-// (Swift's UserDefaults overlay) still lands in MacShack's domain. Only the reads Unity imports are hooked on the
-// CFPreferences side; add CFPreferencesSetAppValue/AppSynchronize when a game writes that way.
+// (Swift's UserDefaults overlay) still lands in MacShack's domain. On the CFPreferences side, reads, writes, syncs and
+// key lists for the current application go to the game's domain as well.
 static NSUserDefaults *gGuestDefaults;
 static CFStringRef gGuestPrefsID;
 // libOcerz (AArchX) calls these only on behalf of an Intel game, whose own code is data it translates.
@@ -328,6 +328,12 @@ static CFIndex (*orig_CFPreferencesGetAppIntegerValue)(CFStringRef, CFStringRef,
 static CFPropertyListRef shack_CFPreferencesCopyAppValue(CFStringRef k, CFStringRef app) { return orig_CFPreferencesCopyAppValue(k, guestApp(app, __builtin_return_address(0))); }
 static Boolean shack_CFPreferencesGetAppBooleanValue(CFStringRef k, CFStringRef app, Boolean *ok) { return orig_CFPreferencesGetAppBooleanValue(k, guestApp(app, __builtin_return_address(0)), ok); }
 static CFIndex shack_CFPreferencesGetAppIntegerValue(CFStringRef k, CFStringRef app, Boolean *ok) { return orig_CFPreferencesGetAppIntegerValue(k, guestApp(app, __builtin_return_address(0)), ok); }
+static void (*orig_CFPreferencesSetAppValue)(CFStringRef, CFPropertyListRef, CFStringRef);
+static Boolean (*orig_CFPreferencesAppSynchronize)(CFStringRef);
+static CFArrayRef (*orig_CFPreferencesCopyKeyList)(CFStringRef, CFStringRef, CFStringRef);
+static void shack_CFPreferencesSetAppValue(CFStringRef k, CFPropertyListRef v, CFStringRef app) { orig_CFPreferencesSetAppValue(k, v, guestApp(app, __builtin_return_address(0))); }
+static Boolean shack_CFPreferencesAppSynchronize(CFStringRef app) { return orig_CFPreferencesAppSynchronize(guestApp(app, __builtin_return_address(0))); }
+static CFArrayRef shack_CFPreferencesCopyKeyList(CFStringRef app, CFStringRef user, CFStringRef host) { return orig_CFPreferencesCopyKeyList(guestApp(app, __builtin_return_address(0)), user, host); }
 
 // UE4's Apple Silicon GPU survey (FMacPlatformGPUManager) walks IOKit: AppleARMIODevice entries whose device_type
 // starts with "sgx", then their IOAccelerator child's properties. The iOS sandbox hides those, the GPU list comes
@@ -719,6 +725,8 @@ void *ShackHookForGuestSymbol(const char *name) {
         {"CFPreferencesCopyAppValue", shack_CFPreferencesCopyAppValue},
         {"CFPreferencesGetAppBooleanValue", shack_CFPreferencesGetAppBooleanValue},
         {"CFPreferencesGetAppIntegerValue", shack_CFPreferencesGetAppIntegerValue},
+        {"CFPreferencesSetAppValue", shack_CFPreferencesSetAppValue}, {"CFPreferencesAppSynchronize", shack_CFPreferencesAppSynchronize},
+        {"CFPreferencesCopyKeyList", shack_CFPreferencesCopyKeyList},
         {"SCDynamicStoreCopyComputerName", shack_SCDynamicStoreCopyComputerName}, {"proc_pidpath", shack_proc_pidpath},
         {"stat", ci_stat}, {"lstat", ci_lstat}, {"access", ci_access}, {"opendir", ci_opendir},
         {"IOServiceGetMatchingServices", shack_IOServiceGetMatchingServices}, {"IOIteratorNext", shack_IOIteratorNext},
@@ -828,6 +836,9 @@ void ShackHooksInstall(NSString *bundlePath, NSString *execPath, NSString *codeP
             {"CFPreferencesCopyAppValue", shack_CFPreferencesCopyAppValue, (void **)&orig_CFPreferencesCopyAppValue},
             {"CFPreferencesGetAppBooleanValue", shack_CFPreferencesGetAppBooleanValue, (void **)&orig_CFPreferencesGetAppBooleanValue},
             {"CFPreferencesGetAppIntegerValue", shack_CFPreferencesGetAppIntegerValue, (void **)&orig_CFPreferencesGetAppIntegerValue},
+            {"CFPreferencesSetAppValue", shack_CFPreferencesSetAppValue, (void **)&orig_CFPreferencesSetAppValue},
+            {"CFPreferencesAppSynchronize", shack_CFPreferencesAppSynchronize, (void **)&orig_CFPreferencesAppSynchronize},
+            {"CFPreferencesCopyKeyList", shack_CFPreferencesCopyKeyList, (void **)&orig_CFPreferencesCopyKeyList},
             {"_NSGetExecutablePath", shack_NSGetExecutablePath, (void **)&orig_NSGetExecutablePath},
             {"proc_pidpath", shack_proc_pidpath, (void **)&orig_proc_pidpath},
             {"CFBundleGetMainBundle", shack_CFBundleGetMainBundle, NULL},
