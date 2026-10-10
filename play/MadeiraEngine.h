@@ -31,6 +31,8 @@ BOOL MadeiraEnginePad(NSInteger index, const ShackPadState *_Nullable state);
 
 // Call first in main(): holds the low address space the engine's JIT pool needs until MadeiraEngineRun asks for the pool.
 void MadeiraEngineHoldPoolSpace(void);
+// A Mac game in this process instead (no Madeira pool will come): the space held at launch is the game's.
+void MadeiraEngineReleasePoolSpace(void);
 
 // Windows/engine in the App Group (MacShack's Set up Windows games, host/WindowsKit.swift): the engine and the files it
 // reads beside it, laid out as Madeira's app bundle has them. nil without the App Group.

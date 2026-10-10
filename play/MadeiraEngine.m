@@ -39,6 +39,11 @@ void MadeiraEngineHoldPoolSpace(void) {
     if (gHeld) vm_allocate(mach_task_self(), &fence, vm_page_size, VM_FLAGS_FIXED);
 }
 
+void MadeiraEngineReleasePoolSpace(void) {   // the fence page stays: it is one page
+    if (gHeld) vm_deallocate(mach_task_self(), gHeld, gHeldSize);
+    gHeld = 0;
+}
+
 static NSString *preparePool(size_t mb) {
     for (int i = 0; i < 32; i++) {   // kept for the process's life, as Madeira does
         vm_address_t a = 0;

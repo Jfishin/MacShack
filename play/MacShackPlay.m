@@ -1,6 +1,7 @@
 #import "MadeiraEngine.h"
 #import "MacShackPlay-Swift.h"
 #import "PlaySteam.h"
+#import "ShackHooks.h"
 #import "ShackJIT.h"
 #import "ShackPlay.h"
 #import "ShackTouchPad.h"
@@ -21,7 +22,7 @@
 // (Valve's steamclient logs on to MacShack's Steam, play/PlaySteam.m). Either way Play meets MacShack through their App
 // Group's Mach service and has it start JIT for this pid, reports to Documents/Logs/play-<mode>.txt and the App
 // Group's play-<mode>-play.txt, then goes back to MacShack and exits once iOS moves it to the background, so each
-// program gets a fresh process.
+// program gets a fresh process. Play ends through ShackExitProcess: once a Mac game's hooks are in, a plain exit is the game's.
 
 static NSString *g_macshack;   // MacShack's bundle id: Play's is MacShack's + ".play" (project.yml)
 static NSString *g_mode = @"probe";
@@ -225,7 +226,7 @@ static void watchForQuit(void) {
         dispatch_source_cancel(timer);
         note(@"Steam asked the program to stop");
         reportExit(0);
-        if (atomic_load(&g_background)) exit(0);   // MacShack is in front already (its Stop): just end
+        if (atomic_load(&g_background)) ShackExitProcess(0);   // MacShack is in front already (its Stop): just end
         backToMacShack();
     });
     dispatch_resume(timer);
@@ -531,7 +532,7 @@ static void start(UIOpenURLContext *context) {   // main queue: one probe or pro
 }
 - (void)sceneDidEnterBackground:(UIScene *)scene {
     atomic_store(&g_background, true);
-    if (g_finished) exit(0);
+    if (g_finished) ShackExitProcess(0);
 }
 - (void)sceneWillEnterForeground:(UIScene *)scene {
     atomic_store(&g_background, false);

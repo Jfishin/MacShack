@@ -29,6 +29,8 @@ static void (^g_ended)(int status);
 static _Atomic bool g_quit;        // Steam asked it to stop: ping replies say so
 static int g_pings;
 static _Atomic long g_state = UIApplicationStateActive;   // from UIApplication's notifications
+static BOOL g_alive;               // a Play process said hello and has not ended (its session right lives)
+static BOOL g_met;                 // this program's Play process said hello
 
 static void note(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
 static void note(NSString *format, ...) {
@@ -102,6 +104,8 @@ static void finish(int status) {
 static void handle(const ShackPlayMessage *request, ShackPlayMessage *reply) {
     switch (request->kind) {
         case ShackPlayHello:
+            g_alive = YES;
+            g_met = YES;
             note(@"hello from MacShack Play (pid %d): session port sent, MacShack %s", request->pid, stateName());
             break;
         case ShackPlayPing:
@@ -161,6 +165,25 @@ void ShackPlayRequestQuit(void) {
     atomic_store(&g_quit, true);
 }
 
+// iOS hands a link for Play to Play's process if one is still there, and that process runs one program only and
+// ignores it: the last one leaves once it is in the background (MacShack in front again), which takes a moment.
+// ponytail: waits up to 10 s in 100 ms steps, then opens anyway.
+static void openPlay(NSURL *play, int stepsLeft) {   // g_queue
+    if (g_alive && stepsLeft > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), g_queue, ^{ openPlay(play, stepsLeft - 1); });
+        return;
+    }
+    if (g_alive) note(@"the last MacShack Play process is still there after 10 s: opening anyway");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [UIApplication.sharedApplication openURL:play options:@{} completionHandler:^(BOOL ok) {
+            dispatch_async(g_queue, ^{
+                note(@"open %@: %@", play, ok ? @"ok" : @"FAILED (MacShack Play not installed?)");
+                if (!ok) finish(ENOENT);
+            });
+        }];
+    });
+}
+
 void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query, void (^ended)(int status)) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{   // the bridge and the watchers, for the process's life
@@ -173,6 +196,8 @@ void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query,
             kern_return_t kr = ShackPlayServe(service.UTF8String, g_queue, ^(const ShackPlayMessage *request, ShackPlayMessage *reply) {
                 handle(request, reply);
             }, ^{
+                g_alive = NO;
+                if (!g_met) return;   // the last program's Play leaving after the next program started: not this one's end
                 if (g_running) note(@"MacShack Play's process ended without reporting its program's end");
                 finish(-1);
             });
@@ -198,6 +223,7 @@ void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query,
         g_start = CFAbsoluteTimeGetCurrent();
         g_awayAt = 0;
         g_returned = NO;
+        g_met = NO;
         note(@"MacShack play %@ %@: pid %d, %@", mode, query, getpid(), ShackPlayUsage());
         BOOL hello = NO;
         if (g_group) {
@@ -214,15 +240,7 @@ void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query,
         NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray array];
         [query enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSString *v, BOOL *stop) { [items addObject:[NSURLQueryItem queryItemWithName:k value:v]]; }];
         url.queryItems = items;
-        NSURL *play = url.URL;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [UIApplication.sharedApplication openURL:play options:@{} completionHandler:^(BOOL ok) {
-                dispatch_async(g_queue, ^{
-                    note(@"open %@: %@", play, ok ? @"ok" : @"FAILED (MacShack Play not installed?)");
-                    if (!ok) finish(ENOENT);
-                });
-            }];
-        });
+        openPlay(url.URL, 100);
     });
 }
 
