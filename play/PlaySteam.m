@@ -2,6 +2,7 @@
 #import "ShackPlay.h"
 #import "vendor/fishhook.h"
 #import <dlfcn.h>
+#import <stdatomic.h>
 #import <mach-o/dyld.h>
 
 // MacShack Play's Steam client (the first step toward the Steam API in Windows games, lsteamclient): Valve's macOS
@@ -126,15 +127,34 @@ static int gameSteamInit(const char *versions, char *message) {   // ESteamAPIIn
     NSLog(@"[MacShack Play] the game's SteamAPI_Init: %d %s", result, message ?: mine);
     return result;
 }
+// Valve's libsteam_api checks Steam's process (MacShack's, the pid ipcserver gives) with kill(pid, 0), which iOS refuses
+// between apps ("steam found, but process is dead"): Steam is alive while MacShack's ipcserver port is.
+static mach_port_t gIPC;
+static int gameKill(pid_t pid, int sig) {
+    int result = kill(pid, sig);
+    if (!result || sig || pid == getpid()) return result;
+    int error = errno;
+    mach_port_type_t type = 0;
+    BOOL alive = MACH_PORT_VALID(gIPC) && mach_port_type(mach_task_self(), gIPC, &type) == KERN_SUCCESS && !(type & MACH_PORT_TYPE_DEAD_NAME);
+    static _Atomic int said = -1;   // logged when the answer changes: libsteam_api asks many times a second
+    if (atomic_exchange(&said, alive) != alive)
+        NSLog(@"[MacShack Play] the game's Steam API asks if Steam (pid %d) runs, errno %d: %s", pid, error, alive ? "yes, its ipcserver is there" : "no");
+    if (alive) return 0;
+    errno = error;
+    return -1;
+}
 static void rebindGameImage(const struct mach_header *h, intptr_t slide) {
     Dl_info info;
     char real[PATH_MAX];
     size_t n = strlen(gGameCode);
     if (!n || !dladdr(h, &info) || !info.dli_fname || !realpath(info.dli_fname, real) || strncmp(real, gGameCode, n) || real[n] != '/') return;
-    struct rebinding r[4] = {{"dlopen", gameDlopen, (void **)&gameOrigDlopen}, {"SteamInternal_SteamAPI_Init", gameSteamInit, (void **)&realSteamInit}};
+    struct rebinding r[5] = {{"dlopen", gameDlopen, (void **)&gameOrigDlopen}, {"SteamInternal_SteamAPI_Init", gameSteamInit, (void **)&realSteamInit}};
     size_t count = 2;
     if (gShimLookUp) r[count++] = (struct rebinding){"bootstrap_look_up", gShimLookUp, NULL};
-    if (!strcmp(strrchr(real, '/'), "/libsteam_api.dylib")) r[count++] = (struct rebinding){"getpid", steamPid, NULL};
+    if (!strcmp(strrchr(real, '/'), "/libsteam_api.dylib")) {
+        r[count++] = (struct rebinding){"getpid", steamPid, NULL};
+        r[count++] = (struct rebinding){"kill", gameKill, NULL};
+    }
     rebind_symbols_image((void *)h, slide, r, count);
 }
 
@@ -144,6 +164,7 @@ NSString *PlaySteamForGame(NSURL *group, mach_port_t ipc, NSString *codeRoot, pi
     gShimLookUp = shim ? dlsym(shim, "bootstrap_look_up") : NULL;
     if (!realpath(codeRoot.fileSystemRepresentation, gGameCode)) return @"Steam for the game: FAILED: no code root";
     gPid = pid;
+    gIPC = ipc;
     gSteamMacOS = gShimLookUp ? macos : nil;   // nil: Valve's unsigned steamclient is never tried, SteamAPI_Init fails as without Steam
     _dyld_register_func_for_add_image(rebindGameImage);   // after the game's hooks, before its images load
     if (!gSteamMacOS) return [@"Steam for the game: FAILED (it runs without Steam): " stringByAppendingString:error ?: @"no bootstrap_look_up in libShackSteamClient"];
