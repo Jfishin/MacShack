@@ -94,10 +94,17 @@ static void askJIT(void) {   // g_queue
     note(@"JIT request: %s", ShackPlayError(ShackPlayCall(g_session, ShackPlayJIT, 0, 5000, &reply)));
 }
 
-// Back to MacShack; this process ends when iOS moves it to the background (sceneDidEnterBackground:). A timer would
-// not do: a backgrounded app is suspended within moments.
+static void endPlay(void) {
+    if ([g_mode isEqualToString:@"mac"]) ShackQuickExit(0);   // the game's teardown must not run while its threads do
+    ShackExitProcess(0);
+}
+
+// Back to MacShack; this process ends when iOS moves it to the background (sceneDidEnterBackground:), or now when it
+// is there already (MacShack in front for Steam's Stop: no background event will come). A timer would not do: a
+// backgrounded app is suspended within moments.
 static void backToMacShack(void) {   // any queue, once
     if (atomic_exchange(&g_finished, true)) return;
+    if (atomic_load(&g_background)) endPlay();
     NSURL *macshack = [NSURL URLWithString:[g_macshack stringByAppendingString:@"://play-done"]];
     dispatch_async(dispatch_get_main_queue(), ^{
         [UIApplication.sharedApplication openURL:macshack options:@{} completionHandler:^(BOOL ok) {
@@ -757,8 +764,7 @@ static void start(UIOpenURLContext *context) {   // main queue: one probe or pro
 - (void)sceneDidEnterBackground:(UIScene *)scene {
     atomic_store(&g_background, true);
     if (!g_finished) return;
-    if ([g_mode isEqualToString:@"mac"]) ShackQuickExit(0);   // the game's teardown must not run while its threads do
-    ShackExitProcess(0);
+    endPlay();
 }
 - (void)sceneWillEnterForeground:(UIScene *)scene {
     atomic_store(&g_background, false);

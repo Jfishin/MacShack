@@ -114,6 +114,7 @@ static void *(*gameOrigDlopen)(const char *, int);   // the image's dlopen as it
 static void *gameDlopen(const char *path, int mode) {
     const char *slash = path ? strrchr(path, '/') : NULL;
     if (!slash || strcmp(slash + 1, "steamclient.dylib")) return gameOrigDlopen(path, mode);
+    if (!gSteamMacOS) { NSLog(@"[MacShack Play] the game's Steam API: no signed steamclient, the game runs without Steam"); return NULL; }
     void *handle = gameOrigDlopen([gSteamMacOS stringByAppendingPathComponent:@"steamclient_g.dylib"].fileSystemRepresentation, mode);
     NSLog(@"[MacShack Play] the game's Steam API: %s", handle ? "Play's steamclient_g" : dlerror());
     return handle;
@@ -130,20 +131,21 @@ static void rebindGameImage(const struct mach_header *h, intptr_t slide) {
     char real[PATH_MAX];
     size_t n = strlen(gGameCode);
     if (!n || !dladdr(h, &info) || !info.dli_fname || !realpath(info.dli_fname, real) || strncmp(real, gGameCode, n) || real[n] != '/') return;
-    struct rebinding r[] = {{"dlopen", gameDlopen, (void **)&gameOrigDlopen}, {"bootstrap_look_up", gShimLookUp, NULL},
-                            {"SteamInternal_SteamAPI_Init", gameSteamInit, (void **)&realSteamInit}, {"getpid", steamPid, NULL}};
-    rebind_symbols_image((void *)h, slide, r, strcmp(strrchr(real, '/'), "/libsteam_api.dylib") ? 3 : 4);
+    struct rebinding r[4] = {{"dlopen", gameDlopen, (void **)&gameOrigDlopen}, {"SteamInternal_SteamAPI_Init", gameSteamInit, (void **)&realSteamInit}};
+    size_t count = 2;
+    if (gShimLookUp) r[count++] = (struct rebinding){"bootstrap_look_up", gShimLookUp, NULL};
+    if (!strcmp(strrchr(real, '/'), "/libsteam_api.dylib")) r[count++] = (struct rebinding){"getpid", steamPid, NULL};
+    rebind_symbols_image((void *)h, slide, r, count);
 }
 
 NSString *PlaySteamForGame(NSURL *group, mach_port_t ipc, NSString *codeRoot, pid_t pid) {
     NSString *error = nil, *macos = PlaySteamPrepare(group, ipc, &error);
-    if (!macos) return [@"Steam for the game: FAILED: " stringByAppendingString:error];
-    void *shim = dlopen("@rpath/libShackSteamClient.dylib", RTLD_NOW | RTLD_GLOBAL);
+    void *shim = macos ? dlopen("@rpath/libShackSteamClient.dylib", RTLD_NOW | RTLD_GLOBAL) : NULL;
     gShimLookUp = shim ? dlsym(shim, "bootstrap_look_up") : NULL;
-    if (!gShimLookUp || !realpath(codeRoot.fileSystemRepresentation, gGameCode))
-        return @"Steam for the game: FAILED: no bootstrap_look_up in libShackSteamClient, or no code root";
+    if (!realpath(codeRoot.fileSystemRepresentation, gGameCode)) return @"Steam for the game: FAILED: no code root";
     gPid = pid;
-    gSteamMacOS = macos;
+    gSteamMacOS = gShimLookUp ? macos : nil;   // nil: Valve's unsigned steamclient is never tried, SteamAPI_Init fails as without Steam
     _dyld_register_func_for_add_image(rebindGameImage);   // after the game's hooks, before its images load
+    if (!gSteamMacOS) return [@"Steam for the game: FAILED (it runs without Steam): " stringByAppendingString:error ?: @"no bootstrap_look_up in libShackSteamClient"];
     return [NSString stringWithFormat:@"Steam for the game: Play's steamclient in %@, pid %d", macos, pid];
 }

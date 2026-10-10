@@ -42,7 +42,7 @@ static int gHelperArgc, gHelperStatus;
 static char **gHelperArgv;
 // A game Steam started, running in this process (below): its stand-in process.
 static struct { volatile int state; int status, argc, kq; char **argv, **envp; pthread_t thread; id delegate; NSString *app; char code[PATH_MAX]; int jitMB; BOOL translated, inPlay, ranInProcess; } gGame = { .kq = -1 };
-NSString *ShackSteamClientGameName(void) { return gGame.state == 1 ? gGame.app.lastPathComponent.stringByDeletingPathExtension : nil; }   // the island menu's game
+NSString *ShackSteamClientGameName(void) { return gGame.state == 1 && !gGame.inPlay ? gGame.app.lastPathComponent.stringByDeletingPathExtension : nil; }   // the island menu's game (one in MacShack Play has Play's)
 // A Windows program Steam started through the Steam Play tool (ShackSteamPlay.m): it runs in MacShack Play (ShackPlay.m),
 // this is its stand-in process. The tool's other verbs (install scripts, getcompatpath) end at once as kToolPid.
 static struct { volatile int state; int status; } gWindows;   // 0 none yet, 1 running, 2 ended
@@ -687,8 +687,8 @@ static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
     NSString *group = ShackHomeGroup();
     if (!group) return -1;
     NSError *failure = nil;
-    NSString *code = [ShackInstaller playCodeRootForAppPath:app guests:[group stringByAppendingPathComponent:@"Guests"]
-                                                identifier:[ShackPlayHostBundleID() stringByAppendingString:@".play"] steam:YES error:&failure];
+    NSString *play = [ShackPlayHostBundleID() stringByAppendingString:@".play"];
+    NSString *code = [ShackInstaller playCodeRootForAppPath:app guests:[group stringByAppendingPathComponent:@"Guests"] identifier:play steam:YES error:&failure];
     NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
     NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[group stringByAppendingFormat:@"/Guests/Play.Steam.%@/current.plist", name]];
     if (!code || [manifest[@"requiresJIT"] boolValue]) {
@@ -707,6 +707,7 @@ static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
     NSDictionary *launch = @{@"app": app, @"code": code, @"logs": [group stringByAppendingPathComponent:@"Logs"], @"args": args,
         @"translate": @NO, @"requiresJIT": @NO, @"fpsCap": @(ShackGameFrameCap(name, NO)), @"renderScale": @(ShackGameRenderScale(name, NO)),
         @"swapMB": @0, @"steam": @YES, @"steamPid": @(kGamePid), @"env": env};
+    say([@"Steam for the game in Play: " stringByAppendingString:ShackSteamPreparePlayFiles([NSURL fileURLWithPath:group], play)]);   // after a Steam update too
     NSString *notes = [group stringByAppendingPathComponent:@"Launch"];
     [NSFileManager.defaultManager createDirectoryAtPath:notes withIntermediateDirectories:YES attributes:nil error:NULL];
     if (![launch writeToFile:[notes stringByAppendingPathComponent:@"current.plist"] atomically:YES]) { say(@"launch note not written"); return -1; }
@@ -953,7 +954,7 @@ static int steamKevent(int kq, const struct kevent *changes, int nchanges, struc
         if (changes[i].filter != EVFILT_PROC || changes[i].ident != kGamePid) continue;
         local[i].filter = EVFILT_USER;
         local[i].fflags = 0;
-        if (changes[i].flags & EV_ADD) { gGame.kq = kq; added = YES; }
+        if (changes[i].flags & EV_ADD) { gGame.kq = kq; added = YES; local[i].flags |= EV_ONESHOT; }   // once, as an exit: the next game's watch starts untriggered
         if ((changes[i].flags & EV_DELETE) && gGame.kq == kq) gGame.kq = -1;
     }
     if (added && gGame.state == 2) {   // it ended before Steam looked
@@ -1056,6 +1057,7 @@ void ShackSteamClientInstall(NSString *bundle, NSString *code) {
             return [NSDictionary dictionaryWithContentsOfFile:[gGame.app stringByAppendingPathComponent:@"Contents/Info.plist"]][@"CFBundleIdentifier"];
         }), "@@:");
         class_addMethod(gGameAppClass, sel_registerName("terminate"), imp_implementationWithBlock(^BOOL(id s) {
+            if (gGame.inPlay && gGame.state == 1) { say(@"Steam asked the game to quit: MacShack Play asks it"); ShackPlayRequestQuit(); return YES; }
             say(@"Steam asked the game to quit: ignored, a game in this process quits from its own menu"); return NO;
         }), "B@:");
         class_addMethod(gGameAppClass, sel_registerName("forceTerminate"), class_getMethodImplementation(gGameAppClass, sel_registerName("terminate")), "B@:");
