@@ -271,6 +271,7 @@ targets:
       - path: host/ShackMetalFXTrace.m
       - path: host/ShackWatch.m
       - path: host/GuestArguments.swift
+      - path: host/ShackHome.m   # the shared home: Library folders linked into the App Group
     entitlements:
       path: play/MacShackPlay.entitlements
       properties:
