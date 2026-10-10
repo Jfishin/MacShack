@@ -142,6 +142,7 @@ static NSString *coreLinks(void) {   // g_queue
     NSError *e = nil;
     [fm createDirectoryAtPath:shared withIntermediateDirectories:YES attributes:nil error:NULL];
     [fm createDirectoryAtPath:link.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL];
+    [fm removeItemAtPath:[shared stringByAppendingPathComponent:@"from-play.txt"] error:NULL];   // this run's Play writes it again
     if ([[fm attributesOfItemAtPath:link error:NULL].fileType isEqualToString:NSFileTypeSymbolicLink]) [fm removeItemAtPath:link error:NULL];
     BOOL linked = [fm fileExistsAtPath:link] ? NO : [fm createSymbolicLinkAtPath:link withDestinationPath:shared error:&e];
     NSString *token = NSUUID.UUID.UUIDString;
@@ -192,13 +193,18 @@ void ShackPlayRequestQuit(void) {
 
 // iOS hands a link for Play to Play's process if one is still there, and that process runs one program only and
 // ignores it: the last one leaves once it is in the background (MacShack in front again), which takes a moment.
-// ponytail: waits up to 10 s in 100 ms steps, then opens anyway.
+// ponytail: waits up to 10 s in 100 ms steps; a Play process still there then gets no link (it would ignore it) and
+// the program ends with EBUSY instead of waiting forever.
 static void openPlay(NSURL *play, int stepsLeft) {   // g_queue
     if (g_alive && stepsLeft > 0) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), g_queue, ^{ openPlay(play, stepsLeft - 1); });
         return;
     }
-    if (g_alive) note(@"the last MacShack Play process is still there after 10 s: opening anyway");
+    if (g_alive) {
+        note(@"the last MacShack Play process is still there after 10 s: not started");
+        finish(EBUSY);
+        return;
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         [UIApplication.sharedApplication openURL:play options:@{} completionHandler:^(BOOL ok) {
             dispatch_async(g_queue, ^{

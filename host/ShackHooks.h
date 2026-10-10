@@ -26,3 +26,6 @@ void ShackHooksSetGuestSymbolAnswer(void *(*answer)(const char *name));
 void ShackGuestEnded(int code);
 // Really end MacShack (relaunch into another game, Force Quit); a plain exit() is a guest ending once hooks are in.
 void ShackExitProcess(int code);
+// End at once: no atexit handlers or static destructors (a game's would run while its threads still do). MacShack Play
+// leaves this way after a Mac game.
+void ShackQuickExit(int code);

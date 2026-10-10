@@ -7,18 +7,13 @@
 #import "ShackWatch.h"
 #import "ShackJIT.h"
 #import "ShackMetal.h"
-#import "ShackSwap.h"
 #import "ShackInstaller.h"
 #import "ShackPrep.h"
 #import "ShackGameLaunch.h"
 #import <dlfcn.h>
-#import <locale.h>
-#import <mach-o/dyld.h>
-#import <mach-o/loader.h>
 #import <pthread.h>
 #import <sys/mman.h>
 #import <unistd.h>
-#import <crt_externs.h>
 
 static NSError *err(NSString *msg) { return [NSError errorWithDomain:@"MacShack" code:1 userInfo:@{NSLocalizedDescriptionKey: msg}]; }
 

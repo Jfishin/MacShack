@@ -159,6 +159,7 @@ static void shack_exit(int c) { logExit("exit", c); guestEnded(c, __builtin_retu
 static void shack__exit(int c) { logExit("_exit", c); guestEnded(c, __builtin_return_address(0)); endThisThread(); __builtin_unreachable(); }
 static void shack__Exit(int c) { logExit("_Exit", c); guestEnded(c, __builtin_return_address(0)); endThisThread(); __builtin_unreachable(); }
 void ShackExitProcess(int code) { if (orig_exit) orig_exit(code); exit(code); }
+void ShackQuickExit(int code) { fflush(NULL); if (orig__exit) orig__exit(code); _exit(code); }
 static void shack_abort(void) {
     logExit("abort", 0);
     if (gSecond.ended && isSecondCaller(__builtin_return_address(0))) { gSecond.ended(134); endThisThread(); }   // the game, not MacShack

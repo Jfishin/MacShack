@@ -470,7 +470,8 @@ static NSString *homeLookups(void) {
     void (^check)(NSString *, NSString *) = ^(NSString *what, NSString *path) {
         char r[PATH_MAX];
         NSString *resolved = path && realpath(path.fileSystemRepresentation, r) ? @(r) : path;
-        NSString *verdict = [path hasPrefix:home] ? @"follows HOME" : [resolved hasPrefix:realHome] ? @"reaches it through a link" : @"Play's own container";
+        NSString *verdict = [path.stringByStandardizingPath hasPrefix:home.stringByStandardizingPath] ? @"follows HOME"   // /var and /private/var alike
+                          : [resolved hasPrefix:realHome] ? @"reaches it through a link" : @"Play's own container";
         [lines addObject:[NSString stringWithFormat:@"  %@: %@ (%@)", what, verdict, path ?: @"nil"]];
     };
     check(@"NSHomeDirectory", NSHomeDirectory());
@@ -728,7 +729,9 @@ static void start(UIOpenURLContext *context) {   // main queue: one probe or pro
 }
 - (void)sceneDidEnterBackground:(UIScene *)scene {
     atomic_store(&g_background, true);
-    if (g_finished) ShackExitProcess(0);
+    if (!g_finished) return;
+    if ([g_mode isEqualToString:@"mac"]) ShackQuickExit(0);   // the game's teardown must not run while its threads do
+    ShackExitProcess(0);
 }
 - (void)sceneWillEnterForeground:(UIScene *)scene {
     atomic_store(&g_background, false);
