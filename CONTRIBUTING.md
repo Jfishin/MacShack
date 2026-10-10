@@ -35,6 +35,7 @@ in that file's first lines.
 | Case-insensitive guest paths (mounts a case-sensitive APFS image) | header of `host/probe/test_case_paths.m` |
 | A whole game folder copied into Staging | `swiftc -parse-as-library host/StagedFolder.swift host/probe/test_staged_folder.swift -o /tmp/t && /tmp/t` (expect `staged folder ok`) |
 | Launch arguments games need (known fixes, log rules) | `swiftc -parse-as-library host/AutoConfig.swift host/probe/test_auto_config.swift -o /tmp/t && /tmp/t` |
+| A game's `.args` (the game start MacShack and MacShack Play share) | header of `host/probe/test_game_launch.m` (expect `game launch ok`) |
 | Command line of native Swift games | `swiftc -parse-as-library host/GuestArguments.swift host/probe/test_guest_arguments.swift -o /tmp/t && /tmp/t` (expect `guest arguments ok`) |
 | Developer ID trust for `SHACK_MAC_CODESIGN` (needs a Developer ID-signed Mach-O) | header of `host/probe/test_mac_code_trust.m` |
 | libcurl stubs (iOS simulator) | header of `host/probe/test_curl_stub.c` (expect `curl stub ok`) |
