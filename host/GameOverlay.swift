@@ -68,6 +68,12 @@ final class GameOverlayModel {
         }
     }
     func forceQuit() { ShackExitProcess(0) }
+    // A game Steam started ended (ShackSteamClient.m): Big Picture has the screen again, the panel goes.
+    func gameEnded() {
+        quitting = false
+        showForceQuit = false
+        showPanel = false
+    }
 
     func toggleTouchControls() {
         touchControls.toggle()
@@ -192,6 +198,7 @@ enum GameOverlay {
     private static var window: UIWindow?
     private static var firstFrameObserver: NSObjectProtocol?
     private static var steamGameObserver: NSObjectProtocol?
+    private static var steamGameEndedObserver: NSObjectProtocol?
 
     // Shown at launch with the splash on top (a game; the Steam client draws its own, and the splash comes up for a game
     // Steam starts: ShackSteamClient.m); the island button stays for the whole run.
@@ -213,6 +220,9 @@ enum GameOverlay {
                 model.splashGame = path.map { URL(fileURLWithPath: $0) }
             }
         }
+        steamGameEndedObserver = NotificationCenter.default.addObserver(forName: Notification.Name("ShackSteamGameEnded"), object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { model.gameEnded() }
+        }
         let w = PassthroughWindow(windowScene: scene)
         w.model = model
         w.windowLevel = .normal + 1   // above the game's window, which the AppKit shim fills
@@ -229,9 +239,10 @@ enum GameOverlay {
 
     static func hide() {
         ShackTouchPadSetConnected(false)
-        for observer in [firstFrameObserver, steamGameObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(observer) }
+        for observer in [firstFrameObserver, steamGameObserver, steamGameEndedObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(observer) }
         firstFrameObserver = nil
         steamGameObserver = nil
+        steamGameEndedObserver = nil
         window?.isHidden = true
         window = nil
     }

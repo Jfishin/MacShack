@@ -457,6 +457,9 @@ static void gameEnded(int status) {
     gGame.status = status; gGame.state = 2;
     say([NSString stringWithFormat:@"game ended (%d): back to Steam", status]);
     splash(nil);
+    dispatch_async(dispatch_get_main_queue(), ^{   // the island panel's "Saving and quitting…" closes (GameOverlay.swift)
+        [NSNotificationCenter.defaultCenter postNotificationName:@"ShackSteamGameEnded" object:nil];
+    });
     void (*stopAudio)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAudioStopAll");   // its sounds would play on
     if (stopAudio) stopAudio();
     // Steam's again: its app thread (events, its own pump), the pads without the game's callbacks (its code stays loaded
