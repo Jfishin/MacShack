@@ -11,6 +11,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// The prepared generation is reused while its sources, MacShack and the signing profile are unchanged.
 /// An Intel one runs under AArchX from its own folder (the code root returned).
 + (nullable NSString *)steamGameCodeRootForAppPath:(NSString *)appPath error:(NSError **)error;
+/// The same for MacShack Play, which runs Mac games too: a game whose data stays where it is (the App Group's Games),
+/// its arm64 code prepared and signed with Play's identifier into guests/Play.<app name>. Intel games are refused here.
++ (nullable NSString *)playCodeRootForAppPath:(NSString *)appPath guests:(NSString *)guests identifier:(NSString *)identifier error:(NSError **)error;
 /// That game's install record (requiresJIT, translate), in Library/Guests/Steam.<app name>.
 + (nullable NSDictionary *)steamGameManifestForAppPath:(NSString *)appPath;
 + (BOOL)requiresJITAtAppPath:(NSString *)appPath;

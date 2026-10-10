@@ -163,20 +163,19 @@ static NSString *RelativeDirectory(NSString *from, NSString *to) {
     for (NSUInteger i = common; i < b.count; i++) [parts addObject:b[i]];
     return [parts componentsJoinedByString:@"/"];
 }
-static NSString *PrepareAndSign(NSString *input, NSString *unsignedPath, NSString *output,
-                                NSString *executableDirectory, BOOL mainExecutable, NSString *loaderPathShift, NSError **error) {
+static NSString *PrepareAndSign(NSString *input, NSString *unsignedPath, NSString *output, NSString *executableDirectory,
+                                BOOL mainExecutable, NSString *loaderPathShift, NSString *identifier, NSError **error) {
     if (!MakeDirectory(unsignedPath.stringByDeletingLastPathComponent, error) ||
         !MakeDirectory(output.stringByDeletingLastPathComponent, error) ||
         ![NSFileManager.defaultManager copyItemAtPath:input toPath:unsignedPath error:error] ||
         ![ShackPrep prepareBinaryAtPath:unsignedPath outputPath:unsignedPath
             executableDirectory:executableDirectory mainExecutable:mainExecutable loaderPathShift:loaderPathShift error:error] ||
-        ![ShackSigner signBinaryAtPath:unsignedPath outputPath:output error:error]) return nil;
+        ![ShackSigner signBinaryAtPath:unsignedPath outputPath:output identifier:identifier error:error]) return nil;
     return Digest(output, error);
 }
 // pending.plist is written before the data rename; current.plist is the sole commit record.
-static BOOL Recover(NSString *name, NSError **error) {
+static BOOL RecoverAt(NSString *root, NSString *name, NSError **error) {
     NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *root = [GuestRoot() stringByAppendingPathComponent:name];
     NSString *journal = [root stringByAppendingPathComponent:@"pending.plist"];
     if (![fm fileExistsAtPath:journal]) return YES;
     NSDictionary *pending = [NSDictionary dictionaryWithContentsOfFile:journal];
@@ -199,6 +198,7 @@ static BOOL Recover(NSString *name, NSError **error) {
     if ([fm fileExistsAtPath:unsignedRoot] && ![fm removeItemAtPath:unsignedRoot error:error]) return NO;
     return [fm removeItemAtPath:journal error:error];
 }
+static BOOL Recover(NSString *name, NSError **error) { return RecoverAt([GuestRoot() stringByAppendingPathComponent:name], name, error); }
 
 // Intel (x86_64-only) games run under AArchX (vendor/AArchX, prep/aarchx): it reads the original Mach-Os from
 // Documents/Games as data and runs only code it generates into the JIT pool, so nothing is prepared or signed.
@@ -227,7 +227,7 @@ static NSString *InstallTranslated(NSString *name, NSString *exe, NSString *sour
 // (current.plist). moveData: the data moves to destination at commit (an import), else it stays (a reprepare, a Steam
 // game). extra: more manifest entries. Returns the summary, or nil with *error.
 static NSString *PrepareGeneration(NSString *name, NSString *exe, NSString *source, NSString *destination, NSString *root,
-                                   NSString *infoPath, BOOL moveData, NSDictionary *extra, NSError **error) {
+                                   NSString *infoPath, BOOL moveData, NSDictionary *extra, NSString *identifier, NSError **error) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *mainRelative = [@"Contents/MacOS" stringByAppendingPathComponent:exe];
     NSMutableArray<NSString *> *files = [NSMutableArray array];
@@ -293,6 +293,11 @@ static NSString *PrepareGeneration(NSString *name, NSString *exe, NSString *sour
     NSDictionary *signing = [ShackSigner signingContextWithError:error];
     NSString *hostBuild = signing ? HostBuild(error) : nil;
     if (!signing || !hostBuild) return nil;
+    if (identifier) {   // another app's code (MacShack Play): its identifier in the manifest, the rest is the same profile's
+        NSMutableDictionary *other = [signing mutableCopy];
+        other[@"identifier"] = identifier;
+        signing = other;
+    }
     NSString *generation = NSUUID.UUID.UUIDString;
     NSString *work = [root stringByAppendingPathComponent:generation];
     NSString *unsignedRoot = [root stringByAppendingPathComponent:[@".work-" stringByAppendingString:generation]];
@@ -321,7 +326,7 @@ static NSString *PrepareGeneration(NSString *name, NSString *exe, NSString *sour
             @autoreleasepool {
                 hash = PrepareAndSign(input, unsignedPath, output,
                     [unsignedRoot stringByAppendingPathComponent:@"Contents/MacOS"],
-                    [relative isEqual:mainRelative], linkShifts[relative], &binaryError);
+                    [relative isEqual:mainRelative], linkShifts[relative], signing[@"identifier"], &binaryError);
             }
             if (!hash) { if (error) *error = binaryError; return nil; }
             hashes[relative] = hash;
@@ -351,7 +356,7 @@ static NSString *PrepareGeneration(NSString *name, NSString *exe, NSString *sour
         if (!committed) {
             NSError *recoveryError = nil;
             if ([fm fileExistsAtPath:journal]) {
-                if (!Recover(name, &recoveryError) && error) *error = recoveryError;
+                if (!RecoverAt(root, name, &recoveryError) && error) *error = recoveryError;
             } else [fm removeItemAtPath:work error:nil];
         }
     }
@@ -359,7 +364,7 @@ static NSString *PrepareGeneration(NSString *name, NSString *exe, NSString *sour
 
 // The code root of a committed generation (manifest m under root) whose files, sources, host and signing profile are
 // unchanged and whose data is at expectedData; else nil with *error.
-static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath, NSString *expectedData, NSError **error) {
+static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath, NSString *expectedData, NSString *identifier, NSError **error) {
     NSString *generation = m[@"generation"];
     if (![generation isKindOfClass:NSString.class] || ![[NSUUID alloc] initWithUUIDString:generation] ||
         ![m[@"version"] isEqual:@1] || !SafeComponent(m[@"executable"]) || ![m[@"files"] isKindOfClass:NSDictionary.class] ||
@@ -368,7 +373,7 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
         return InstallFail(error, @"The prepared game manifest is invalid. Prepare the game again.");
     NSDictionary *signing = [ShackSigner signingContextWithError:error];
     if (!signing) return nil;
-    if (![m[@"signing"][@"identifier"] isEqual:signing[@"identifier"]] ||
+    if (![m[@"signing"][@"identifier"] isEqual:identifier ?: signing[@"identifier"]] ||
         ![m[@"signing"][@"profileHash"] isEqual:signing[@"profileHash"]] ||
         ![m[@"hostBuild"] isEqual:HostBuild(error)])
         return InstallFail(error, @"MacShack or its development profile changed after this game was prepared. Its code must be prepared and signed again.");
@@ -393,6 +398,40 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
             return InstallFail(error, @"The game's original code changed. Prepare the game again before launching.");
     }
     return code;
+}
+
+// A game prepared where its data already is (Steam's library, the App Group's Games): its arm64 code goes into
+// root/<generation>, signed with identifier (nil: MacShack's), and is reused while VerifiedCode accepts it. An Intel
+// game's code root is its own folder (it runs under AArchX), unless translated games are refused here.
+static NSString *InPlaceCodeRoot(NSString *name, NSString *appPath, NSString *root, NSString *identifier,
+                                 BOOL allowTranslated, NSError **error) {
+    if (!SafeComponent(name)) return InstallFail(error, @"Invalid game name.");
+    if (!RecoverAt(root, name, error)) return nil;
+    NSString *infoPath = [appPath stringByAppendingPathComponent:@"Contents/Info.plist"];
+    NSString *exe = [NSDictionary dictionaryWithContentsOfFile:infoPath][@"CFBundleExecutable"];
+    NSString *main = [appPath stringByAppendingFormat:@"/Contents/MacOS/%@", exe];
+    if (!SafeComponent(exe) || !Regular(infoPath) || !Inside(infoPath.stringByResolvingSymlinksInPath, appPath.stringByResolvingSymlinksInPath))
+        return InstallFail(error, @"The game needs a valid Contents/Info.plist with a safe CFBundleExecutable filename.");
+    if (!Regular(main) || !Inside(main.stringByResolvingSymlinksInPath, appPath.stringByResolvingSymlinksInPath))
+        return InstallFail(error, @"The game's main executable is missing.");
+    NSString *arch = HasArm64(main) ? nil : HasSlice(main, CPU_TYPE_X86_64, -1) ? @"x86_64" : HasSlice(main, CPU_TYPE_I386, -1) ? @"i386" : nil;
+    if (arch && !allowTranslated) return InstallFail(error, @"Intel games do not run in MacShack Play yet.");
+    if (arch) {
+        NSString *summary = InstallTranslated(name, exe, appPath, appPath, root, infoPath, YES, arch, error);
+        if (summary) NSLog(@"[MacShack] %@", summary);
+        return summary ? appPath : nil;
+    }
+    if (!HasArm64(main)) return InstallFail(error, @"The main executable must be an arm64, x86_64 or i386 Mach-O file.");
+    NSDictionary *m = [NSDictionary dictionaryWithContentsOfFile:[root stringByAppendingPathComponent:@"current.plist"]];
+    NSError *stale = nil;
+    NSString *code = [m[@"dataPath"] isEqual:appPath] ? VerifiedCode(m, root, appPath, appPath, identifier, &stale) : nil;
+    if (code) return code;
+    if (stale) NSLog(@"[MacShack] %@: preparing again (%@)", name, stale.localizedDescription);
+    NSString *summary = PrepareGeneration(name, exe, appPath, nil, root, infoPath, NO, @{@"dataPath": appPath}, identifier, error);
+    if (!summary) return nil;
+    NSLog(@"[MacShack] %@", summary);
+    m = [NSDictionary dictionaryWithContentsOfFile:[root stringByAppendingPathComponent:@"current.plist"]];
+    return VerifiedCode(m, root, appPath, appPath, identifier, error);
 }
 
 @implementation ShackInstaller
@@ -444,7 +483,7 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
             return InstallTranslated(name, exe, source, destination, root, infoPath, reprepare, @"i386", error);
         if (!Regular(main) || !Inside(main.stringByResolvingSymlinksInPath, source) || !HasArm64(main))
             return InstallFail(error, @"The main executable must be a regular arm64, x86_64 or i386 Mach-O file. arm64e-only games cannot run.");
-        return PrepareGeneration(name, exe, source, destination, root, infoPath, !reprepare, nil, error);
+        return PrepareGeneration(name, exe, source, destination, root, infoPath, !reprepare, nil, nil, error);
     }
 }
 
@@ -464,42 +503,21 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
                 return InstallFail(error, @"The installed game metadata changed or its data folder is missing.");
             return appPath;
         }
-        return VerifiedCode(m, root, appPath, [GamesRoot() stringByAppendingPathComponent:[name stringByAppendingPathExtension:@"app"]], error);
+        return VerifiedCode(m, root, appPath, [GamesRoot() stringByAppendingPathComponent:[name stringByAppendingPathExtension:@"app"]], nil, error);
     }
 }
 + (NSString *)steamGameCodeRootForAppPath:(NSString *)appPath error:(NSError **)error {
     @synchronized(self) {
         appPath = appPath.stringByStandardizingPath;
         NSString *name = [@"Steam." stringByAppendingString:appPath.lastPathComponent.stringByDeletingPathExtension];
-        if (!SafeComponent(name)) return InstallFail(error, @"Invalid game name.");
-        if (!Recover(name, error)) return nil;
-        NSString *root = [GuestRoot() stringByAppendingPathComponent:name];
-        NSString *infoPath = [appPath stringByAppendingPathComponent:@"Contents/Info.plist"];
-        NSString *exe = [NSDictionary dictionaryWithContentsOfFile:infoPath][@"CFBundleExecutable"];
-        NSString *main = [appPath stringByAppendingFormat:@"/Contents/MacOS/%@", exe];
-        if (!SafeComponent(exe) || !Regular(infoPath) || !Inside(infoPath.stringByResolvingSymlinksInPath, appPath.stringByResolvingSymlinksInPath))
-            return InstallFail(error, @"The game needs a valid Contents/Info.plist with a safe CFBundleExecutable filename.");
-        if (!Regular(main) || !Inside(main.stringByResolvingSymlinksInPath, appPath.stringByResolvingSymlinksInPath))
-            return InstallFail(error, @"The game's main executable is missing.");
-        // An Intel game runs from Steam's own files under AArchX, as an imported one does (InstallTranslated): its code
-        // root is its data. Done every launch (cheap, and idempotent).
-        NSString *arch = HasArm64(main) ? nil : HasSlice(main, CPU_TYPE_X86_64, -1) ? @"x86_64" : HasSlice(main, CPU_TYPE_I386, -1) ? @"i386" : nil;
-        if (arch) {
-            NSString *summary = InstallTranslated(name, exe, appPath, appPath, root, infoPath, YES, arch, error);
-            if (summary) NSLog(@"[MacShack] %@", summary);
-            return summary ? appPath : nil;
-        }
-        if (!HasArm64(main)) return InstallFail(error, @"The main executable must be an arm64, x86_64 or i386 Mach-O file.");
-        NSDictionary *m = [NSDictionary dictionaryWithContentsOfFile:[root stringByAppendingPathComponent:@"current.plist"]];
-        NSError *stale = nil;
-        NSString *code = [m[@"dataPath"] isEqual:appPath] ? VerifiedCode(m, root, appPath, appPath, &stale) : nil;
-        if (code) return code;
-        if (stale) NSLog(@"[MacShack] %@: preparing again (%@)", name, stale.localizedDescription);
-        NSString *summary = PrepareGeneration(name, exe, appPath, nil, root, infoPath, NO, @{@"dataPath": appPath}, error);
-        if (!summary) return nil;
-        NSLog(@"[MacShack] %@", summary);
-        m = [NSDictionary dictionaryWithContentsOfFile:[root stringByAppendingPathComponent:@"current.plist"]];
-        return VerifiedCode(m, root, appPath, appPath, error);
+        return InPlaceCodeRoot(name, appPath, [GuestRoot() stringByAppendingPathComponent:name], nil, YES, error);
+    }
+}
++ (NSString *)playCodeRootForAppPath:(NSString *)appPath guests:(NSString *)guests identifier:(NSString *)identifier error:(NSError **)error {
+    @synchronized(self) {
+        appPath = appPath.stringByStandardizingPath;
+        NSString *name = [@"Play." stringByAppendingString:appPath.lastPathComponent.stringByDeletingPathExtension];
+        return InPlaceCodeRoot(name, appPath, [guests stringByAppendingPathComponent:name], identifier, NO, error);
     }
 }
 

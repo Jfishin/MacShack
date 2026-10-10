@@ -6,6 +6,7 @@
 
 static BOOL failSigning;
 static NSString *profile = @"profile-one";
+static NSMutableArray<NSString *> *signedIdentifiers;
 @implementation ShackSigner
 + (NSDictionary *)signingContextWithError:(NSError **)error {
     (void)error;
@@ -20,6 +21,8 @@ static NSString *profile = @"profile-one";
     return [NSFileManager.defaultManager copyItemAtPath:input toPath:output error:error];
 }
 + (BOOL)signBinaryAtPath:(NSString *)input outputPath:(NSString *)output identifier:(NSString *)identifier error:(NSError **)error {
+    if (!signedIdentifiers) signedIdentifiers = [NSMutableArray array];
+    [signedIdentifiers addObject:identifier];
     return [self signBinaryAtPath:input outputPath:output error:error];
 }
 + (BOOL)importCertificateData:(NSData *)data password:(NSString *)password error:(NSError **)error { return NO; }
@@ -53,6 +56,22 @@ int main(int argc, const char **argv) {
         Check(code != nil, error.description);
         Check(![fm fileExistsAtPath:[code stringByAppendingPathComponent:@"Contents/Assets"]], @"data not copied to code cache");
         Check([[NSString stringWithContentsOfFile:[data stringByAppendingPathComponent:@"Contents/Assets"] encoding:NSUTF8StringEncoding error:nil] isEqual:@"untouched game assets"], @"data unchanged");
+        Check([signedIdentifiers.firstObject isEqual:@"com.example.fixture"], @"MacShack's games signed with MacShack's identifier");
+        // MacShack Play's copy: prepared in place into another Guests folder and signed with Play's identifier, reused
+        // while unchanged, beside MacShack's own; Intel games are refused there for now.
+        NSString *guests = [root stringByAppendingPathComponent:@"Group/Guests"];
+        NSString *playCode = [ShackInstaller playCodeRootForAppPath:data guests:guests identifier:@"com.example.fixture.play" error:&error];
+        Check(playCode != nil && [playCode hasPrefix:[guests stringByAppendingPathComponent:@"Play.Native/"]], error.description ?: @"Play code root");
+        Check([signedIdentifiers.lastObject isEqual:@"com.example.fixture.play"], @"signed with Play's identifier");
+        NSDictionary *playManifest = [NSDictionary dictionaryWithContentsOfFile:[guests stringByAppendingPathComponent:@"Play.Native/current.plist"]];
+        Check([playManifest[@"signing"][@"identifier"] isEqual:@"com.example.fixture.play"] && [playManifest[@"dataPath"] isEqual:data], @"Play manifest");
+        NSUInteger signings = signedIdentifiers.count;
+        Check([[ShackInstaller playCodeRootForAppPath:data guests:guests identifier:@"com.example.fixture.play" error:&error] isEqual:playCode] &&
+              signedIdentifiers.count == signings, @"Play code reused while unchanged");
+        Check([ShackInstaller preparedCodeRootForAppPath:data error:&error] != nil, @"MacShack's own code still valid beside Play's");
+        NSString *intelForPlay = App(root, @"IntelForPlay", [NSString stringWithUTF8String:argv[2]]);
+        Check(![ShackInstaller playCodeRootForAppPath:intelForPlay guests:guests identifier:@"com.example.fixture.play" error:&error] &&
+              [error.localizedDescription containsString:@"Intel"], @"Intel games refused in Play");
         // A universal static library beside the code (Coromon's Firebase frameworks) is neither prepared nor signed.
         NSString *withArchive = App(root, @"Archive", fixture);
         NSString *archiveDir = [withArchive stringByAppendingPathComponent:@"Contents/Plugins/Static.framework"];
