@@ -14,12 +14,14 @@
 #import <stdatomic.h>
 #import <sys/mman.h>
 #import <time.h>
+#import <pwd.h>
 
 // MacShack Play: the frontmost app Windows programs run in, so they get Game Mode (8 GB, CPU/GPU priority) while
 // MacShack keeps Steam running in the background (README, "Windows games").
 // MacShack (host/ShackPlay.m) opens <its bundle id>.play://run?exe=... (a Windows program with Madeira's engine,
-// play/MadeiraEngine.m), ://probe?minutes=N (the bridge checks, `--play-probe`) or ://steam?appid=N&seconds=S
-// (Valve's steamclient logs on to MacShack's Steam, play/PlaySteam.m). Either way Play meets MacShack through their App
+// play/MadeiraEngine.m), ://probe?minutes=N (the bridge checks, `--play-probe`), ://steam?appid=N&seconds=S
+// (Valve's steamclient logs on to MacShack's Steam, play/PlaySteam.m) or ://core?seconds=N (the checks for Mac games in
+// Play: address space, HOME, links, audio; `--play-core`). Either way Play meets MacShack through their App
 // Group's Mach service and has it start JIT for this pid, reports to Documents/Logs/play-<mode>.txt and the App
 // Group's play-<mode>-play.txt, then goes back to MacShack and exits once iOS moves it to the background, so each
 // program gets a fresh process. Play ends through ShackExitProcess: once a Mac game's hooks are in, a plain exit is the game's.
@@ -35,6 +37,8 @@ static _Atomic bool g_finished;   // over: leave when iOS moves Play to the back
 static _Atomic bool g_background;   // Play is not in front (another app, e.g. MacShack for Steam's Stop)
 static UILabel *g_status;   // main queue
 static UIButton *g_home;    // main queue: the way to MacShack's Windows games screen, while no program or probe has started
+static NSString *g_container;    // this app's own container, before anything changes HOME
+static NSString *g_frameworks;   // Play's Frameworks: the shims a Mac game links
 
 static void note(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
 static void note(NSString *format, ...) {   // from any queue
@@ -434,11 +438,132 @@ static void showHome(UIView *view) {
     g_home.center = CGPointMake(CGRectGetMidX(view.bounds), CGRectGetMaxY(view.bounds) - 80);
 }
 
+// What address space a game would get here: one piece of 32/16/8/4 GB (AArchX's arena tries 16, 8, 4) and the total
+// free in 1 GB pieces.
+static NSString *addressSpace(void) {
+    NSMutableArray<NSString *> *pieces = [NSMutableArray array];
+    for (size_t gb = 32; gb >= 4; gb /= 2) {
+        void *p = mmap(NULL, gb << 30, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        [pieces addObject:[NSString stringWithFormat:@"%zu GB %@", gb, p == MAP_FAILED ? @"no" : @"yes"]];
+        if (p != MAP_FAILED) munmap(p, gb << 30);
+    }
+    void *held[128];
+    int n = 0;
+    while (n < 128 && (held[n] = mmap(NULL, 1ull << 30, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0)) != MAP_FAILED) n++;
+    for (int i = 0; i < n; i++) munmap(held[i], 1ull << 30);
+    return [NSString stringWithFormat:@"address space: one piece of %@; %d GB free in 1 GB pieces", [pieces componentsJoinedByString:@", "], n];
+}
+
+// HOME set to the App Group's Home: which of the ways a game finds its folders follow it, reach it through a link, or
+// stay in Play's own container.
+static NSString *homeLookups(void) {
+    NSString *home = [g_group.path stringByAppendingPathComponent:@"Home"];
+    [NSFileManager.defaultManager createDirectoryAtPath:[home stringByAppendingPathComponent:@"Library/Application Support"] withIntermediateDirectories:YES attributes:nil error:NULL];
+    char real[PATH_MAX];
+    NSString *realHome = realpath(home.fileSystemRepresentation, real) ? @(real) : home;
+    setenv("HOME", home.fileSystemRepresentation, 1);
+    NSMutableArray<NSString *> *lines = [NSMutableArray arrayWithObject:@"HOME = the App Group's Home:"];
+    void (^check)(NSString *, NSString *) = ^(NSString *what, NSString *path) {
+        char r[PATH_MAX];
+        NSString *resolved = path && realpath(path.fileSystemRepresentation, r) ? @(r) : path;
+        NSString *verdict = [path hasPrefix:home] ? @"follows HOME" : [resolved hasPrefix:realHome] ? @"reaches it through a link" : @"Play's own container";
+        [lines addObject:[NSString stringWithFormat:@"  %@: %@ (%@)", what, verdict, path ?: @"nil"]];
+    };
+    check(@"NSHomeDirectory", NSHomeDirectory());
+    check(@"CFCopyHomeDirectoryURL", ((NSURL *)CFBridgingRelease(CFCopyHomeDirectoryURL())).path);
+    struct passwd *pw = getpwuid(getuid());
+    check(@"getpwuid", pw && pw->pw_dir ? @(pw->pw_dir) : nil);
+    check(@"~ expansion", [@"~" stringByExpandingTildeInPath]);
+    check(@"NSSearchPath Application Support", NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0]);
+    check(@"NSFileManager Application Support", [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject.path);
+    check(@"NSTemporaryDirectory", NSTemporaryDirectory());
+    return [lines componentsJoinedByString:@"\n"];
+}
+
+// Play's own Application Support becomes a link to the App Group's Home (only if it is empty: nothing of Play's is
+// moved), then the file MacShack wrote through its link is read through Play's, and one is written back.
+static NSString *playLinks(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *mine = [g_container stringByAppendingPathComponent:@"Library/Application Support"];
+    NSString *shared = [g_group.path stringByAppendingPathComponent:@"Home/Library/Application Support"];
+    NSDictionary *attributes = [fm attributesOfItemAtPath:mine error:NULL];
+    NSError *e = nil;
+    if (![attributes.fileType isEqualToString:NSFileTypeSymbolicLink]) {
+        NSArray *inside = [fm contentsOfDirectoryAtPath:mine error:NULL];
+        if (inside.count) return [NSString stringWithFormat:@"links, Play: SKIPPED, Play's Application Support holds %@", [inside componentsJoinedByString:@", "]];
+        [fm removeItemAtPath:mine error:NULL];
+        if (![fm createSymbolicLinkAtPath:mine withDestinationPath:shared error:&e]) return [@"links, Play: FAIL, no link: " stringByAppendingString:e.localizedDescription];
+    }
+    NSString *macshack = [NSString stringWithContentsOfFile:[mine stringByAppendingPathComponent:@"ShackProbe/from-macshack.txt"] encoding:NSUTF8StringEncoding error:&e];
+    BOOL wrote = [[NSString stringWithFormat:@"Play pid %d", getpid()] writeToFile:[mine stringByAppendingPathComponent:@"ShackProbe/from-play.txt"]
+                                                                       atomically:YES encoding:NSUTF8StringEncoding error:&e];
+    NSString *search = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0];
+    BOOL searchReads = [[NSString stringWithContentsOfFile:[search stringByAppendingPathComponent:@"ShackProbe/from-macshack.txt"] encoding:NSUTF8StringEncoding error:NULL] isEqual:macshack];
+    return [NSString stringWithFormat:@"links, Play: %@ (MacShack's file read through Play's link %@, written back %@, NSSearchPath's folder sees it %@)%@",
+            macshack.length && wrote && searchReads ? @"PASS" : @"FAIL", macshack.length ? @"yes" : @"no", wrote ? @"yes" : @"no",
+            searchReads ? @"yes" : @"no", e ? [@": " stringByAppendingString:e.localizedDescription] : @""];
+}
+
+// A game's own audio session in Play (the AudioToolbox shim's is playback, not mixable) while MacShack waits in the
+// background on its silent mixable audio: does MacShack keep answering?
+static NSString *audioKeepsMacShack(BOOL mix, NSUInteger seconds) {
+    AVAudioSession *session = AVAudioSession.sharedInstance;
+    NSError *e = nil;
+    BOOL ok = [session setCategory:AVAudioSessionCategoryPlayback mode:AVAudioSessionModeDefault
+                           options:mix ? AVAudioSessionCategoryOptionMixWithOthers : 0 error:&e] && [session setActive:YES error:&e];
+    AVAudioEngine *engine = [AVAudioEngine new];
+    AVAudioFormat *format = [engine.outputNode inputFormatForBus:0];
+    double step = 2 * M_PI * 440 / format.sampleRate;
+    __block double phase = 0;
+    AVAudioSourceNode *tone = [[AVAudioSourceNode alloc] initWithFormat:format renderBlock:
+        ^OSStatus(BOOL *silence, const AudioTimeStamp *time, AVAudioFrameCount frames, AudioBufferList *out) {
+            for (UInt32 b = 0; b < out->mNumberBuffers; b++) {
+                float *p = out->mBuffers[b].mData;
+                for (UInt32 i = 0; i < frames; i++) p[i] = 0.02f * (float)sin(phase + step * i);   // quiet
+            }
+            phase = fmod(phase + step * frames, 2 * M_PI);
+            return noErr;
+        }];
+    [engine attachNode:tone];
+    [engine connect:tone to:engine.mainMixerNode format:format];
+    ok = ok && [engine startAndReturnError:&e];
+    int asked = 0, answered = 0;
+    for (NSUInteger s = 5; s <= seconds; s += 5) {
+        sleep(5);
+        BOOL a = NO;
+        ping(&a);
+        asked++; answered += a;
+    }
+    [engine stop];
+    [session setActive:NO withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation error:NULL];
+    return [NSString stringWithFormat:@"audio %@ (%@): MacShack answered %d of %d pings: %@", mix ? @"mixable" : @"NOT mixable",
+            ok ? @"tone playing" : e.localizedDescription, answered, asked, answered == asked ? @"PASS" : @"FAIL"];
+}
+
+static void runCore(NSUInteger seconds) {   // g_queue
+    note(@"MacShack Play core probe: pid %d, MacShack is %@", getpid(), g_macshack);
+    waitForGameMode();
+    note(@"before giving back Madeira's hold: %@", addressSpace());
+    MadeiraEngineReleasePoolSpace();
+    note(@"after: %@", addressSpace());
+    note(@"%@", ShackVAReport(NO));
+    BOOL met = meetMacShack();
+    note(@"%@", homeLookups());
+    note(@"%@", playLinks());
+    if (met) {
+        note(@"%@", audioKeepsMacShack(YES, seconds));   // mixable first: the other may stop MacShack's audio for good
+        note(@"%@", audioKeepsMacShack(NO, seconds));
+    }
+    reportExit(0);
+    backToMacShack();
+}
+
 static void start(UIOpenURLContext *context) {   // main queue: one probe or program per process
     static BOOL started;
     NSURL *url = context.URL;
     NSString *mode = url.host;
-    if (started || !([mode isEqualToString:@"probe"] || [mode isEqualToString:@"run"] || [mode isEqualToString:@"steam"])) return;
+    if (started || !([mode isEqualToString:@"probe"] || [mode isEqualToString:@"run"] || [mode isEqualToString:@"steam"] ||
+                     [mode isEqualToString:@"core"])) return;
     // iOS sets sourceApplication only for apps of the same team: MacShack opens Play for runs, so another app (or none
     // iOS names) gets nothing, and a program or probe never starts from a link elsewhere. The line shows what the first
     // run on a device gets. A bare <id>.play:// (no mode) only shows the home, from anyone.
@@ -458,6 +583,9 @@ static void start(UIOpenURLContext *context) {   // main queue: one probe or pro
         dispatch_async(g_queue, ^{ runGame(query); });
     } else if ([mode isEqualToString:@"steam"]) {
         dispatch_async(g_queue, ^{ runSteam(query); });
+    } else if ([mode isEqualToString:@"core"]) {
+        NSUInteger seconds = query[@"seconds"].integerValue > 0 ? (NSUInteger)query[@"seconds"].integerValue : 30;
+        dispatch_async(g_queue, ^{ runCore(seconds); });
     } else {
         [g_view startClearing];
         NSUInteger minutes = query[@"minutes"].integerValue > 0 ? (NSUInteger)query[@"minutes"].integerValue : 10;
@@ -549,6 +677,8 @@ int main(int argc, char *argv[]) {
     MadeiraEngineHoldPoolSpace();   // before UIKit, Metal and Steam map anything
     @autoreleasepool {
         g_macshack = [NSBundle.mainBundle.bundleIdentifier stringByDeletingPathExtension];
+        g_container = NSHomeDirectory();
+        g_frameworks = NSBundle.mainBundle.privateFrameworksPath;
         g_queue = dispatch_queue_create("macshack.play", DISPATCH_QUEUE_SERIAL);
         g_report = [NSMutableArray array];
         g_start = CFAbsoluteTimeGetCurrent();

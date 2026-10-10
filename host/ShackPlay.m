@@ -131,11 +131,36 @@ static void handle(const ShackPlayMessage *request, ShackPlayMessage *reply) {
     }
 }
 
+// `--play-core`, MacShack's half of the link check: a folder in the App Group, a link to it from MacShack's own
+// Application Support, a file written through the link (Play reads it through its own link, and writes one back).
+static NSString *probeLink(void) {   // MacShack's link to the App Group's probe folder
+    return [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0] stringByAppendingPathComponent:@"ShackProbe"];
+}
+static NSString *coreLinks(void) {   // g_queue
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *shared = [g_group.path stringByAppendingPathComponent:@"Home/Library/Application Support/ShackProbe"], *link = probeLink();
+    NSError *e = nil;
+    [fm createDirectoryAtPath:shared withIntermediateDirectories:YES attributes:nil error:NULL];
+    [fm createDirectoryAtPath:link.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL];
+    if ([[fm attributesOfItemAtPath:link error:NULL].fileType isEqualToString:NSFileTypeSymbolicLink]) [fm removeItemAtPath:link error:NULL];
+    BOOL linked = [fm fileExistsAtPath:link] ? NO : [fm createSymbolicLinkAtPath:link withDestinationPath:shared error:&e];
+    NSString *token = NSUUID.UUID.UUIDString;
+    BOOL wrote = linked && [token writeToFile:[link stringByAppendingPathComponent:@"from-macshack.txt"] atomically:YES encoding:NSUTF8StringEncoding error:&e];
+    BOOL read = [[NSString stringWithContentsOfFile:[shared stringByAppendingPathComponent:@"from-macshack.txt"] encoding:NSUTF8StringEncoding error:NULL] isEqual:token];
+    return [NSString stringWithFormat:@"links, MacShack: %@ (link %@, written through it %@, read in the App Group %@)%@",
+            linked && wrote && read ? @"PASS" : @"FAIL", linked ? @"made" : @"NOT made", wrote ? @"yes" : @"no", read ? @"yes" : @"no",
+            e ? [@": " stringByAppendingString:e.localizedDescription] : @""];
+}
+
 static void back(void) {   // MacShack in front again after Play: its report
     note(@"MacShack in front again after %.0f s away", CFAbsoluteTimeGetCurrent() - g_awayAt);
     NSString *play = g_group ? [NSString stringWithContentsOfURL:[g_group URLByAppendingPathComponent:[NSString stringWithFormat:@"play-%@-play.txt", g_mode]]
                                                         encoding:NSUTF8StringEncoding error:NULL] : nil;
     note(@"== MacShack Play's report\n%@\n== end of MacShack Play's report", play ?: @"(none in the App Group)");
+    if ([g_mode isEqualToString:@"core"]) {
+        NSString *fromPlay = [NSString stringWithContentsOfFile:[probeLink() stringByAppendingPathComponent:@"from-play.txt"] encoding:NSUTF8StringEncoding error:NULL];
+        note(@"links, MacShack reads Play's file through its link: %@", fromPlay.length ? [@"PASS: " stringByAppendingString:fromPlay] : @"FAIL (not there)");
+    }
 }
 
 static void observe(void) {   // main queue
@@ -233,6 +258,7 @@ void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query,
                        encoding:NSUTF8StringEncoding error:NULL];
         }
         note(@"App Group: %@", !g_group ? @"NO CONTAINER (entitlement missing?)" : hello ? g_group.path : @"container, but writing failed");
+        if ([mode isEqualToString:@"core"]) note(@"%@", coreLinks());
         startSilence();
         NSURLComponents *url = [NSURLComponents new];
         url.scheme = [g_bundleID stringByAppendingString:@".play"];   // Play's bundle id, its URL scheme

@@ -368,12 +368,14 @@ final class AppModel {
             UserDefaults.standard.removeObject(forKey: "lastLaunch")
             if let url = games.first(where: { $0.deletingPathExtension().lastPathComponent == last }) { checkConfig(url) }
         }
-        // MacShack Play (host/ShackPlay.m): `--play-probe [minutes]` (the bridge checks) or `--play-run <exe> [--play-jit MB]
+        // MacShack Play (host/ShackPlay.m): `--play-probe [minutes]` (the bridge checks), `--play-core [seconds]` (the checks for
+        // Mac games in Play) or `--play-run <exe> [--play-jit MB]
         // [--play-seconds N] [--play-screen WxH] [--play-hud]` (a Windows program in Play); beside --steam-run they wait
         // for Big Picture to be up.
         func value(_ flag: String) -> String? { args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
         var play: (mode: String, query: [String: String])?
         if args.contains("--play-probe") { play = ("probe", ["minutes": value("--play-probe").flatMap { UInt($0) }.map(String.init) ?? "10"]) }
+        if args.contains("--play-core") { play = ("core", ["seconds": value("--play-core").flatMap { UInt($0) }.map(String.init) ?? "30"]) }
         if let exe = value("--play-run") {
             var query = ["exe": exe]
             for (flag, key) in [("--play-jit", "jitMB"), ("--play-seconds", "seconds"), ("--play-screen", "screen")] {

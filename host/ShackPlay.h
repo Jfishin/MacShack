@@ -59,7 +59,8 @@ static inline NSString *ShackPlayUsage(void) {
 
 // MacShack only (host/ShackPlay.m): opens MacShack Play in `mode` ("probe": the bridge checks (`--play-probe`), query
 // minutes; "run": a Windows program, query exe and, for a Steam game, install, compat, appid, args; or jitMB, seconds,
-// screen, hud; "steam": Valve's steamclient logs on to MacShack's Steam from Play, query appid, seconds) with
+// screen, hud; "steam": Valve's steamclient logs on to MacShack's Steam from Play, query appid, seconds; "core": the
+// checks for Mac games in Play (address space, HOME, links, audio), query seconds) with
 // MacShack's side of the bridge and silent audio that keeps MacShack (and Steam) running in the background while the
 // program is out. `ended` (optional, on the bridge's queue) gets its exit status: -1 when Play's process ended
 // without reporting one. One program at a time: another while one is out gets EAGAIN at once. Documents/Logs/
