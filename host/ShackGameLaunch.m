@@ -1,4 +1,5 @@
 #import "ShackGameLaunch.h"
+#import "ShackHome.h"
 #import "ShackHooks.h"
 #import "ShackMetal.h"
 #import "ShackSwap.h"
@@ -187,6 +188,7 @@ NSDictionary *ShackGamePrepareProcess(NSDictionary *launch, NSError **error) {
     // GameMaker's Mac runner (its data is game.ios) draws only with OpenGL; it has no Metal path to fall back to.
     if ([NSFileManager.defaultManager fileExistsAtPath:[appPath stringByAppendingPathComponent:@"Contents/Resources/game.ios"]])
         setenv("SHACK_OPENGL", "1", 0);
+    ShackHomePrefsSync();   // the game's settings as the other app last left them
     ShackHooksInstall(appPath, exePath, codeRoot);
     ShackMetalSetFrameCap([launch[@"fpsCap"] intValue]);
     // File-backed memory tier (ShackSwap.c), opt-in per game (Local Games' Memory swap): Stray ran 27 fps with it and 54

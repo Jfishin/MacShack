@@ -149,7 +149,7 @@ struct LogBrowser: View {
 
     static func scan() -> [URL] {
         let fm = FileManager.default
-        let roots = [AppModel.logs, fm.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs")]
+        let roots = [AppModel.logs, fm.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs").resolvingSymlinksInPath()]
         var found: [URL] = []
         for root in roots {
             let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey])

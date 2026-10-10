@@ -1,6 +1,7 @@
 #import "ShackLoader.h"
 #import "ShackInstaller.h"
 #import "ShackPlay.h"
+#import "ShackHome.h"
 
 // MacShack Play runs Mac games too: a game started from MacShack runs in a fresh Play process each time, so games can
 // follow one another without restarting MacShack. This is the first path in: `--play-mac <Name>` for an installed
@@ -57,6 +58,7 @@ void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs) {
         NSString *log = [group stringByAppendingFormat:@"/Logs/%@.log", exe], *mine = [docs stringByAppendingFormat:@"/Logs/%@.log", exe];
         [fm removeItemAtPath:mine error:NULL];
         [fm copyItemAtPath:log toPath:mine error:NULL];
+        ShackHomeMirrorLogs();
         say([NSString stringWithFormat:@"%@ ended (%d)", name, status]);
         if (runs <= 1) return;
         // ponytail: 5 s for MacShack to be in front again and merge Play's report; ShackPlayStart then waits for the

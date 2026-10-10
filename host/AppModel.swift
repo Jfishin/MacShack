@@ -48,6 +48,11 @@ final class AppModel {
     }
 
     init() {
+        // Before anything reads Application Support (Appearance does, right after this object: MacShackApp creates
+        // AppModel first): MacShack's Library folders become links into the shared home, moved there the first time.
+        _ = ShackHomeEnsure()
+        _ = ShackHomePrefsSync()
+        ShackHomeMirrorLogs()
         NotificationCenter.default.addObserver(forName: Notification.Name("ShackGuestLaunchFailed"), object: nil, queue: .main) { [weak self] note in
             let message = note.userInfo?["message"] as? String
             MainActor.assumeIsolated {
@@ -68,6 +73,8 @@ final class AppModel {
     private func gameEnded() {
         guard launched, ended == nil else { return }
         GameOverlay.hide()
+        _ = ShackHomePrefsSync()   // the game's settings for MacShack Play
+        ShackHomeMirrorLogs()
         if let root = hostRoot, let window = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first {
             window.rootViewController = root
             root.setNeedsUpdateOfSupportedInterfaceOrientations()

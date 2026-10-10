@@ -22,4 +22,7 @@ NSString *ShackPrefsSync(NSString *localPrefs, NSString *sharedPrefs, NSArray<NS
 // The app's own (container Library/Preferences, <App Group>/Home/Library/Preferences; MacShack's own domains, Apple's,
 // Valve's and Chromium's skipped). At app start, and at each game's start and end.
 NSString *ShackHomePrefsSync(void);
+// What devicectl cannot reach behind the links, copied into Documents/Logs/Shared: Library/Logs (Unity's Player.log)
+// and Steam's logs/*.txt. At app start and after each game.
+void ShackHomeMirrorLogs(void);
 NS_ASSUME_NONNULL_END

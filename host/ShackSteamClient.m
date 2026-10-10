@@ -3,6 +3,7 @@
 // here it runs in-process instead, on the UIKit main thread (CEF insists on the real main thread), under a fake pid that
 // kill/waitid/waitpid answer for. Chromium runs in one process with V8's interpreter (no JIT) and is told where its
 // framework and bundle are; the helper's images see the helper's own argv.
+#import "ShackHome.h"
 #import "ShackSteamClient.h"
 #import "ShackLoader.h"
 #import <IOSurface/IOSurfaceRef.h>
@@ -457,6 +458,8 @@ static void gameEnded(int status) {
     gGame.status = status; gGame.state = 2;
     say([NSString stringWithFormat:@"game ended (%d): back to Steam", status]);
     splash(nil);
+    ShackHomePrefsSync();   // the game's settings for MacShack Play
+    ShackHomeMirrorLogs();
     dispatch_async(dispatch_get_main_queue(), ^{   // the island panel's "Saving and quitting…" closes (GameOverlay.swift)
         [NSNotificationCenter.defaultCenter postNotificationName:@"ShackSteamGameEnded" object:nil];
     });
@@ -642,6 +645,10 @@ static void answerTranslatedGame(void) {
 // the process). 0, or the errno Steam reports.
 static int startSteamGame(NSString *app, NSString *path, char **argv, char **envp) {
     if (gGame.state) { say(@"a game already ran in this MacShack run; restart MacShack for another"); return EAGAIN; }
+    // One spelling for the game's paths: Steam's library sits behind Application Support's link into the shared home,
+    // and checks that compare the bundle with listings inside it (GameMaker's) need the resolved one.
+    app = app.stringByResolvingSymlinksInPath;
+    path = path.stringByResolvingSymlinksInPath;
     say([NSString stringWithFormat:@"Steam starts %@: preparing it", app.lastPathComponent]);
     NSError *failure = nil;
     NSString *code = [ShackInstaller steamGameCodeRootForAppPath:app error:&failure];

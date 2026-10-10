@@ -140,3 +140,18 @@ NSString *ShackHomePrefsSync(void) {
     NSLog(@"[MacShack] %@", report);
     return report;
 }
+
+void ShackHomeMirrorLogs(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    NSString *to = [docs stringByAppendingPathComponent:@"Logs/Shared"];
+    [fm removeItemAtPath:to error:NULL];
+    [fm createDirectoryAtPath:to withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSString *library = [NSHomeDirectory() stringByAppendingPathComponent:@"Library"];
+    [fm copyItemAtPath:[library stringByAppendingPathComponent:@"Logs"].stringByResolvingSymlinksInPath toPath:[to stringByAppendingPathComponent:@"Library Logs"] error:NULL];
+    NSString *steamLogs = [library stringByAppendingPathComponent:@"Application Support/Steam/logs"].stringByResolvingSymlinksInPath;
+    [fm createDirectoryAtPath:[to stringByAppendingPathComponent:@"Steam logs"] withIntermediateDirectories:YES attributes:nil error:NULL];
+    for (NSString *name in [fm contentsOfDirectoryAtPath:steamLogs error:NULL])
+        if ([name.pathExtension isEqualToString:@"txt"] && ![name hasPrefix:@"cef_log"])   // Chromium's can be huge
+            [fm copyItemAtPath:[steamLogs stringByAppendingPathComponent:name] toPath:[to stringByAppendingFormat:@"/Steam logs/%@", name] error:NULL];
+}

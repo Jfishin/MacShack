@@ -2,6 +2,7 @@
 #import "MacShackPlay-Swift.h"
 #import "PlaySteam.h"
 #import "ShackGameLaunch.h"
+#import "ShackHome.h"
 #import "ShackHooks.h"
 #import "ShackJIT.h"
 #import "ShackPlay.h"
@@ -485,20 +486,14 @@ static NSString *homeLookups(void) {
     return [lines componentsJoinedByString:@"\n"];
 }
 
-// Play's own Application Support becomes a link to the App Group's Home (only if it is empty: nothing of Play's is
-// moved), then the file MacShack wrote through its link is read through Play's, and one is written back.
+// Play's own Application Support is a link into the shared home (ShackHomeEnsure at launch): the file MacShack wrote
+// through its link is read through Play's, and one is written back.
 static NSString *playLinks(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *mine = [g_container stringByAppendingPathComponent:@"Library/Application Support"];
-    NSString *shared = [g_group.path stringByAppendingPathComponent:@"Home/Library/Application Support"];
     NSDictionary *attributes = [fm attributesOfItemAtPath:mine error:NULL];
     NSError *e = nil;
-    if (![attributes.fileType isEqualToString:NSFileTypeSymbolicLink]) {
-        NSArray *inside = [fm contentsOfDirectoryAtPath:mine error:NULL];
-        if (inside.count) return [NSString stringWithFormat:@"links, Play: SKIPPED, Play's Application Support holds %@", [inside componentsJoinedByString:@", "]];
-        [fm removeItemAtPath:mine error:NULL];
-        if (![fm createSymbolicLinkAtPath:mine withDestinationPath:shared error:&e]) return [@"links, Play: FAIL, no link: " stringByAppendingString:e.localizedDescription];
-    }
+    if (![attributes.fileType isEqualToString:NSFileTypeSymbolicLink]) return @"links, Play: FAIL, Application Support is not a link (ShackHomeEnsure)";
     NSString *macshack = [NSString stringWithContentsOfFile:[mine stringByAppendingPathComponent:@"ShackProbe/from-macshack.txt"] encoding:NSUTF8StringEncoding error:&e];
     BOOL wrote = [[NSString stringWithFormat:@"Play pid %d", getpid()] writeToFile:[mine stringByAppendingPathComponent:@"ShackProbe/from-play.txt"]
                                                                        atomically:YES encoding:NSUTF8StringEncoding error:&e];
@@ -590,7 +585,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     note(@"%@", ShackVAReport(NO));
     [NSNotificationCenter.defaultCenter addObserverForName:@"ShackGuestExited" object:nil queue:nil usingBlock:^(NSNotification *n) {
         int code = [n.userInfo[@"code"] intValue];
-        dispatch_async(g_queue, ^{ note(@"the game ended (%d)", code); reportExit(code); backToMacShack(); });
+        dispatch_async(g_queue, ^{ note(@"the game ended (%d)", code); note(@"%@", ShackHomePrefsSync()); reportExit(code); backToMacShack(); });
     }];
     loadShims();
     __block NSDictionary *ready;
@@ -618,6 +613,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), g_queue, ^{
             if (atomic_load(&g_finished)) return;
             note(@"the game did not quit within 15 s: Play ends it");
+            note(@"%@", ShackHomePrefsSync());
             reportExit(-2);
             backToMacShack();
         });
@@ -746,6 +742,8 @@ static void start(UIOpenURLContext *context) {   // main queue: one probe or pro
 
 int main(int argc, char *argv[]) {
     MadeiraEngineHoldPoolSpace();   // before UIKit, Metal and Steam map anything
+    ShackHomeEnsure();   // Play's Library folders: links into the shared home
+    ShackHomePrefsSync();
     @autoreleasepool {
         g_macshack = [NSBundle.mainBundle.bundleIdentifier stringByDeletingPathExtension];
         g_container = NSHomeDirectory();

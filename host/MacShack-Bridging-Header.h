@@ -12,3 +12,4 @@
 #import "ShackSteamClient.h"
 #import "ShackTouchPad.h"
 #import "ShackPlay.h"
+#import "ShackHome.h"

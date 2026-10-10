@@ -131,25 +131,23 @@ static void handle(const ShackPlayMessage *request, ShackPlayMessage *reply) {
     }
 }
 
-// `--play-core`, MacShack's half of the link check: a folder in the App Group, a link to it from MacShack's own
-// Application Support, a file written through the link (Play reads it through its own link, and writes one back).
-static NSString *probeLink(void) {   // MacShack's link to the App Group's probe folder
+// `--play-core`, MacShack's half of the link check: Application Support is a link into the shared home (ShackHome.m);
+// a file written through it must be in the App Group (Play reads it through its own link, and writes one back).
+static NSString *probeLink(void) {   // MacShack's probe folder, in the shared home through Application Support's link
     return [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES)[0] stringByAppendingPathComponent:@"ShackProbe"];
 }
 static NSString *coreLinks(void) {   // g_queue
     NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *shared = [g_group.path stringByAppendingPathComponent:@"Home/Library/Application Support/ShackProbe"], *link = probeLink();
+    NSString *shared = [g_group.path stringByAppendingPathComponent:@"Home/Library/Application Support/ShackProbe"], *mine = probeLink();
+    BOOL linked = [[fm attributesOfItemAtPath:mine.stringByDeletingLastPathComponent error:NULL].fileType isEqualToString:NSFileTypeSymbolicLink];
     NSError *e = nil;
-    [fm createDirectoryAtPath:shared withIntermediateDirectories:YES attributes:nil error:NULL];
-    [fm createDirectoryAtPath:link.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL];
-    [fm removeItemAtPath:[shared stringByAppendingPathComponent:@"from-play.txt"] error:NULL];   // this run's Play writes it again
-    if ([[fm attributesOfItemAtPath:link error:NULL].fileType isEqualToString:NSFileTypeSymbolicLink]) [fm removeItemAtPath:link error:NULL];
-    BOOL linked = [fm fileExistsAtPath:link] ? NO : [fm createSymbolicLinkAtPath:link withDestinationPath:shared error:&e];
+    [fm createDirectoryAtPath:mine withIntermediateDirectories:YES attributes:nil error:NULL];
+    [fm removeItemAtPath:[mine stringByAppendingPathComponent:@"from-play.txt"] error:NULL];   // this run's Play writes it again
     NSString *token = NSUUID.UUID.UUIDString;
-    BOOL wrote = linked && [token writeToFile:[link stringByAppendingPathComponent:@"from-macshack.txt"] atomically:YES encoding:NSUTF8StringEncoding error:&e];
+    BOOL wrote = [token writeToFile:[mine stringByAppendingPathComponent:@"from-macshack.txt"] atomically:YES encoding:NSUTF8StringEncoding error:&e];
     BOOL read = [[NSString stringWithContentsOfFile:[shared stringByAppendingPathComponent:@"from-macshack.txt"] encoding:NSUTF8StringEncoding error:NULL] isEqual:token];
-    return [NSString stringWithFormat:@"links, MacShack: %@ (link %@, written through it %@, read in the App Group %@)%@",
-            linked && wrote && read ? @"PASS" : @"FAIL", linked ? @"made" : @"NOT made", wrote ? @"yes" : @"no", read ? @"yes" : @"no",
+    return [NSString stringWithFormat:@"links, MacShack: %@ (Application Support is a link %@, written through it %@, read in the App Group %@)%@",
+            linked && wrote && read ? @"PASS" : @"FAIL", linked ? @"yes" : @"no", wrote ? @"yes" : @"no", read ? @"yes" : @"no",
             e ? [@": " stringByAppendingString:e.localizedDescription] : @""];
 }
 
