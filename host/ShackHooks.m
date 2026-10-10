@@ -446,10 +446,14 @@ BOOL ShackResolveCase(const char *path, char *out, size_t n) {
     const char *root = ""; size_t skip = 0;
     if (path[0] == '/') {
         const char *roots[] = {gGuestRoot, gHome, gHomeReal, gSecond.root};
-        for (int i = 0; i < 4 && !skip; i++) {
-            size_t len = strlen(roots[i]);
-            if (len && !strncasecmp(path, roots[i], len) && (path[len] == '/' || !path[len])) { root = roots[i]; skip = len; }
-        }
+        for (int i = 0; i < 4 && !skip; i++)
+            for (int spelling = 0; spelling < 2 && !skip; spelling++) {   // as realpath gives it, and as NSString does (no /private)
+                const char *r = roots[i];
+                if (spelling && strncmp(r, "/private/", 9)) break;
+                if (spelling) r += 8;
+                size_t len = strlen(r);
+                if (len && !strncasecmp(path, r, len) && (path[len] == '/' || !path[len])) { root = r; skip = len; }
+            }
         if (!skip) return NO;
     }
     char buf[PATH_MAX]; if (strlcpy(buf, path + skip, sizeof buf) >= sizeof buf) return NO;

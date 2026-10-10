@@ -11,6 +11,14 @@ static void writeText(NSString *p, NSString *s) {
     [s writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:NULL];
 }
 static NSString *linkOf(NSString *p) { return [NSFileManager.defaultManager destinationOfSymbolicLinkAtPath:p error:NULL]; }
+static void forget(NSString *domain) {   // `defaults delete`, quietly (the domain may not exist yet)
+    NSTask *task = [NSTask new];
+    task.launchPath = @"/usr/bin/defaults";
+    task.arguments = @[@"delete", domain];
+    task.standardError = NSFileHandle.fileHandleWithNullDevice;
+    [task launch];
+    [task waitUntilExit];
+}
 
 int main(void) {
     @autoreleasepool {
@@ -51,28 +59,70 @@ int main(void) {
         chmod([h3 stringByAppendingPathComponent:@"Library/Application Support"].fileSystemRepresentation, 0755);
         check(!linkOf(as3) && [readText([as3 stringByAppendingPathComponent:@"Kept/file"]) isEqual:@"kept"], "refused: the folder and its data stay");
         check([refused containsString:@"refused"], "refused: reported");
-        // Settings: newer wins in both directions, and a sync right after changes nothing. The values go through the
-        // Mac's real cfprefsd (a throwaway domain, removed at the end); the decisions read file dates in scratch folders.
-        NSString *domain = [@"com.example.shackprefs." stringByAppendingString:NSUUID.UUID.UUIDString];
+        // Refused half-way: Steam moved, then a folder iOS will not move. Steam must still be reached from the container
+        // (a link to where it went), and the next start finishes the move without setting the real Steam aside.
+        NSString *c4 = [scratch stringByAppendingPathComponent:@"container4"], *h4 = [scratch stringByAppendingPathComponent:@"group4/Home"];
+        NSString *as4 = [c4 stringByAppendingPathComponent:@"Library/Application Support"], *shared4 = [h4 stringByAppendingPathComponent:@"Library/Application Support"];
+        writeText([as4 stringByAppendingPathComponent:@"Steam/config/config.vdf"], @"signed in");
+        writeText([as4 stringByAppendingPathComponent:@"Zlocked/file"], @"z");
+        chmod([as4 stringByAppendingPathComponent:@"Zlocked"].fileSystemRepresentation, 0555);   // a folder can only move with write access to itself
+        NSString *half = ShackHomeLink(c4, h4, @[@"Library/Application Support"]);
+        check([half containsString:@"refused"] && [half containsString:@"Steam"], "half-way: reported with what moved");
+        check(!linkOf(as4) && [readText([as4 stringByAppendingPathComponent:@"Steam/config/config.vdf"]) isEqual:@"signed in"], "half-way: the moved Steam is still reached from the container");
+        chmod([as4 stringByAppendingPathComponent:@"Zlocked"].fileSystemRepresentation, 0755);
+        ShackHomeLink(c4, h4, @[@"Library/Application Support"]);
+        check([linkOf(as4) isEqual:shared4] && [readText([shared4 stringByAppendingPathComponent:@"Steam/config/config.vdf"]) isEqual:@"signed in"] &&
+              [readText([shared4 stringByAppendingPathComponent:@"Zlocked/file"]) isEqual:@"z"], "next start: the move finishes");
+        check(![[fm contentsOfDirectoryAtPath:shared4 error:NULL] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF CONTAINS 'set aside'"]].count, "next start: nothing set aside");
+        // Two clashes on one name within a minute: both earlier copies are kept under different names.
+        NSString *c5 = [scratch stringByAppendingPathComponent:@"container5"], *h5 = [scratch stringByAppendingPathComponent:@"group5/Home"];
+        NSString *as5 = [c5 stringByAppendingPathComponent:@"Library/Application Support"], *shared5 = [h5 stringByAppendingPathComponent:@"Library/Application Support"];
+        writeText([shared5 stringByAppendingPathComponent:@"Game/save"], @"v0");
+        writeText([as5 stringByAppendingPathComponent:@"Game/save"], @"v1");
+        ShackHomeLink(c5, h5, @[@"Library/Application Support"]);
+        [fm removeItemAtPath:as5 error:NULL];   // the link: a container with its own copy again
+        writeText([as5 stringByAppendingPathComponent:@"Game/save"], @"v2");
+        ShackHomeLink(c5, h5, @[@"Library/Application Support"]);
+        NSArray *kept = [[fm contentsOfDirectoryAtPath:shared5 error:NULL] filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'Game (set aside'"]];
+        NSMutableSet *versions = [NSMutableSet set];
+        for (NSString *k in kept) [versions addObject:readText([[shared5 stringByAppendingPathComponent:k] stringByAppendingPathComponent:@"save"]) ?: @""];
+        check([linkOf(as5) isEqual:shared5] && [readText([shared5 stringByAppendingPathComponent:@"Game/save"]) isEqual:@"v2"] &&
+              [versions isEqual:[NSSet setWithObjects:@"v0", @"v1", nil]], "two clashes in a minute: both earlier copies kept");
+        // Settings: each app keeps what it last synced per domain; the side that changed since then wins (both changed:
+        // the newer file), keys deleted there go here too, and a sync right after changes nothing. Values go through the
+        // Mac's real cfprefsd (one fixed throwaway domain, cleared through `defaults` at the start and the end: cfprefsd
+        // may still write its empty file a few seconds later, so at most this one small file stays); file dates are
+        // scratch files.
+        NSString *domain = @"com.example.shackprefs.test";
         CFStringRef app = (__bridge CFStringRef)domain;
+        forget(domain);
         NSString *local = [scratch stringByAppendingPathComponent:@"localPrefs"], *shared = [scratch stringByAppendingPathComponent:@"sharedPrefs"];
+        NSString *synced = [scratch stringByAppendingPathComponent:@"syncedPrefs"];
         NSString *file = [domain stringByAppendingPathExtension:@"plist"];
         NSString *localFile = [local stringByAppendingPathComponent:file], *sharedFile = [shared stringByAppendingPathComponent:file];
+        id (^value)(NSString *) = ^id(NSString *key) { return CFBridgingRelease(CFPreferencesCopyAppValue((__bridge CFStringRef)key, app)); };
+        void (^set)(NSString *, id) = ^(NSString *key, id v) { CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)v, app); CFPreferencesAppSynchronize(app); };
         [fm createDirectoryAtPath:local withIntermediateDirectories:YES attributes:nil error:NULL];
-        CFPreferencesSetAppValue(CFSTR("volume"), (__bridge CFNumberRef)@7, app);
-        CFPreferencesAppSynchronize(app);
+        set(@"volume", @7);
         [@{} writeToFile:localFile atomically:YES];   // stands for cfprefsd's file: only its date counts
-        check([ShackPrefsSync(local, shared, @[]) containsString:@"0 in, 1 out"] &&
-              [[NSDictionary dictionaryWithContentsOfFile:sharedFile][@"volume"] isEqual:@7], "local newer: exported");
-        check([ShackPrefsSync(local, shared, @[]) containsString:@"0 in, 0 out"], "right after: nothing to do");
-        [@{@"volume": @9} writeToFile:sharedFile atomically:YES];
+        check([ShackPrefsSync(local, shared, synced, @[]) containsString:@"0 in, 1 out"] &&
+              [[NSDictionary dictionaryWithContentsOfFile:sharedFile][@"volume"] isEqual:@7], "first sync: exported");
+        check([ShackPrefsSync(local, shared, synced, @[]) containsString:@"0 in, 0 out"], "right after: nothing to do");
+        [@{@"volume": @9} writeToFile:sharedFile atomically:YES];   // the other app changed it
+        check([ShackPrefsSync(local, shared, synced, @[@"com.example."]) containsString:@"0 in, 0 out"], "skipped prefixes are left alone");
+        check([ShackPrefsSync(local, shared, synced, @[]) containsString:@"1 in, 0 out"] && [value(@"volume") isEqual:@9], "changed there: imported");
+        set(@"volume", @11);   // changed here just before the sync; cfprefsd's file date comes seconds later
+        check([ShackPrefsSync(local, shared, synced, @[]) containsString:@"0 in, 1 out"] &&
+              [[NSDictionary dictionaryWithContentsOfFile:sharedFile][@"volume"] isEqual:@11], "changed here, file date late: still exported");
+        set(@"music", @1);
+        ShackPrefsSync(local, shared, synced, @[]);
+        [@{@"volume": @11} writeToFile:sharedFile atomically:YES];   // the other app deleted "music"
+        check([ShackPrefsSync(local, shared, synced, @[]) containsString:@"1 in, 0 out"] && !value(@"music"), "a key deleted there goes here too");
+        set(@"volume", @12);
+        [@{@"volume": @13} writeToFile:sharedFile atomically:YES];
         [fm setAttributes:@{NSFileModificationDate: [NSDate dateWithTimeIntervalSinceNow:60]} ofItemAtPath:sharedFile error:NULL];
-        check([ShackPrefsSync(local, shared, @[@"com.example."]) containsString:@"0 in, 0 out"], "skipped prefixes are left alone");
-        check([ShackPrefsSync(local, shared, @[]) containsString:@"1 in, 0 out"] &&
-              [CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("volume"), app)) isEqual:@9], "shared newer: imported");
-        CFPreferencesSetMultiple(NULL, (__bridge CFArrayRef)@[@"volume"], app, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-        CFPreferencesAppSynchronize(app);
-        [fm removeItemAtPath:[NSHomeDirectory() stringByAppendingFormat:@"/Library/Preferences/%@", file] error:NULL];
+        check([ShackPrefsSync(local, shared, synced, @[]) containsString:@"1 in, 0 out"] && [value(@"volume") isEqual:@13], "both changed: the newer file wins");
+        forget(domain);
         [fm removeItemAtPath:scratch error:NULL];
         puts("home move ok");
     }

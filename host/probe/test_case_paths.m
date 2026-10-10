@@ -4,6 +4,8 @@
 //   && clang -fobjc-arc -I/tmp host/probe/test_case_paths.m -framework Foundation -o /tmp/t && /tmp/t
 #import <Foundation/Foundation.h>
 #include <stdarg.h>
+// ShackHooks.m's second guest (a game Steam started); only its root is read by this block.
+static struct { char root[PATH_MAX]; } gSecond;
 #include "resolve.inc"
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL %d: %s (errno %d)\n", __LINE__, #x, errno); return 1; } } while (0)
 
@@ -39,6 +41,15 @@ static int run(const char *vol) {
     CHECK(ci_unlink("/tmp/macshack-no-such-dir/x") < 0 && errno == ENOENT);
     snprintf(p, sizeof p, "%s/library/application support/pearl abyss/cd/save/1/slot0/missing.save", lower);
     CHECK(ci_open(p, O_RDONLY) < 0 && errno == ENOENT && ci_unlink(p) < 0 && errno == ENOENT);
+    // A game outside the container (the App Group's Steam library) whose root realpath spells /private/..., asked for
+    // under the spelling NSString gives (no /private), lowercased inside the bundle.
+    char group[PATH_MAX];
+    snprintf(group, sizeof group, "%s/Group/Steam/steamapps/common/Game.app/Contents/Resources", vol);
+    snprintf(cmd, sizeof cmd, "mkdir -p '%s' && echo hi > '%s/Shaders.metallib'", group, group); CHECK(system(cmd) == 0);
+    snprintf(cmd, sizeof cmd, "%s/Group/Steam/steamapps/common/Game.app", vol); CHECK(realpath(cmd, gSecond.root));
+    CHECK(!strncmp(gSecond.root, "/private/", 9));
+    snprintf(p, sizeof p, "%s/contents/resources/shaders.metallib", gSecond.root + 8);
+    fd = ci_open(p, O_RDONLY); CHECK(fd >= 0); close(fd);
     return 0;
 }
 

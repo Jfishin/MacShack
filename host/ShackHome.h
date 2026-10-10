@@ -16,9 +16,11 @@ NSString *ShackHomeEnsure(void);
 // <App Group> (group.<MacShack's bundle id>), or nil.
 NSString *_Nullable ShackHomeGroup(void);
 // Game settings between the apps: cfprefsd keeps each app's own; <home>/Library/Preferences/<domain>.plist carries
-// them across. For each domain (file in either folder, none of skipPrefixes): the newer side wins; an export also gives
-// the shared file the local file's date, so the next sync changes nothing. Returns "settings: N in, M out".
-NSString *ShackPrefsSync(NSString *localPrefs, NSString *sharedPrefs, NSArray<NSString *> *skipPrefixes);
+// them across, and syncedPrefs (this app's own folder) holds what this app last synced. For each domain (a file in any
+// of the folders, none of skipPrefixes), against that last sync: changed only there, it comes in (keys deleted there
+// go here too); changed only here, it goes out; both, the newer file wins. Decided by content, not cfprefsd's file
+// dates, which trail the values by seconds. Returns "settings: N in, M out".
+NSString *ShackPrefsSync(NSString *localPrefs, NSString *sharedPrefs, NSString *syncedPrefs, NSArray<NSString *> *skipPrefixes);
 // The app's own (container Library/Preferences, <App Group>/Home/Library/Preferences; MacShack's own domains, Apple's,
 // Valve's and Chromium's skipped). At app start, and at each game's start and end.
 NSString *ShackHomePrefsSync(void);
