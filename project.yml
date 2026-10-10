@@ -261,6 +261,16 @@ targets:
       - path: host/vendor/fishhook.c
       - path: host/ShackTouchPad.m   # MacShack's on-screen pad (a GCController), polled like any pad
       - path: host/TouchControls.swift
+      # A Mac game's runtime: the game start MacShack uses for Local Games, and what it installs
+      - path: host/ShackGameLaunch.m
+      - path: host/ShackHooks.m
+      - path: host/ShackCFXML.m
+      - path: host/ShackSwap.c
+      - path: host/ShackTrapJIT.c
+      - path: host/ShackMetal.m
+      - path: host/ShackMetalFXTrace.m
+      - path: host/ShackWatch.m
+      - path: host/GuestArguments.swift
     entitlements:
       path: play/MacShackPlay.entitlements
       properties:
@@ -295,14 +305,24 @@ targets:
       - target: ShackCoreAudio   # steamclient links CoreAudio, outside the Steam link map
         link: false
         embed: false
+      - target: ShackAudioToolbox   # a Mac game's shims beyond the Steam client's
+        link: false
+        embed: false
+      - target: ShackAVFoundation
+        link: false
+        embed: false
+      - target: ShackSwiftUI
+        link: false
+        embed: false
     postCompileScripts:
       - name: Embed the Steam client's shims
         script: |
           # libShackSteamClient and the shims it re-exports, as MacShack embeds them: Steam's prepared images bind to
-          # @rpath/libShackSteamClient.dylib (ShackSteamProbe.m's link map).
+          # @rpath/libShackSteamClient.dylib (ShackSteamProbe.m's link map); and the shims a Mac game links (MacShack Play
+          # runs Mac games too).
           FW="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
           mkdir -p "$FW"
-          for n in SteamClient AppKit Carbon CG CV IOKit Security System OpenGL CoreAudio; do
+          for n in SteamClient AppKit Carbon CG CV IOKit Security System OpenGL CoreAudio AudioToolbox AVFoundation SwiftUI; do
             cp -f "$BUILT_PRODUCTS_DIR/libShack$n.dylib" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/libShack$n.dylib" || exit 1
           done
     settings:
@@ -314,8 +334,10 @@ targets:
         # ShackJIT.m's spike calls libsystem's pthread_jit_write_protect_np, which the iOS SDK's tbd does not list (MacShack gets
         # it from libShackSystem). Play never calls the spike, and a Release link strips it; a Debug build keeps every export
         # of its debug dylib, so the symbol is left to dyld's flat lookup. ShackJIT.m declares it weak: if dyld finds
-        # nothing, the pointer stays NULL (the spike checks it) instead of failing the launch.
-        OTHER_LDFLAGS: "-Wl,-U,_pthread_jit_write_protect_np"
+        # nothing, the pointer stays NULL (the spike checks it) instead of failing the launch. ShackHooks.m's AArchX
+        # thunk is weak for the same reason: Play does not have libOcerz yet.
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks"
+        OTHER_LDFLAGS: "-Wl,-U,_pthread_jit_write_protect_np -Wl,-U,_ocerz_bridge_native_thunk"
   MacShack:
     type: application
     platform: iOS
