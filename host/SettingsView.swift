@@ -10,6 +10,7 @@ struct SettingsView: View {
     let windowsGames: () -> Void   // LauncherView shows WindowsGamesView
     @AppStorage("metalHUD") private var metalHUD = false
     @AppStorage("playMacGames") private var playMacGames = false
+    @AppStorage("playMonoGames") private var playMonoGames = false
     // How hard Big Picture and the games it starts may work the phone. Low Power Mode runs the UI at 60 Hz and stays
     // cool; uncapped, Chromium drew Big Picture at the panel's 120 Hz and full 3x resolution.
     @AppStorage("steamUI.fpsCap") private var uiCap = 60   // ShackSteamUIFrameCap's default
@@ -58,6 +59,10 @@ struct SettingsView: View {
                     Toggle("Metal performance HUD", isOn: $metalHUD)
                     Toggle("Run Mac games in MacShack Play", isOn: $playMacGames)
                     Text("Testing: Steam's native Mac games (no JIT) start in MacShack Play, so another game can follow without restarting MacShack.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Toggle("Also Unity games that need JIT", isOn: $playMonoGames)
+                        .disabled(!playMacGames)
+                    Text("Testing: they get JIT in MacShack Play (LocalDevVPN on, phone unlocked), and another game can follow them.")
                         .font(.footnote).foregroundStyle(.secondary)
                     NavigationLink("JIT & signing") { JITSigningView() }
                     NavigationLink("Logs") { LogBrowser() }

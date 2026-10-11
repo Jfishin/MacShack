@@ -652,7 +652,8 @@ static void answerTranslatedGame(void) {
 // code prepared and signed for Play into the App Group, Steam's arguments and launch environment in the launch note
 // (container paths spelled through the shared home: Play cannot read MacShack's container), Play opened. Steam keeps
 // the stand-in pid until Play reports the end; nothing of the game loads here, so another game may follow.
-// Returns 0, or -1 to run it in-process instead (Intel, JIT, or not prepared for Play).
+// Returns 0, or -1 to run it in-process instead (Intel; a Unity game that needs JIT while its switch, "Also Unity
+// games that need JIT", is off; or not prepared for Play).
 static NSString *viaSharedHome(NSString *value) {
     NSString *group = ShackHomeGroup();
     if (!group) return value;
@@ -686,15 +687,20 @@ static void playGameEnded(int status, NSString *exe) {   // the bridge's queue: 
 static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
     NSString *group = ShackHomeGroup();
     if (!group) return -1;
+    NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
+    if ([ShackInstaller requiresJITAtAppPath:app] && ![NSUserDefaults.standardUserDefaults boolForKey:@"playMonoGames"]) {
+        say([NSString stringWithFormat:@"%@ stays in MacShack: a Unity game that needs JIT (Settings > Advanced, \"Also Unity games that need JIT\")", name]);
+        return -1;   // before preparing anything for Play
+    }
     NSError *failure = nil;
     NSString *play = [ShackPlayHostBundleID() stringByAppendingString:@".play"];
     NSString *code = [ShackInstaller playCodeRootForAppPath:app guests:[group stringByAppendingPathComponent:@"Guests"] identifier:play steam:YES error:&failure];
-    NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
-    NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[group stringByAppendingFormat:@"/Guests/Play.Steam.%@/current.plist", name]];
-    if (!code || [manifest[@"requiresJIT"] boolValue]) {
-        say([NSString stringWithFormat:@"%@ stays in MacShack: %@", name, code ? @"it needs JIT" : failure.localizedDescription]);
+    if (!code) {
+        say([NSString stringWithFormat:@"%@ stays in MacShack: %@", name, failure.localizedDescription]);
         return -1;
     }
+    NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[group stringByAppendingFormat:@"/Guests/Play.Steam.%@/current.plist", name]];
+    BOOL jit = [manifest[@"requiresJIT"] boolValue];
     NSMutableArray<NSString *> *args = [NSMutableArray array];
     for (int i = 1; argv[i]; i++) [args addObject:viaSharedHome(@(argv[i]))];
     NSMutableDictionary<NSString *, NSString *> *env = [NSMutableDictionary dictionary];
@@ -705,7 +711,7 @@ static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
         if ([key hasPrefix:@"Steam"] || [key hasPrefix:@"STEAM"]) env[key] = viaSharedHome([pair substringFromIndex:NSMaxRange(eq)]);
     }
     NSDictionary *launch = @{@"app": app, @"code": code, @"logs": [group stringByAppendingPathComponent:@"Logs"], @"args": args,
-        @"translate": @NO, @"requiresJIT": @NO, @"fpsCap": @(ShackGameFrameCap(name, NO)), @"renderScale": @(ShackGameRenderScale(name, NO)),
+        @"translate": @NO, @"requiresJIT": @(jit), @"fpsCap": @(ShackGameFrameCap(name, NO)), @"renderScale": @(ShackGameRenderScale(name, NO)),
         @"swapMB": @0, @"steam": @YES, @"steamPid": @(kGamePid), @"env": env};
     say([@"Steam for the game in Play: " stringByAppendingString:ShackSteamPreparePlayFiles([NSURL fileURLWithPath:group], play)]);   // after a Steam update too
     NSString *notes = [group stringByAppendingPathComponent:@"Launch"];
@@ -716,8 +722,8 @@ static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
     gGame.inPlay = YES;
     gGame.state = 1;
     ShackHomePrefsSync();   // the game's settings for Play
-    say([NSString stringWithFormat:@"%@ runs in MacShack Play as pid %d (%lu arguments, %lu Steam variables)", name, kGamePid,
-         (unsigned long)args.count, (unsigned long)env.count]);
+    say([NSString stringWithFormat:@"%@ runs in MacShack Play as pid %d (%lu arguments, %lu Steam variables%@)", name, kGamePid,
+         (unsigned long)args.count, (unsigned long)env.count, jit ? @", JIT" : @""]);
     ShackPlayStart(@"mac", @{@"name": name, @"steam": @"1"}, ^(int status) { playGameEnded(status, exe); });
     return 0;
 }

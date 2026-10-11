@@ -173,6 +173,15 @@ int main(int argc, const char **argv) {
         Check([keptMono rangeOfData:[@"explicit/deadbeef" dataUsingEncoding:NSUTF8StringEncoding] options:0 range:NSMakeRange(0, keptMono.length)].location != NSNotFound,
               @"unknown Mono revision keeps the game's own Mono");
         Check([ShackInstaller requiresJITAtAppPath:monoData], @"game's own Mono requires JIT");
+        // A Steam game (no Local Games record) is seen as needing JIT from its files, before anything is prepared for
+        // Play; once prepared for Play its record says so too (MacShack's route reads both).
+        NSString *steamMono = App(root, @"SteamMono", fixture);
+        [monoBytes writeToFile:[steamMono stringByAppendingPathComponent:@"Contents/MacOS/libmonobdwgc-2.0.dylib"] atomically:YES];
+        Check([ShackInstaller requiresJITAtAppPath:steamMono], @"Steam's Unity game needs JIT before preparing");
+        Check([ShackInstaller playCodeRootForAppPath:steamMono guests:guests identifier:@"com.example.fixture.play" steam:YES error:&error] != nil,
+              error.description ?: @"Unity game prepared for Play");
+        NSDictionary *playMono = [NSDictionary dictionaryWithContentsOfFile:[guests stringByAppendingPathComponent:@"Play.Steam.SteamMono/current.plist"]];
+        Check([playMono[@"requiresJIT"] boolValue], @"Play's record of a Unity game says it needs JIT");
         // A Mono whose revision cannot be read is still refused, with the reason.
         NSString *anonymous = App(root, @"AnonymousMono", fixture);
         [fm copyItemAtPath:fixture toPath:[anonymous stringByAppendingPathComponent:@"Contents/MacOS/libmonobdwgc-2.0.dylib"] error:nil];
