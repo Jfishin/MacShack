@@ -20,10 +20,11 @@ typedef struct {
     uint64_t value;                    // echoed back unless the handler sets it
 } ShackPlayMessage;
 
-// Ping replies carry ShackPlayQuit in `value` when Steam asked the game to stop; Exited carries the exit status.
+// Ping replies carry ShackPlayQuit in `value` when Steam asked the game to stop (it wins), else ShackPlayJITFailed when
+// MacShack's JIT extension failed for this program's Play process; Exited carries the exit status.
 // SteamIPC's reply carries a send right to MacShack's Steam ipcserver (com.valvesoftware.steam.ipctool), or null.
 enum { ShackPlayHello = 1, ShackPlayPing = 2, ShackPlayJIT = 3, ShackPlayExited = 4, ShackPlaySteamIPC = 5 };
-enum { ShackPlayQuit = 1 };
+enum { ShackPlayQuit = 1, ShackPlayJITFailed = 2 };
 // The process Steam sees for whatever runs in MacShack Play (MacShack's stand-in pid; Play's Steam images report it too).
 enum { ShackPlaySteamPid = 1000003 };
 

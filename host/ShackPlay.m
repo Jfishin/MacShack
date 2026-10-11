@@ -27,6 +27,8 @@ static NSString *g_mode = @"run";
 static BOOL g_running;             // a program is out in MacShack Play
 static void (^g_ended)(int status);
 static _Atomic bool g_quit;        // Steam asked it to stop: ping replies say so
+static _Atomic bool g_jitFailed;   // the JIT extension failed for this program's Play: ping replies say so
+static unsigned g_starts;          // ShackPlayStart's count (g_queue): late callbacks and timers belong to their own start
 static int g_pings;
 static _Atomic long g_state = UIApplicationStateActive;   // from UIApplication's notifications
 static BOOL g_alive;               // a Play process said hello and has not ended (its session right lives)
@@ -109,14 +111,16 @@ static void handle(const ShackPlayMessage *request, ShackPlayMessage *reply) {
             note(@"hello from MacShack Play (pid %d): session port sent, MacShack %s", request->pid, stateName());
             break;
         case ShackPlayPing:
-            reply->value = atomic_load(&g_quit) ? ShackPlayQuit : 0;
+            reply->value = atomic_load(&g_quit) ? ShackPlayQuit : atomic_load(&g_jitFailed) ? ShackPlayJITFailed : 0;
             if ([g_mode isEqualToString:@"probe"] || reply->value) note(@"ping %d from Play, MacShack %s%@", ++g_pings, stateName(), reply->value ? @": quit" : @"");
             break;
         case ShackPlayJIT: {
             pid_t pid = request->pid;
+            unsigned start = g_starts;
             note(@"JIT asked for Play pid %d, MacShack %s: starting the JIT extension", pid, stateName());
             ShackJITHelperStartForPID(pid, g_queue, ^(BOOL ok, NSString *log) {
                 note(@"JIT extension for pid %d: %@\n%@", pid, ok ? @"ok" : @"FAILED", log);
+                if (!ok && start == g_starts) atomic_store(&g_jitFailed, true);   // a later program's Play is not told
             });
             break;
         }
@@ -193,9 +197,9 @@ void ShackPlayRequestQuit(void) {
 // ignores it: the last one leaves once it is in the background (MacShack in front again), which takes a moment.
 // ponytail: waits up to 10 s in 100 ms steps; a Play process still there then gets no link (it would ignore it) and
 // the program ends with EBUSY instead of waiting forever.
-static void openPlay(NSURL *play, int stepsLeft) {   // g_queue
+static void openPlay(NSURL *play, int stepsLeft, unsigned start) {   // g_queue
     if (g_alive && stepsLeft > 0) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), g_queue, ^{ openPlay(play, stepsLeft - 1); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), g_queue, ^{ openPlay(play, stepsLeft - 1, start); });
         return;
     }
     if (g_alive) {
@@ -207,7 +211,14 @@ static void openPlay(NSURL *play, int stepsLeft) {   // g_queue
         [UIApplication.sharedApplication openURL:play options:@{} completionHandler:^(BOOL ok) {
             dispatch_async(g_queue, ^{
                 note(@"open %@: %@", play, ok ? @"ok" : @"FAILED (MacShack Play not installed?)");
-                if (!ok) finish(ENOENT);
+                if (!ok) { finish(ENOENT); return; }
+                // A Play that never says hello (it did not start, or its signature expired): the program ends, so later
+                // ones are not refused until MacShack restarts.
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), g_queue, ^{
+                    if (start != g_starts || g_met || !g_running) return;
+                    note(@"MacShack Play did not say hello within 30 s: the program ends");
+                    finish(ETIMEDOUT);
+                });
             });
         }];
     });
@@ -248,6 +259,8 @@ void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query,
         g_running = YES;
         g_ended = ended;
         atomic_store(&g_quit, false);
+        atomic_store(&g_jitFailed, false);
+        unsigned start = ++g_starts;
         [g_report removeAllObjects];
         g_start = CFAbsoluteTimeGetCurrent();
         g_awayAt = 0;
@@ -270,7 +283,7 @@ void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query,
         NSMutableArray<NSURLQueryItem *> *items = [NSMutableArray array];
         [query enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSString *v, BOOL *stop) { [items addObject:[NSURLQueryItem queryItemWithName:k value:v]]; }];
         url.queryItems = items;
-        openPlay(url.URL, 100);
+        openPlay(url.URL, 100, start);
     });
 }
 
