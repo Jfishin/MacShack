@@ -68,6 +68,9 @@ static UIWindow *GameUIWindow(void) {
 // The window that fills the screen; every other one is occluded, as AppKit reports a window under a full-screen one.
 // Chromium (Steam's UI) stops drawing its page while its window is occluded, so Big Picture idles behind a game.
 static __unsafe_unretained NSWindow *gOwner;   // always in gFront (which keeps it) or nil; main thread writes
+// The app is off the screen (iOS background: another app, e.g. MacShack Play, has it): every window is occluded, as a
+// Mac window behind another app's full-screen one. Chromium then stops drawing, which iOS would refuse the GPU for anyway.
+static BOOL gBackground;   // main thread
 // On the main thread, as AppKit; after the ShackMainSync that ordered them. Chromium's web contents (MacWebContentsOcclusion)
 // act only on the notifications its WebContentsOcclusionCheckerMac reposts, marked with its class name; we have no AppKit
 // private hook for that checker to repost from, so ours carries the mark.
@@ -115,6 +118,11 @@ static void GiveScreen(UIWindow *w, NSWindow *to) {   // main thread; to has its
             for (NSNotificationName n in @[UISceneWillEnterForegroundNotification, UISceneDidActivateNotification, UISceneWillDeactivateNotification, UISceneDidEnterBackgroundNotification])
                 [NSNotificationCenter.defaultCenter addObserverForName:n object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
                     logSceneState([note.name stringByReplacingOccurrencesOfString:@"UIScene" withString:@""], note.object);
+                    BOOL background = [n isEqualToString:UISceneDidEnterBackgroundNotification];
+                    if ((background || [n isEqualToString:UISceneWillEnterForegroundNotification]) && gBackground != background) {
+                        gBackground = background;
+                        if (gOwner) TellOcclusion(@[gOwner]);
+                    }
                 }];
         });
         logSceneState(@"at game window", scene);
@@ -193,7 +201,7 @@ static void GiveScreen(UIWindow *w, NSWindow *to) {   // main thread; to has its
 - (BOOL)isMiniaturized { return NO; }
 - (BOOL)isZoomed { return NO; }
 - (BOOL)isOnActiveSpace { return YES; }
-- (NSUInteger)occlusionState { return self == gOwner ? 1 << 1 : 0; }   // NSWindowOcclusionStateVisible: has the screen (GiveScreen)
+- (NSUInteger)occlusionState { return self == gOwner && !gBackground ? 1 << 1 : 0; }   // NSWindowOcclusionStateVisible: has the screen (GiveScreen), app in front
 - (CGFloat)alphaValue { return _alphaValue; }
 - (void)setAlphaValue:(CGFloat)a { _alphaValue = a; }
 - (NSRect)frameRectForContentRect:(NSRect)r { return r; }   // borderless: frame == content
