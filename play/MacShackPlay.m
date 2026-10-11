@@ -41,6 +41,9 @@ static NSURL *g_group;
 static mach_port_t g_session;   // MacShack's session port, once the hello worked
 static _Atomic bool g_finished;   // over: leave when iOS moves Play to the background
 static _Atomic bool g_quitAsked;  // a Mac game was asked to quit (once)
+static _Atomic bool g_gameStarted;  // the game's main was called (ShackStartGuest)
+static _Atomic bool g_jitReady;     // its JIT pool is ready: a late word from MacShack's JIT extension changes nothing
+static _Atomic bool g_noJIT;        // JIT set-up failed: the game is not started
 static BOOL g_steamForGame;      // a Mac game Steam started: its own Steam API (runMacGame)
 static mach_port_t g_steamIPC;   // MacShack's Steam ipcserver, for it
 static _Atomic bool g_background;   // Play is not in front (another app, e.g. MacShack for Steam's Stop)
@@ -235,16 +238,20 @@ static void reportExit(int status) {
     note(@"exit %d reported to MacShack: %s", status, ShackPlayError(ShackPlayCall(g_session, ShackPlayExited, (uint64_t)status, 5000, &reply)));
 }
 
-// Steam's Stop reaches Play through ping replies: the program ends with this process.
-static void watchForQuit(void (^quit)(void)) {
+// Steam's Stop (ShackPlayQuit) and, until the JIT pool is ready, a failed JIT start (ShackPlayJITFailed) reach Play
+// through ping replies.
+static void watchForQuit(void (^quit)(void), void (^_Nullable onJITFailed)(void)) {
     static dispatch_source_t timer;
     timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 2 * NSEC_PER_SEC, NSEC_PER_SEC / 4);
     dispatch_source_set_event_handler(timer, ^{
         ShackPlayMessage reply;
-        if (ShackPlayCall(g_session, ShackPlayPing, 0, 2000, &reply) != KERN_SUCCESS || reply.value != ShackPlayQuit) return;
+        if (ShackPlayCall(g_session, ShackPlayPing, 0, 2000, &reply) != KERN_SUCCESS) return;
+        BOOL stop = reply.value == ShackPlayQuit;
+        BOOL noJIT = reply.value == ShackPlayJITFailed && onJITFailed && !atomic_load(&g_jitReady);
+        if (!stop && !noJIT) return;
         dispatch_source_cancel(timer);
-        quit();
+        if (stop) quit(); else onJITFailed();
     });
     dispatch_resume(timer);
 }
@@ -345,7 +352,7 @@ static void runGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
         reportExit(0);
         if (atomic_load(&g_background)) ShackExitProcess(0);   // MacShack is in front already (its Stop): just end
         backToMacShack();
-    }); }
+    }, nil); }
     if (query[@"steam"].length) note(@"%@", steamForWine());
     if (query[@"winedebug"].length) setenv("WINEDEBUG", query[@"winedebug"].UTF8String, 1);   // Wine's debug channels, for a diagnosis
     note(@"%@", ShackVAReport(NO));
@@ -571,14 +578,21 @@ static void runCore(NSUInteger seconds) {   // g_queue
     backToMacShack();
 }
 
-// The game is asked to quit as the Mac's Quit does (it saves first); if it has not ended 15 s later Play ends it.
-// From the island menu's Quit, Steam's Stop, or --play-mac-seconds.
-static void askGameToQuit(NSString *why) {   // g_queue
+// The game is asked to quit as the Mac's Quit does (it saves first); if it has not ended 15 s later Play ends it. Before
+// its main was called (JIT set-up) there is nothing to save: Play ends now. From the island menu's Quit, Steam's Stop,
+// or --play-mac-seconds; any queue.
+static void askGameToQuit(NSString *why) {
     if (atomic_load(&g_finished) || atomic_exchange(&g_quitAsked, true)) return;
+    if (!atomic_load(&g_gameStarted)) {
+        note(@"%@ before the game started: Play ends", why);
+        reportExit(0);
+        backToMacShack();
+        return;
+    }
     void (*quit)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAppKitRequestQuit");   // libShackAppKit
     note(@"%@: asking the game to quit%@", why, quit ? @"" : @" (no ShackAppKitRequestQuit)");
     if (quit) dispatch_async(dispatch_get_main_queue(), ^{ quit(); });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), g_queue, ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         if (atomic_load(&g_finished)) return;
         note(@"the game did not quit within 15 s: Play ends it");
         note(@"%@", ShackHomePrefsSync());
@@ -586,7 +600,19 @@ static void askGameToQuit(NSString *why) {   // g_queue
         backToMacShack();
     });
 }
-void PlayRequestGameQuit(void) { dispatch_async(g_queue, ^{ askGameToQuit(@"the island menu's Quit"); }); }
+void PlayRequestGameQuit(void) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ askGameToQuit(@"the island menu's Quit"); });
+}
+// No JIT pool, no game: why, on the splash for a moment, then back to MacShack (Steam hears 126). Any queue, once.
+static void jitFailed(NSString *why) {
+    if (atomic_exchange(&g_noJIT, true) || atomic_load(&g_finished)) return;
+    note(@"JIT: %@: the game does not start", why);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [PlayOverlay setMessage:@"JIT didn't start. Keep the phone unlocked and LocalDevVPN connected, then start the game again."];
+    });
+    reportExit(126);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ backToMacShack(); });
+}
 void PlayToggleKeyboard(void) {
     void (*toggle)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAppKitToggleKeyboard");   // libShackAppKit
     if (toggle) toggle();
@@ -601,7 +627,7 @@ static void loadShims(void) {
 }
 
 // A Mac game MacShack prepared for Play (host/ShackPlayMac.m), from its launch note: started as MacShack starts one
-// (ShackGameLaunch.m), its end reported to MacShack, then back. Intel and JIT games come later.
+// (ShackGameLaunch.m), its end reported to MacShack, then back. Intel games come later.
 static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
     note(@"MacShack Play: Mac game %@ (pid %d), MacShack is %@", query[@"name"], getpid(), g_macshack);
     NSDictionary *launch = g_group ? [NSDictionary dictionaryWithContentsOfURL:[g_group URLByAppendingPathComponent:@"Launch/current.plist"]] : nil;
@@ -611,9 +637,8 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     waitForGameMode();
     MadeiraEngineReleasePoolSpace();   // no Madeira pool will come: the space is the game's
     BOOL met = meetMacShack();
-    if (met) watchForQuit(^{ dispatch_async(g_queue, ^{ askGameToQuit(@"Steam's Stop"); }); });
-    NSString *refused = !launch ? @"no launch note" : [launch[@"translate"] boolValue] ? @"Intel games do not run in MacShack Play yet"
-                      : [launch[@"requiresJIT"] boolValue] ? @"games that need JIT do not run in MacShack Play yet" : nil;
+    if (met) watchForQuit(^{ askGameToQuit(@"Steam's Stop"); }, ^{ jitFailed(@"MacShack's JIT extension failed"); });
+    NSString *refused = !launch ? @"no launch note" : [launch[@"translate"] boolValue] ? @"Intel games do not run in MacShack Play yet" : nil;
     if (refused) {
         note(@"refused: %@", refused);
         if (met) reportExit(EINVAL);
@@ -635,6 +660,9 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
         dispatch_async(g_queue, ^{ note(@"the game ended (%d)", code); note(@"%@", ShackHomePrefsSync()); reportExit(code); backToMacShack(); });
     }];
     loadShims();
+    BOOL jit = [launch[@"requiresJIT"] boolValue];
+    if (jit) dispatch_async(dispatch_get_main_queue(), ^{ [PlayOverlay setMessage:@"Getting JIT ready (a few seconds)…"]; });
+    if (jit && met) askJIT();   // MacShack's JIT extension connects while the game is prepared below
     __block NSDictionary *ready;
     __block NSError *error;
     dispatch_sync(dispatch_get_main_queue(), ^{ ready = ShackGamePrepareProcess(launch, &error); });
@@ -645,7 +673,19 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
         return;
     }
     if (g_steamForGame) note(@"%@", PlaySteamForGame(g_group, g_steamIPC, launch[@"code"], [launch[@"steamPid"] intValue]));
+    // A Unity Mono game runs its compiled code from a pool the debugger prepares (ShackJIT.m, ShackTrapJIT.c), as in
+    // MacShack; the debugger stops this process meanwhile, not MacShack (Big Picture's sound plays on).
+    if (jit) {
+        int mb = [ready[@"jitMB"] intValue];
+        note(@"JIT: waiting for the debugger to prepare a %d MB pool", mb);
+        if (!ShackJITPoolSetup((size_t)mb << 20)) { jitFailed(@"no debugger attached in time"); return; }
+        atomic_store(&g_jitReady, true);
+        note(@"JIT pool ready");
+        dispatch_async(dispatch_get_main_queue(), ^{ [PlayOverlay setMessage:nil]; });
+    }
+    if (atomic_load(&g_finished) || atomic_load(&g_noJIT)) return;   // quit, or JIT failed, while waiting
     ShackWatchStart([ready[@"watch"] boolValue]);
+    atomic_store(&g_gameStarted, true);
     dispatch_async(dispatch_get_main_queue(), ^{ [PlayOverlay gameStarted]; });
     dispatch_async(dispatch_get_main_queue(), ^{   // as MacShack: its run loop turns while the game's initializers load
         NSError *e = nil;
