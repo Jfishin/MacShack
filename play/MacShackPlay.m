@@ -656,6 +656,7 @@ static void loadShims(void) {
 // (ShackGameLaunch.m), its end reported to MacShack, then back. Intel games come later.
 static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
     note(@"MacShack Play: Mac game %@ (pid %d), MacShack is %@", query[@"name"], getpid(), g_macshack);
+    g_group = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:ShackPlayGroup(g_macshack)];   // before the hello: the splash needs the note
     NSDictionary *launch = g_group ? [NSDictionary dictionaryWithContentsOfURL:[g_group URLByAppendingPathComponent:@"Launch/current.plist"]] : nil;
     if (launch[@"app"]) dispatch_sync(dispatch_get_main_queue(), ^{   // the splash at once; the island menu and touch
         [PlayOverlay showWithName:query[@"name"] ?: @"" app:launch[@"app"]];   // controls with it, before the game looks for pads
