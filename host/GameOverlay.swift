@@ -143,7 +143,7 @@ struct GameOverlayView: View {
                 .onTapGesture { model.openPanel() }   // a tap or a hold: the island's area is the screen edge's middle,
                 .onLongPressGesture(minimumDuration: 0.3) { model.openPanel() }   // where a game rarely wants touches
             if model.showPanel { panel }
-            if let game = model.splashGame { SplashView(game: game).transition(.opacity) }
+            if let game = model.splashGame { AppSplash(game: game).transition(.opacity) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
@@ -191,6 +191,13 @@ struct GameOverlayView: View {
             .glassEffect(.regular, in: .rect(cornerRadius: 28))
         }
     }
+}
+
+// MacShack's splash: the game's name as its lists show it, and the JIT helper's status.
+private struct AppSplash: View {
+    @Environment(AppModel.self) private var app
+    let game: URL
+    var body: some View { SplashView(game: game, name: app.displayName(game), status: app.jitStatus) }
 }
 
 @MainActor

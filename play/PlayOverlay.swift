@@ -17,13 +17,25 @@ final class PlayOverlayModel {
     var islandLeft = true
     var size = CGSize.zero
     var islandInset: CGFloat = 62
+    var splashApp: URL?    // MacShack's launch splash, over the game until it has drawn for a moment
+    var splashShownAt = Date.now
+    var message: String?   // the splash's status line: JIT, or why the game did not start
     var islandRect: CGRect {   // as GameOverlayModel's: the island's spot, sideways, with a margin
         let width = max(60, islandInset + 6), height: CGFloat = 125 + 50
         return CGRect(x: islandLeft ? 0 : size.width - width, y: (size.height - height) / 2, width: width, height: height)
     }
-    var controllerShown: Bool { controllerWanted && !physicalPad && !showPanel }
+    var controllerShown: Bool { controllerWanted && !physicalPad && !showPanel && splashApp == nil }
 
     func quit() { quitting = true; PlayRequestGameQuit() }
+    // The game drew its first frame: the splash stays 6 s in all and 2.5 s past this, then fades (as MacShack's).
+    func firstFrame() {
+        guard splashApp != nil else { return }
+        let wait = max(2.5, 6 - Date.now.timeIntervalSince(splashShownAt))
+        Task {
+            try? await Task.sleep(for: .seconds(wait))
+            splashApp = nil
+        }
+    }
     func toggleController() {
         controllerWanted.toggle()
         UserDefaults.standard.set(!controllerWanted, forKey: "touchControlsHidden")
@@ -43,7 +55,7 @@ private final class PlayPassthroughWindow: UIWindow {
         guard let model else { return nil }
         if !pad.isHidden, !model.islandRect.contains(point), pad.point(inside: convert(point, to: pad), with: event) { return pad }
         guard let hit = super.hitTest(point, with: event) else { return nil }
-        return model.showPanel || model.islandRect.contains(point) ? hit : nil
+        return model.showPanel || model.splashApp != nil || model.islandRect.contains(point) ? hit : nil
     }
     func trackPad() {
         guard let model else { return }
@@ -106,19 +118,24 @@ struct PlayOverlayView: View {
                     .glassEffect(.regular, in: .rect(cornerRadius: 28))
                 }
             }
+            if let app = model.splashApp { SplashView(game: app, name: model.name, status: model.message ?? "").transition(.opacity) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
+        .animation(.easeInOut(duration: 0.5), value: model.splashApp)
     }
 }
 
 @objc final class PlayOverlay: NSObject {
     @MainActor private static var window: UIWindow?
+    @MainActor private static var model: PlayOverlayModel?
     // Over the game's window (the AppKit shim fills Play's own), for the whole run; before the game looks for pads.
-    @MainActor @objc static func show(name: String) {
+    @MainActor @objc static func show(name: String, app: String) {
         guard window == nil, let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
         let model = PlayOverlayModel()
         model.name = name
+        model.splashApp = URL(fileURLWithPath: app)
+        Self.model = model
         let w = PlayPassthroughWindow(windowScene: scene)
         w.model = model
         w.windowLevel = .normal + 1
@@ -134,5 +151,14 @@ struct PlayOverlayView: View {
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in MainActor.assumeIsolated { model.updatePads() } }
         }
+        NotificationCenter.default.addObserver(forName: Notification.Name("ShackGameFirstFrame"), object: nil, queue: .main) { _ in   // ShackMetal.m
+            MainActor.assumeIsolated { model.firstFrame() }
+        }
+    }
+    // The splash's status line (JIT), or why the game did not start; nil: "Starting <name>…".
+    @MainActor @objc static func setMessage(_ text: String?) { model?.message = text }
+    // The game's main was called: if it never draws through Metal, the splash still goes 45 s later.
+    @MainActor @objc static func gameStarted() {
+        Task { try? await Task.sleep(for: .seconds(45)); model?.firstFrame() }
     }
 }

@@ -261,6 +261,9 @@ targets:
       - path: host/vendor/fishhook.c
       - path: host/ShackTouchPad.m   # MacShack's on-screen pad (a GCController), polled like any pad
       - path: host/TouchControls.swift
+      - path: host/SplashView.swift   # MacShack's launch splash, over a Mac game until it draws (play/PlayOverlay.swift)
+      - path: host/Artwork.swift
+      - path: host/ICNS.swift
       # A Mac game's runtime: the game start MacShack uses for Local Games, and what it installs
       - path: host/ShackGameLaunch.m
       - path: host/ShackHooks.m

@@ -604,11 +604,14 @@ static void loadShims(void) {
 // (ShackGameLaunch.m), its end reported to MacShack, then back. Intel and JIT games come later.
 static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
     note(@"MacShack Play: Mac game %@ (pid %d), MacShack is %@", query[@"name"], getpid(), g_macshack);
+    NSDictionary *launch = g_group ? [NSDictionary dictionaryWithContentsOfURL:[g_group URLByAppendingPathComponent:@"Launch/current.plist"]] : nil;
+    if (launch[@"app"]) dispatch_sync(dispatch_get_main_queue(), ^{   // the splash at once; the island menu and touch
+        [PlayOverlay showWithName:query[@"name"] ?: @"" app:launch[@"app"]];   // controls with it, before the game looks for pads
+    });
     waitForGameMode();
     MadeiraEngineReleasePoolSpace();   // no Madeira pool will come: the space is the game's
     BOOL met = meetMacShack();
     if (met) watchForQuit(^{ dispatch_async(g_queue, ^{ askGameToQuit(@"Steam's Stop"); }); });
-    NSDictionary *launch = g_group ? [NSDictionary dictionaryWithContentsOfURL:[g_group URLByAppendingPathComponent:@"Launch/current.plist"]] : nil;
     NSString *refused = !launch ? @"no launch note" : [launch[@"translate"] boolValue] ? @"Intel games do not run in MacShack Play yet"
                       : [launch[@"requiresJIT"] boolValue] ? @"games that need JIT do not run in MacShack Play yet" : nil;
     if (refused) {
@@ -634,10 +637,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     loadShims();
     __block NSDictionary *ready;
     __block NSError *error;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        [PlayOverlay showWithName:query[@"name"] ?: @""];   // the island menu and touch controls, before the game looks for pads
-        ready = ShackGamePrepareProcess(launch, &error);
-    });
+    dispatch_sync(dispatch_get_main_queue(), ^{ ready = ShackGamePrepareProcess(launch, &error); });
     if (!ready) {
         note(@"not started: %@", error.localizedDescription);
         reportExit(126);
@@ -646,6 +646,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     }
     if (g_steamForGame) note(@"%@", PlaySteamForGame(g_group, g_steamIPC, launch[@"code"], [launch[@"steamPid"] intValue]));
     ShackWatchStart([ready[@"watch"] boolValue]);
+    dispatch_async(dispatch_get_main_queue(), ^{ [PlayOverlay gameStarted]; });
     dispatch_async(dispatch_get_main_queue(), ^{   // as MacShack: its run loop turns while the game's initializers load
         NSError *e = nil;
         if (ShackStartGuest(ready[@"codePath"], ready[@"exePath"], ready[@"args"], nil, NULL, &e)) return;
