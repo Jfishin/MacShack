@@ -112,7 +112,10 @@ static void handle(const ShackPlayMessage *request, ShackPlayMessage *reply) {
             break;
         case ShackPlayPing:
             reply->value = atomic_load(&g_quit) ? ShackPlayQuit : atomic_load(&g_jitFailed) ? ShackPlayJITFailed : 0;
-            if ([g_mode isEqualToString:@"probe"] || reply->value) note(@"ping %d from Play, MacShack %s%@", ++g_pings, stateName(), reply->value ? @": quit" : @"");
+            static uint64_t said;   // a non-zero answer is logged when it changes: Play pings every 2 s (each line rewrites the report)
+            if ([g_mode isEqualToString:@"probe"] || (reply->value && reply->value != said))
+                note(@"ping %d from Play, MacShack %s%@", ++g_pings, stateName(), reply->value == ShackPlayQuit ? @": quit" : reply->value ? @": JIT failed" : @"");
+            said = reply->value;
             break;
         case ShackPlayJIT: {
             pid_t pid = request->pid;

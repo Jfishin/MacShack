@@ -618,6 +618,32 @@ void PlayToggleKeyboard(void) {
     if (toggle) toggle();
 }
 
+// Silence on a mixable playback session (UIBackgroundModes audio) from Play's start until the game's first frame: iOS
+// keeps a playing app running in the background, so Steam's Stop reaches Play while MacShack is in front during JIT
+// set-up and loading. As MacShack's keep-alive (host/ShackPlay.m); then the game's own audio keeps Play running.
+static AVAudioEngine *g_silence;
+static NSString *keepRunningWhileLoading(void) {   // g_queue
+    AVAudioSession *session = AVAudioSession.sharedInstance;
+    NSError *error = nil;
+    BOOL ok = [session setCategory:AVAudioSessionCategoryPlayback mode:AVAudioSessionModeDefault
+                           options:AVAudioSessionCategoryOptionMixWithOthers error:&error] && [session setActive:YES error:&error];
+    g_silence = [AVAudioEngine new];
+    AVAudioFormat *format = [g_silence.outputNode inputFormatForBus:0];
+    AVAudioSourceNode *zeros = [[AVAudioSourceNode alloc] initWithFormat:format renderBlock:
+        ^OSStatus(BOOL *isSilence, const AudioTimeStamp *time, AVAudioFrameCount frames, AudioBufferList *out) {
+            for (UInt32 i = 0; i < out->mNumberBuffers; i++) memset(out->mBuffers[i].mData, 0, out->mBuffers[i].mDataByteSize);
+            return noErr;   // isSilence stays NO: the output must really run
+        }];
+    [g_silence attachNode:zeros];
+    [g_silence connect:zeros to:g_silence.mainMixerNode format:format];
+    ok = ok && [g_silence startAndReturnError:&error];
+    [NSNotificationCenter.defaultCenter addObserverForName:@"ShackGameFirstFrame" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
+        [g_silence stop];   // ShackMetal.m: the game draws, its own audio is up or coming
+        g_silence = nil;
+    }];
+    return [@"keep-alive audio while loading (playback, mix with others): " stringByAppendingString:ok ? @"playing" : error.localizedDescription];
+}
+
 // The shims MacShack links (so they are loaded before the game, as there): a game's own images link them too.
 static void loadShims(void) {
     for (NSString *n in @[@"AppKit", @"Carbon", @"CG", @"CV", @"IOKit", @"CoreAudio", @"AudioToolbox", @"OpenGL", @"Security", @"AVFoundation", @"System"]) {
@@ -634,6 +660,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     if (launch[@"app"]) dispatch_sync(dispatch_get_main_queue(), ^{   // the splash at once; the island menu and touch
         [PlayOverlay showWithName:query[@"name"] ?: @"" app:launch[@"app"]];   // controls with it, before the game looks for pads
     });
+    note(@"%@", keepRunningWhileLoading());
     waitForGameMode();
     MadeiraEngineReleasePoolSpace();   // no Madeira pool will come: the space is the game's
     BOOL met = meetMacShack();
