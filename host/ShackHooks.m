@@ -697,7 +697,7 @@ static Boolean shack_CFURLGetFSRef(CFURLRef url, void *ref) {
 
 // OpenAL's GetProcAddress answers host arm64 addresses, and the guest jumps to them as x86 (Feral's alcASASetListener call faulted inside
 // OpenAL). Answer a thunk that crosses the bridge for the functions Feral looks up, and NULL for any other name.
-uint64_t ocerz_bridge_native_thunk(const void *fn, const char *name, const char *notation) __attribute__((weak_import));   // libOcerz; MacShack Play has none yet
+uint64_t ocerz_bridge_native_thunk(const void *fn, const char *name, const char *notation) __attribute__((weak_import));   // libOcerz
 static void *AudioProcThunk(void *fn, const char *name) {
     static const struct { const char *name, *notation; } sigs[] = {
         {"alcASASetListener", "i(upu)"}, {"alcASASetSource", "i(uupu)"}, {"alBufferDataStatic", "v(iipii)"},

@@ -6,6 +6,7 @@
 #import "ShackHome.h"
 #import "ShackSteamClient.h"
 #import "ShackLoader.h"
+#import "ShackTranslated.h"
 #import <IOSurface/IOSurfaceRef.h>
 #import <UIKit/UIKit.h>
 #import "ShackHooks.h"

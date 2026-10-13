@@ -13,11 +13,10 @@ void ShackMetalSetFrameCap(int fps);   // 0 = uncapped; takes effect at the next
 int ShackMetalFrameCap(void);
 void ShackAppKitSetRenderScale(double scale);   // for windows and views from now on; 0 = the panel's own
 NSString *ShackSteamClientGameName(void);   // the game the Steam client runs now, nil if none
-// Intel games (AArchX): engine default arguments, JIT pool size, and the game's main run on the calling thread.
+// Intel games (AArchX): engine default arguments and JIT pool size (the game's start: ShackTranslated.h).
 NSArray<NSString *> *ShackTranslatedArgs(NSString *appPath, NSArray<NSString *> *args);
 int ShackTranslatedJITMB(NSString *appPath);
 BOOL ShackWantsXbox2016(NSString *appPath);   // the virtual pad's 2016 identity (Rewired games)
-int ShackRunTranslated(NSString *exePath, NSArray<NSString *> *args);
 
 @interface ShackLoader : NSObject
 /// Validate prepared/embedded code before installing process-wide guest hooks.

@@ -275,6 +275,8 @@ targets:
       - path: host/ShackWatch.m
       - path: host/GuestArguments.swift
       - path: host/ShackHome.m   # the shared home: Library folders linked into the App Group
+      - path: host/ShackTranslated.m   # Intel games under AArchX
+      - path: host/ShackPrep.m   # the host libraries AArchX's bridged calls open
     entitlements:
       path: play/MacShackPlay.entitlements
       properties:
@@ -306,6 +308,9 @@ targets:
       - target: ShackSteamClient
         link: false
         embed: false
+      - target: Ocerz   # AArchX: Intel games, as in MacShack
+        link: true
+        embed: false
       - target: ShackCoreAudio   # steamclient links CoreAudio, outside the Steam link map
         link: false
         embed: false
@@ -329,6 +334,19 @@ targets:
           for n in SteamClient AppKit Carbon CG CV IOKit Security System OpenGL CoreAudio AudioToolbox AVFoundation SwiftUI; do
             cp -f "$BUILT_PRODUCTS_DIR/libShack$n.dylib" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/libShack$n.dylib" || exit 1
           done
+          cp -f "$BUILT_PRODUCTS_DIR/libOcerz.dylib" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/libOcerz.dylib" || exit 1
+          # AArchX's API databases and x86 guest C++ runtime, as in MacShack (its "Embed Shack shim dylibs"): data to
+          # AArchX's own loader, found beside the app (ShackTranslated.m).
+          rm -rf "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX"
+          if [ -d "$SRCROOT/vendor/AArchX/runtime/apis/macos" ]; then
+            mkdir -p "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX"
+            cp -R "$SRCROOT/vendor/AArchX/runtime/apis" "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX/apis"
+            cp -R "$SRCROOT/vendor/AArchX/runtime/guest" "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX/guest"
+            if [ -d "$SRCROOT/vendor/AArchX/runtime/apis32/macos" ]; then
+              cp -R "$SRCROOT/vendor/AArchX/runtime/apis32" "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX/apis32"
+              cp -R "$SRCROOT/vendor/AArchX/runtime/guest32" "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX/guest32"
+            fi
+          fi
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(MACSHACK_BUNDLE_ID).play
@@ -338,10 +356,9 @@ targets:
         # ShackJIT.m's spike calls libsystem's pthread_jit_write_protect_np, which the iOS SDK's tbd does not list (MacShack gets
         # it from libShackSystem). Play never calls the spike, and a Release link strips it; a Debug build keeps every export
         # of its debug dylib, so the symbol is left to dyld's flat lookup. ShackJIT.m declares it weak: if dyld finds
-        # nothing, the pointer stays NULL (the spike checks it) instead of failing the launch. ShackHooks.m's AArchX
-        # thunk is weak for the same reason: Play does not have libOcerz yet.
+        # nothing, the pointer stays NULL (the spike checks it) instead of failing the launch.
         LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks"
-        OTHER_LDFLAGS: "-Wl,-U,_pthread_jit_write_protect_np -Wl,-U,_ocerz_bridge_native_thunk"
+        OTHER_LDFLAGS: "-Wl,-U,_pthread_jit_write_protect_np"
   MacShack:
     type: application
     platform: iOS
