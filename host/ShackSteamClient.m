@@ -635,18 +635,9 @@ static void gameImageAdded(const struct mach_header *h, intptr_t slide) {
 // in-process IPC. For all of the game's translated code: to Steam it is one process. AArchX's own handlers of a few
 // calls (variadic, or taking a command line) call libOcerz's imports instead: rebound here.
 static void *gSteamShim;   // libShackSteamClient
-static const void *gSteamShimBase;
 static void answerTranslatedGame(void) {
-    Dl_info d;
-    if (!gSteamShim || !dladdr(dlsym(gSteamShim, "semget"), &d)) { say(@"the Intel game's Steam API: libShackSteamClient is not loaded"); return; }
-    gSteamShimBase = d.dli_fbase;
-    struct rebinding r[] = {{"sem_open", dlsym(gSteamShim, "sem_open"), NULL}, {"shm_open", dlsym(gSteamShim, "shm_open"), NULL},
-                            {"semctl", dlsym(gSteamShim, "semctl"), NULL}, {"popen", dlsym(gSteamShim, "popen"), NULL},
-                            {"pclose", dlsym(gSteamShim, "pclose"), NULL}};
-    for (uint32_t i = 0; i < _dyld_image_count(); i++)
-        if (strstr(_dyld_get_image_name(i), "/libOcerz.dylib"))
-            rebind_symbols_image((void *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i), r, sizeof r / sizeof *r);
-    say(@"the Intel game's Steam API: Valve's x86 steamclient, answered in-process");
+    say(ShackTranslatedSteamUse(gSteamShim) ? @"the Intel game's Steam API: Valve's x86 steamclient, answered in-process"
+                                            : @"the Intel game's Steam API: libShackSteamClient is not loaded");
 }
 
 // A native Mac game in MacShack Play (Settings > Advanced, "Run Mac games in MacShack Play"; `-playMacGames YES`): its
@@ -984,22 +975,15 @@ static int steamKevent(int kq, const struct kevent *changes, int nchanges, struc
 // POSIX semaphores, the game's own pid and environment, pid watches. libShackSteamClient's stubs (what iOS lacks) only
 // when nothing else in the process defines the name: MacShack's own shims (GL, CGL) come first.
 static void *translatedGameSymbol(const char *name) {
-    if (gGame.state != 1 || !gGame.translated || !gSteamShimBase) return NULL;
+    if (gGame.state != 1 || !gGame.translated) return NULL;
     static const struct { const char *name; void *fn; } stand_ins[] = {
         {"getpid", (void *)gamePid}, {"getenv", (void *)gameGetenv}, {"kill", (void *)steamKill},
         {"waitid", (void *)steamWaitid}, {"waitpid", (void *)steamWaitpid}, {"kevent", (void *)steamKevent}};
-    static const char *const ipc[] = {"bootstrap_look_up", "bootstrap_check_in", "semget", "semop", "sem_close", "sem_unlink",
-                                      "sem_wait", "sem_trywait", "sem_post", "shm_unlink", "bind", "connect"};
     void *answer = NULL;
     for (size_t i = 0; i < sizeof stand_ins / sizeof *stand_ins && !answer; i++)
         if (!strcmp(name, stand_ins[i].name)) answer = stand_ins[i].fn;
-    for (size_t i = 0; i < sizeof ipc / sizeof *ipc && !answer; i++)
-        if (!strcmp(name, ipc[i])) answer = dlsym(gSteamShim, name);
-    if (answer) fprintf(stderr, "[SteamClient] the Intel game's %s: Steam's answer\n", name);   // once: AArchX asks once
-    Dl_info d;
-    void *own = answer ? NULL : dlsym(gSteamShim, name);   // not logged: dozens of AppKit constants; a stub logs its first call
-    if (own && dladdr(own, &d) && d.dli_fbase == gSteamShimBase && dlsym(RTLD_DEFAULT, name) == own) answer = own;
-    return answer;
+    if (answer) { fprintf(stderr, "[SteamClient] the Intel game's %s: Steam's answer\n", name); return answer; }   // once: AArchX asks once
+    return ShackTranslatedSteamSymbol(gSteamShim, name);
 }
 
 void ShackSteamClientInstall(NSString *bundle, NSString *code) {

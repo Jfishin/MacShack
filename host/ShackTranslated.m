@@ -2,7 +2,9 @@
 #import "ShackHooks.h"
 #import "ShackLoader.h"
 #import "ShackPrep.h"
+#import "vendor/fishhook.h"
 #import <dlfcn.h>
+#import <mach-o/dyld.h>
 #import <pthread.h>
 #import <sys/mman.h>
 
@@ -76,4 +78,34 @@ BOOL ShackStartTranslated(NSString *exePath, NSArray<NSString *> *args, NSError 
     pthread_t th; int e = pthread_create(&th, &at, translatedThread, (void *)CFBridgingRetain(@[exePath, args]));
     if (e) { if (error) *error = [NSError errorWithDomain:@"MacShack" code:1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"pthread_create: %d", e]}]; return NO; }
     return YES;
+}
+
+// A translated game's Steam API (Valve's x86 steamclient, translated like the game): AArchX's own handlers of a few
+// calls (variadic, or taking a command line) call libOcerz's imports, rebound here to libShackSteamClient's in-process
+// IPC; the game's code reaches the host through AArchX's symbol lookup, answered by ShackTranslatedSteamSymbol.
+static const void *gShimBase;
+BOOL ShackTranslatedSteamUse(void *shim) {
+    Dl_info d;
+    if (!shim || !dladdr(dlsym(shim, "semget"), &d)) return NO;
+    gShimBase = d.dli_fbase;
+    struct rebinding r[] = {{"sem_open", dlsym(shim, "sem_open"), NULL}, {"shm_open", dlsym(shim, "shm_open"), NULL},
+                            {"semctl", dlsym(shim, "semctl"), NULL}, {"popen", dlsym(shim, "popen"), NULL},
+                            {"pclose", dlsym(shim, "pclose"), NULL}};
+    for (uint32_t i = 0; i < _dyld_image_count(); i++)
+        if (strstr(_dyld_get_image_name(i), "/libOcerz.dylib"))
+            rebind_symbols_image((void *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i), r, sizeof r / sizeof *r);
+    return YES;
+}
+// The calls Valve's x86 steamclient made in a session on the Mac (OCERZ_BRIDGELOG_MATCH): Mach look-ups, SysV and POSIX
+// semaphores. libShackSteamClient's stubs (what iOS lacks) only when nothing else in the process defines the name: the
+// shims (GL, CGL) come first.
+void *ShackTranslatedSteamSymbol(void *shim, const char *name) {
+    if (!gShimBase) return NULL;
+    static const char *const ipc[] = {"bootstrap_look_up", "bootstrap_check_in", "semget", "semop", "sem_close", "sem_unlink",
+                                      "sem_wait", "sem_trywait", "sem_post", "shm_unlink", "bind", "connect"};
+    for (size_t i = 0; i < sizeof ipc / sizeof *ipc; i++)
+        if (!strcmp(name, ipc[i])) { fprintf(stderr, "[MacShack] the Intel game's %s: Steam's answer\n", name); return dlsym(shim, name); }
+    Dl_info d;
+    void *own = dlsym(shim, name);   // not logged: dozens of AppKit constants; a stub logs its first call
+    return own && dladdr(own, &d) && d.dli_fbase == gShimBase && dlsym(RTLD_DEFAULT, name) == own ? own : NULL;
 }
