@@ -15,3 +15,6 @@ NSString *PlaySteamProbe(NSURL *group, mach_port_t ipc, uint32_t appID, unsigned
 // steamclient_g, Steam's ipcserver through libShackSteamClient, and its SteamAPI_Init result logged. Call after the
 // game's hooks are in and before its images load. Returns a report line.
 NSString *PlaySteamForGame(NSURL *group, mach_port_t ipc, NSString *codeRoot, pid_t pid);
+// An Intel game's own Steam API (AArchX): Valve's x86 steamclient from Steam's folder, translated, answered with `pid`,
+// Steam alive while MacShack's ipcserver port is, and libShackSteamClient's IPC. Call before the game's main.
+NSString *PlaySteamForTranslatedGame(mach_port_t ipc, pid_t pid);

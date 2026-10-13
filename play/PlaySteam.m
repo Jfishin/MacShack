@@ -1,5 +1,7 @@
 #import "PlaySteam.h"
+#import "ShackHooks.h"
 #import "ShackPlay.h"
+#import "ShackTranslated.h"
 #import "vendor/fishhook.h"
 #import <dlfcn.h>
 #import <stdatomic.h>
@@ -169,4 +171,26 @@ NSString *PlaySteamForGame(NSURL *group, mach_port_t ipc, NSString *codeRoot, pi
     _dyld_register_func_for_add_image(rebindGameImage);   // after the game's hooks, before its images load
     if (!gSteamMacOS) return [@"Steam for the game: FAILED (it runs without Steam): " stringByAppendingString:error ?: @"no bootstrap_look_up in libShackSteamClient"];
     return [NSString stringWithFormat:@"Steam for the game: Play's steamclient in %@, pid %d", macos, pid];
+}
+
+// An Intel game's own Steam API (AArchX): its x86 libsteam_api loads Valve's x86 steamclient from Steam's folder (the
+// path MacShack's Steam gives, reached through the hooks' moved-container rule), translated like the game; it gets the
+// stand-in pid, Steam alive while MacShack's ipcserver port is, and libShackSteamClient's in-process IPC (the port from
+// MacShack). Call before the game's main.
+static void *gTranslatedShim;
+static void *translatedSymbol(const char *name) {
+    if (!strcmp(name, "getpid")) return (void *)steamPid;
+    if (!strcmp(name, "kill")) return (void *)gameKill;
+    return ShackTranslatedSteamSymbol(gTranslatedShim, name);
+}
+NSString *PlaySteamForTranslatedGame(mach_port_t ipc, pid_t pid) {
+    gTranslatedShim = dlopen("@rpath/libShackSteamClient.dylib", RTLD_NOW | RTLD_GLOBAL);
+    void (*provide)(const char *, mach_port_t) = gTranslatedShim ? dlsym(gTranslatedShim, "ShackSteamClientProvideService") : NULL;
+    if (!provide || !MACH_PORT_VALID(ipc) || !ShackTranslatedSteamUse(gTranslatedShim))
+        return @"Steam for the Intel game: FAILED (no libShackSteamClient or no ipcserver port): it runs without Steam";
+    provide("com.valvesoftware.steam.ipctool", ipc);
+    gPid = pid;
+    gIPC = ipc;
+    ShackHooksSetGuestSymbolAnswer(translatedSymbol);
+    return [NSString stringWithFormat:@"Steam for the Intel game: Valve's x86 steamclient, pid %d", pid];
 }

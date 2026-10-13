@@ -8,6 +8,7 @@
 #import "ShackJIT.h"
 #import "ShackPlay.h"
 #import "ShackTouchPad.h"
+#import "ShackTranslated.h"
 #import "ShackVAReport.h"
 #import "ShackWatch.h"
 #import <AVFAudio/AVFAudio.h>
@@ -653,7 +654,7 @@ static void loadShims(void) {
 }
 
 // A Mac game MacShack prepared for Play (host/ShackPlayMac.m), from its launch note: started as MacShack starts one
-// (ShackGameLaunch.m), its end reported to MacShack, then back. Intel games come later.
+// (ShackGameLaunch.m), its end reported to MacShack, then back.
 static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
     note(@"MacShack Play: Mac game %@ (pid %d), MacShack is %@", query[@"name"], getpid(), g_macshack);
     g_group = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:ShackPlayGroup(g_macshack)];   // before the hello: the splash needs the note
@@ -666,7 +667,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     MadeiraEngineReleasePoolSpace();   // no Madeira pool will come: the space is the game's
     BOOL met = meetMacShack();
     if (met) watchForQuit(^{ askGameToQuit(@"Steam's Stop"); }, ^{ jitFailed(@"MacShack's JIT extension failed"); });
-    NSString *refused = !launch ? @"no launch note" : [launch[@"translate"] boolValue] ? @"Intel games do not run in MacShack Play yet" : nil;
+    NSString *refused = !launch ? @"no launch note" : nil;
     if (refused) {
         note(@"refused: %@", refused);
         if (met) reportExit(EINVAL);
@@ -688,7 +689,7 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
         dispatch_async(g_queue, ^{ note(@"the game ended (%d)", code); note(@"%@", ShackHomePrefsSync()); reportExit(code); backToMacShack(); });
     }];
     loadShims();
-    BOOL jit = [launch[@"requiresJIT"] boolValue];
+    BOOL translate = [launch[@"translate"] boolValue], jit = translate || [launch[@"requiresJIT"] boolValue];
     if (jit) dispatch_async(dispatch_get_main_queue(), ^{ [PlayOverlay setMessage:@"Getting JIT ready (a few seconds)…"]; });
     if (jit && met) askJIT();   // MacShack's JIT extension connects while the game is prepared below
     __block NSDictionary *ready;
@@ -700,7 +701,8 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
         backToMacShack();
         return;
     }
-    if (g_steamForGame) note(@"%@", PlaySteamForGame(g_group, g_steamIPC, launch[@"code"], [launch[@"steamPid"] intValue]));
+    if (g_steamForGame) note(@"%@", translate ? PlaySteamForTranslatedGame(g_steamIPC, [launch[@"steamPid"] intValue])
+                                              : PlaySteamForGame(g_group, g_steamIPC, launch[@"code"], [launch[@"steamPid"] intValue]));
     // A Unity Mono game runs its compiled code from a pool the debugger prepares (ShackJIT.m, ShackTrapJIT.c), as in
     // MacShack; the debugger stops this process meanwhile, not MacShack (Big Picture's sound plays on).
     if (jit) {
@@ -715,7 +717,10 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
     ShackWatchStart([ready[@"watch"] boolValue]);
     atomic_store(&g_gameStarted, true);
     dispatch_async(dispatch_get_main_queue(), ^{ [PlayOverlay gameStarted]; });
-    dispatch_async(dispatch_get_main_queue(), ^{   // as MacShack: its run loop turns while the game's initializers load
+    if (translate) {   // AArchX runs the game's x86 main on a thread of its own (ShackTranslated.m); its end posts ShackGuestExited
+        NSError *e = nil;
+        if (!ShackStartTranslated(ready[@"exePath"], ready[@"args"], &e)) { note(@"not started: %@", e.localizedDescription); reportExit(126); backToMacShack(); }
+    } else dispatch_async(dispatch_get_main_queue(), ^{   // as MacShack: its run loop turns while the game's initializers load
         NSError *e = nil;
         if (ShackStartGuest(ready[@"codePath"], ready[@"exePath"], ready[@"args"], nil, NULL, &e)) return;
         dispatch_async(g_queue, ^{ note(@"not started: %@", e.localizedDescription); reportExit(126); backToMacShack(); });
