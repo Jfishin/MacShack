@@ -72,6 +72,13 @@ int main(int argc, const char **argv) {
         NSString *intelForPlay = App(root, @"IntelForPlay", [NSString stringWithUTF8String:argv[2]]);
         Check(![ShackInstaller playCodeRootForAppPath:intelForPlay guests:guests identifier:@"com.example.fixture.play" steam:NO error:&error] &&
               [error.localizedDescription containsString:@"Intel"], @"Intel games refused in Play");
+        Check([[ShackInstaller translationForAppPath:intelForPlay] isEqual:@"x86_64"] && ![ShackInstaller translationForAppPath:data],
+              @"Intel game told from its executable before anything is prepared");
+        NSString *intelCode = [ShackInstaller playCodeRootForAppPath:intelForPlay guests:guests identifier:@"com.example.fixture.play"
+                                                               steam:YES translated:YES error:&error];
+        NSDictionary *intelRecord = [NSDictionary dictionaryWithContentsOfFile:[guests stringByAppendingPathComponent:@"Play.Steam.IntelForPlay/current.plist"]];
+        Check([intelCode isEqual:intelForPlay.stringByResolvingSymlinksInPath] && [intelRecord[@"translate"] isEqual:@"x86_64"] &&
+              [intelRecord[@"requiresJIT"] boolValue], error.description ?: @"Intel game for Play: runs from its own folder");
         // The App Group's container comes as /private/var/..., and NSString's path resolving drops /private: freshly signed
         // code must still be seen inside its own folder (the phone said "Prepared code is missing or changed").
         Check([root hasPrefix:@"/var/"], @"test root under /var, as the phone's containers");

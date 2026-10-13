@@ -640,12 +640,12 @@ static void answerTranslatedGame(void) {
                                             : @"the Intel game's Steam API: libShackSteamClient is not loaded");
 }
 
-// A native Mac game in MacShack Play (Settings > Advanced, "Run Mac games in MacShack Play"; `-playMacGames YES`): its
-// code prepared and signed for Play into the App Group, Steam's arguments and launch environment in the launch note
+// A Mac game in MacShack Play (Settings > Advanced, "Run Mac games in MacShack Play"; `-playMacGames YES`): native and
+// Unity games' code prepared and signed for Play into the App Group (an Intel game runs from its own folder under
+// AArchX, nothing prepared), Steam's arguments and launch environment in the launch note
 // (container paths spelled through the shared home: Play cannot read MacShack's container), Play opened. Steam keeps
 // the stand-in pid until Play reports the end; nothing of the game loads here, so another game may follow.
-// Returns 0, or -1 to run it in-process instead (Intel; a Unity game that needs JIT while its switch, "Also Unity
-// games that need JIT", is off; or not prepared for Play).
+// Returns 0, or -1 to run it in-process instead (not prepared for Play).
 static NSString *viaSharedHome(NSString *value) {
     NSString *group = ShackHomeGroup();
     if (!group) return value;
@@ -680,13 +680,11 @@ static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
     NSString *group = ShackHomeGroup();
     if (!group) return -1;
     NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
-    if ([ShackInstaller requiresJITAtAppPath:app] && ![NSUserDefaults.standardUserDefaults boolForKey:@"playMonoGames"]) {
-        say([NSString stringWithFormat:@"%@ stays in MacShack: a Unity game that needs JIT (Settings > Advanced, \"Also Unity games that need JIT\")", name]);
-        return -1;   // before preparing anything for Play
-    }
+    NSString *arch = [ShackInstaller translationForAppPath:app];   // an Intel game: AArchX in Play, nothing prepared
     NSError *failure = nil;
     NSString *play = [ShackPlayHostBundleID() stringByAppendingString:@".play"];
-    NSString *code = [ShackInstaller playCodeRootForAppPath:app guests:[group stringByAppendingPathComponent:@"Guests"] identifier:play steam:YES error:&failure];
+    NSString *code = [ShackInstaller playCodeRootForAppPath:app guests:[group stringByAppendingPathComponent:@"Guests"] identifier:play steam:YES
+                                                translated:arch != nil error:&failure];
     if (!code) {
         say([NSString stringWithFormat:@"%@ stays in MacShack: %@", name, failure.localizedDescription]);
         return -1;
@@ -703,7 +701,8 @@ static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
         if ([key hasPrefix:@"Steam"] || [key hasPrefix:@"STEAM"]) env[key] = viaSharedHome([pair substringFromIndex:NSMaxRange(eq)]);
     }
     NSDictionary *launch = @{@"app": app, @"code": code, @"logs": [group stringByAppendingPathComponent:@"Logs"], @"args": args,
-        @"translate": @NO, @"requiresJIT": @(jit), @"fpsCap": @(ShackGameFrameCap(name, NO)), @"renderScale": @(ShackGameRenderScale(name, NO)),
+        @"translate": @(arch != nil), @"requiresJIT": @(jit || arch), @"fpsCap": @(ShackGameFrameCap(name, arch != nil)),
+        @"renderScale": @(ShackGameRenderScale(name, arch != nil)),
         @"swapMB": @0, @"steam": @YES, @"steamPid": @(kGamePid), @"env": env};
     say([@"Steam for the game in Play: " stringByAppendingString:ShackSteamPreparePlayFiles([NSURL fileURLWithPath:group], play)]);   // after a Steam update too
     NSString *notes = [group stringByAppendingPathComponent:@"Launch"];
@@ -715,7 +714,7 @@ static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
     gGame.state = 1;
     ShackHomePrefsSync();   // the game's settings for Play
     say([NSString stringWithFormat:@"%@ runs in MacShack Play as pid %d (%lu arguments, %lu Steam variables%@)", name, kGamePid,
-         (unsigned long)args.count, (unsigned long)env.count, jit ? @", JIT" : @""]);
+         (unsigned long)args.count, (unsigned long)env.count, arch ? @", Intel" : jit ? @", JIT" : @""]);
     ShackPlayStart(@"mac", @{@"name": name, @"steam": @"1"}, ^(int status) { playGameEnded(status, exe); });
     return 0;
 }

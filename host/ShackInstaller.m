@@ -402,6 +402,10 @@ static NSString *VerifiedCode(NSDictionary *m, NSString *root, NSString *appPath
     return code;
 }
 
+static NSString *TranslationOf(NSString *main) {   // the Intel architecture AArchX runs, or nil for an arm64 executable
+    return HasArm64(main) ? nil : HasSlice(main, CPU_TYPE_X86_64, -1) ? @"x86_64" : HasSlice(main, CPU_TYPE_I386, -1) ? @"i386" : nil;
+}
+
 // A game prepared where its data already is (Steam's library, the App Group's Games): its arm64 code goes into
 // root/<generation>, signed with identifier (nil: MacShack's), and is reused while VerifiedCode accepts it. An Intel
 // game's code root is its own folder (it runs under AArchX), unless translated games are refused here.
@@ -416,7 +420,7 @@ static NSString *InPlaceCodeRoot(NSString *name, NSString *appPath, NSString *ro
         return InstallFail(error, @"The game needs a valid Contents/Info.plist with a safe CFBundleExecutable filename.");
     if (!Regular(main) || !Inside(main.stringByResolvingSymlinksInPath, appPath.stringByResolvingSymlinksInPath))
         return InstallFail(error, @"The game's main executable is missing.");
-    NSString *arch = HasArm64(main) ? nil : HasSlice(main, CPU_TYPE_X86_64, -1) ? @"x86_64" : HasSlice(main, CPU_TYPE_I386, -1) ? @"i386" : nil;
+    NSString *arch = TranslationOf(main);
     if (arch && !allowTranslated) return InstallFail(error, @"Intel games do not run in MacShack Play yet.");
     if (arch) {
         NSString *summary = InstallTranslated(name, exe, appPath, appPath, root, infoPath, YES, arch, error);
@@ -516,11 +520,19 @@ static NSString *InPlaceCodeRoot(NSString *name, NSString *appPath, NSString *ro
     }
 }
 + (NSString *)playCodeRootForAppPath:(NSString *)appPath guests:(NSString *)guests identifier:(NSString *)identifier steam:(BOOL)steam error:(NSError **)error {
+    return [self playCodeRootForAppPath:appPath guests:guests identifier:identifier steam:steam translated:NO error:error];
+}
++ (NSString *)playCodeRootForAppPath:(NSString *)appPath guests:(NSString *)guests identifier:(NSString *)identifier steam:(BOOL)steam
+                          translated:(BOOL)translated error:(NSError **)error {
     @synchronized(self) {
         appPath = appPath.stringByResolvingSymlinksInPath;   // one spelling for the checks: the library may sit behind a link
         NSString *name = [(steam ? @"Play.Steam." : @"Play.") stringByAppendingString:appPath.lastPathComponent.stringByDeletingPathExtension];
-        return InPlaceCodeRoot(name, appPath, [guests stringByAppendingPathComponent:name], identifier, NO, error);
+        return InPlaceCodeRoot(name, appPath, [guests stringByAppendingPathComponent:name], identifier, translated, error);
     }
+}
++ (NSString *)translationForAppPath:(NSString *)appPath {
+    NSString *exe = [NSDictionary dictionaryWithContentsOfFile:[appPath stringByAppendingPathComponent:@"Contents/Info.plist"]][@"CFBundleExecutable"];
+    return SafeComponent(exe) ? TranslationOf([appPath stringByAppendingFormat:@"/Contents/MacOS/%@", exe]) : nil;
 }
 
 + (NSDictionary *)steamGameManifestForAppPath:(NSString *)appPath {
