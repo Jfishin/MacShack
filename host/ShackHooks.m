@@ -422,7 +422,8 @@ static int (*o_open)(const char *, int, ...), (*o_stat)(const char *, struct sta
 static DIR *(*o_opendir)(const char *);
 // A path inside this app's data container from an earlier MacShack install: iOS gives the container a new UUID at every
 // install, and games keep absolute paths (Tunic's save list: DirectoryNotFound at Continue, then a black screen with its
-// main thread spinning, 2026-10-04). The same place in today's container.
+// main thread spinning, 2026-10-04). The same place in today's container. Also another app's container (MacShack's, as
+// MacShack Play is told it: iOS answers EPERM there), through this app's own links into the shared home.
 static BOOL MovedContainer(const char *path, char *out, size_t n) {
     static const char *const prefixes[] = {"/private/var/mobile/Containers/Data/Application/", "/var/mobile/Containers/Data/Application/"};
     for (int i = 0; i < 2; i++) {
@@ -480,7 +481,7 @@ static void FileMiss(const char *call, const char *path, const char *fixed) {
     static int max = -1, n; if (max < 0) { const char *v = getenv("SHACK_FILELOG"); max = !v ? 0 : atoi(v) > 1 ? atoi(v) : 500; }
     if (n++ < max) fprintf(stderr, "[MacShack] %s miss: %s%s%s\n", call, path, fixed ? " -> " : "", fixed ?: "");
 }
-#define CI_RETRY(name, call, fail) ({ __typeof__(call) _r = (call); if (_r == (fail) && errno == ENOENT) { char _p[PATH_MAX]; int _e = errno; \
+#define CI_RETRY(name, call, fail) ({ __typeof__(call) _r = (call); if (_r == (fail) && (errno == ENOENT || errno == EPERM)) { char _p[PATH_MAX]; int _e = errno; \
     if (ShackResolveCase(p, _p, sizeof _p)) { FileMiss(name, p, _p); p = _p; _r = (call); } else { FileMiss(name, p, NULL); errno = _e; } } _r; })
 static int ci_open(const char *p, int f, ...) { va_list ap; va_start(ap, f); int m = (f & O_CREAT) ? va_arg(ap, int) : 0; va_end(ap); return CI_RETRY("open", o_open(p, f, m), -1); }
 static int ci_stat(const char *p, struct stat *b) { return CI_RETRY("stat", o_stat(p, b), -1); }

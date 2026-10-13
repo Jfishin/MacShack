@@ -9,6 +9,14 @@ static struct { char root[PATH_MAX]; } gSecond;
 #include "resolve.inc"
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL %d: %s (errno %d)\n", __LINE__, #x, errno); return 1; } } while (0)
 
+// iOS's sandbox answers a path in another app's container (MacShack's, read from MacShack Play) with EPERM, not
+// ENOENT; this Mac has no such paths, so open says so for them.
+static int sandboxed_open(const char *p, int f, ...) {
+    va_list ap; va_start(ap, f); int m = (f & O_CREAT) ? va_arg(ap, int) : 0; va_end(ap);
+    if (!strncmp(p, "/var/mobile/Containers/Data/Application/", 40) || !strncmp(p, "/denied/", 8)) { errno = EPERM; return -1; }
+    return open(p, f, m);
+}
+
 static int run(const char *vol) {
     o_open = open; o_stat = stat; o_lstat = lstat; o_access = access; o_opendir = opendir; o_fopen = fopen;
     o_mkdir = mkdir; o_unlink = unlink; o_rmdir = rmdir; o_remove = remove; o_rename = rename;
@@ -50,6 +58,13 @@ static int run(const char *vol) {
     CHECK(!strncmp(gSecond.root, "/private/", 9));
     snprintf(p, sizeof p, "%s/contents/resources/shaders.metallib", gSecond.root + 8);
     fd = ci_open(p, O_RDONLY); CHECK(fd >= 0); close(fd);
+    // Another app's container (MacShack's Steam folder, as Play is told it): the same place under this app's home.
+    o_open = sandboxed_open;
+    snprintf(p, sizeof p, "/var/mobile/Containers/Data/Application/0F0F0F0F-0F0F-0F0F-0F0F-0F0F0F0F0F0F/Library/Application Support/Pearl Abyss/CD/save/1/slot0/save.save");
+    fd = ci_open(p, O_RDONLY); CHECK(fd >= 0); close(fd);
+    // A "not permitted" outside any app container is not retried and stays one.
+    CHECK(ci_open("/denied/x", O_RDONLY) < 0 && errno == EPERM);
+    o_open = open;
     return 0;
 }
 
