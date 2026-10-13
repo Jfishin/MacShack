@@ -192,5 +192,10 @@ NSString *PlaySteamForTranslatedGame(mach_port_t ipc, pid_t pid) {
     gPid = pid;
     gIPC = ipc;
     ShackHooksSetGuestSymbolAnswer(translatedSymbol);
+    // AArchX answers the game's kill itself (its handler calls libOcerz's own import), past the symbol lookup: libsteam_api's
+    // check that Steam runs (kill(pid, 0) on MacShack's pid) gets Play's answer there.
+    for (uint32_t i = 0; i < _dyld_image_count(); i++)
+        if (strstr(_dyld_get_image_name(i), "/libOcerz.dylib"))
+            rebind_symbols_image((void *)_dyld_get_image_header(i), _dyld_get_image_vmaddr_slide(i), (struct rebinding[]){{"kill", gameKill, NULL}}, 1);
     return [NSString stringWithFormat:@"Steam for the Intel game: Valve's x86 steamclient, pid %d", pid];
 }
