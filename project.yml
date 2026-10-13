@@ -308,8 +308,8 @@ targets:
       - target: ShackSteamClient
         link: false
         embed: false
-      - target: Ocerz   # AArchX: Intel games, as in MacShack
-        link: true
+      - target: Ocerz   # AArchX: Intel games, as in MacShack; embedded below, loaded only for an Intel game (ShackTranslated.m)
+        link: false
         embed: false
       - target: ShackCoreAudio   # steamclient links CoreAudio, outside the Steam link map
         link: false

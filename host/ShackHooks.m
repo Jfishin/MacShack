@@ -499,7 +499,7 @@ static int ci_rmdir(const char *p) { return CI_RETRY("rmdir", o_rmdir(p), -1); }
 static int ci_remove(const char *p) { return CI_RETRY("remove", o_remove(p), -1); }
 static int (*o_rename)(const char *, const char *);
 static int ci_rename(const char *a, const char *b) {
-    int r = o_rename(a, b), e = errno; if (r == 0 || e != ENOENT) return r;
+    int r = o_rename(a, b), e = errno; if (r == 0 || (e != ENOENT && e != EPERM)) return r;
     char ra[PATH_MAX], rb[PATH_MAX];
     BOOL fa = ShackResolveCase(a, ra, sizeof ra), fb = ShackResolveCase(b, rb, sizeof rb);
     FileMiss("rename", a, fa ? ra : NULL); FileMiss("rename", b, fb ? rb : NULL);
@@ -697,15 +697,16 @@ static Boolean shack_CFURLGetFSRef(CFURLRef url, void *ref) {
 
 // OpenAL's GetProcAddress answers host arm64 addresses, and the guest jumps to them as x86 (Feral's alcASASetListener call faulted inside
 // OpenAL). Answer a thunk that crosses the bridge for the functions Feral looks up, and NULL for any other name.
-uint64_t ocerz_bridge_native_thunk(const void *fn, const char *name, const char *notation) __attribute__((weak_import));   // libOcerz
 static void *AudioProcThunk(void *fn, const char *name) {
+    static uint64_t (*thunk)(const void *, const char *, const char *);   // libOcerz's; MacShack Play loads it for an Intel game
+    if (!thunk) thunk = (uint64_t (*)(const void *, const char *, const char *))dlsym(RTLD_DEFAULT, "ocerz_bridge_native_thunk");
     static const struct { const char *name, *notation; } sigs[] = {
         {"alcASASetListener", "i(upu)"}, {"alcASASetSource", "i(uupu)"}, {"alBufferDataStatic", "v(iipii)"},
         {"alcMacOSXMixerMaxiumumBusses", "v(i)"},
         {"alSourceAddNotification", "i(uuc{v(uup)}p)"}, {"alSourceRemoveNotification", "i(uuc{v(uup)}p)"}};
-    if (!fn || !name || !ocerz_bridge_native_thunk) return NULL;
+    if (!fn || !name || !thunk) return NULL;
     for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++)
-        if (!strcmp(name, sigs[i].name)) return (void *)ocerz_bridge_native_thunk(fn, name, sigs[i].notation);
+        if (!strcmp(name, sigs[i].name)) return (void *)thunk(fn, name, sigs[i].notation);
     return NULL;
 }
 static void *shack_alcGetProcAddress(void *dev, const char *name) {
@@ -734,6 +735,9 @@ void *ShackHookForGuestSymbol(const char *name) {
         {"CFPreferencesCopyKeyList", shack_CFPreferencesCopyKeyList},
         {"SCDynamicStoreCopyComputerName", shack_SCDynamicStoreCopyComputerName}, {"proc_pidpath", shack_proc_pidpath},
         {"stat", ci_stat}, {"lstat", ci_lstat}, {"access", ci_access}, {"opendir", ci_opendir},
+        // An Intel game's own file writes too (Valve's x86 steamclient in Steam's folder, as MacShack Play is told it)
+        {"fopen", ci_fopen}, {"fopen$DARWIN_EXTSN", ci_fopen}, {"mkdir", ci_mkdir}, {"unlink", ci_unlink},
+        {"rmdir", ci_rmdir}, {"remove", ci_remove}, {"rename", ci_rename},
         {"IOServiceGetMatchingServices", shack_IOServiceGetMatchingServices}, {"IOIteratorNext", shack_IOIteratorNext},
         {"IORegistryEntryCreateCFProperties", shack_IORegistryEntryCreateCFProperties},
         {"IORegistryEntryGetChildIterator", shack_IORegistryEntryGetChildIterator},

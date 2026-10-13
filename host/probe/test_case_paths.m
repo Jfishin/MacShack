@@ -17,6 +17,11 @@ static int sandboxed_open(const char *p, int f, ...) {
     return open(p, f, m);
 }
 
+static int sandboxed_rename(const char *a, const char *b) {
+    if (!strncmp(a, "/var/mobile/Containers/Data/Application/", 40) || !strncmp(b, "/var/mobile/Containers/Data/Application/", 40)) { errno = EPERM; return -1; }
+    return rename(a, b);
+}
+
 static int run(const char *vol) {
     o_open = open; o_stat = stat; o_lstat = lstat; o_access = access; o_opendir = opendir; o_fopen = fopen;
     o_mkdir = mkdir; o_unlink = unlink; o_rmdir = rmdir; o_remove = remove; o_rename = rename;
@@ -65,6 +70,15 @@ static int run(const char *vol) {
     // A "not permitted" outside any app container is not retried and stays one.
     CHECK(ci_open("/denied/x", O_RDONLY) < 0 && errno == EPERM);
     o_open = open;
+    // Steam's own files written through another app's container spelling: a temp file renamed over its target.
+    o_rename = sandboxed_rename;
+    snprintf(cmd, sizeof cmd, "echo t > '%s/Library/Application Support/Pearl Abyss/CD/save/1/slot0/steam.tmp'", gHome); CHECK(system(cmd) == 0);
+    char from[PATH_MAX], to[PATH_MAX];
+    snprintf(from, sizeof from, "/var/mobile/Containers/Data/Application/0F0F0F0F-0F0F-0F0F-0F0F-0F0F0F0F0F0F/Library/Application Support/Pearl Abyss/CD/save/1/slot0/steam.tmp");
+    snprintf(to, sizeof to, "/var/mobile/Containers/Data/Application/0F0F0F0F-0F0F-0F0F-0F0F-0F0F0F0F0F0F/Library/Application Support/Pearl Abyss/CD/save/1/slot0/steam.cfg");
+    CHECK(ci_rename(from, to) == 0);
+    snprintf(made, sizeof made, "%s/Library/Application Support/Pearl Abyss/CD/save/1/slot0/steam.cfg", gHome); CHECK(stat(made, &st) == 0);
+    o_rename = rename;
     return 0;
 }
 

@@ -10,9 +10,13 @@
 
 // Intel games: AArchX (vendor/AArchX, libOcerz.dylib; prep/aarchx/README.md) translates the original x86_64
 // executable from Documents/Games. Its bridged calls open the same libraries prep maps arm64 games to.
-int ocerz_main(int argc, char **argv);
-void ocerz_bridge_set_host_open(void *(*open)(const char *install_name));
-void ocerz_bridge_set_host_symbol(void *(*sym)(const char *host_sym));
+// libOcerz: linked by MacShack; MacShack Play loads it only for an Intel game, as its 86 MB of data would otherwise sit
+// in the address space Play keeps for a Windows program's JIT pool (MadeiraEngine.m).
+static void *ocerzSymbol(const char *name) {
+    static void *lib;
+    if (!lib) lib = dlopen("@rpath/libOcerz.dylib", RTLD_NOW | RTLD_GLOBAL);
+    return lib ? dlsym(lib, name) : NULL;
+}
 
 static void *ocerzHostOpen(const char *installName) {
     NSString *lib = [ShackPrep hostLibraryForInstallName:@(installName)];
@@ -54,13 +58,17 @@ int ShackRunTranslated(NSString *exePath, NSArray<NSString *> *args) {
     // i386 games (m32, picked by AArchX's main from the Mach-O): their API databases are OCERZ_APIDB + "32"; the guest
     // GNU C++ runtime lives beside the x86_64 one
     setenv("OCERZ_GUEST32_ROOT", [gHostBundlePath stringByAppendingPathComponent:@"AArchX/guest32"].fileSystemRepresentation, 1);
-    ocerz_bridge_set_host_open(ocerzHostOpen);
-    ocerz_bridge_set_host_symbol(ShackHookForGuestSymbol);   // game bundle identity, case-insensitive paths
+    int (*ocerzMain)(int, char **) = (int (*)(int, char **))ocerzSymbol("ocerz_main");
+    void (*setHostOpen)(void *(*)(const char *)) = (void (*)(void *(*)(const char *)))ocerzSymbol("ocerz_bridge_set_host_open");
+    void (*setHostSymbol)(void *(*)(const char *)) = (void (*)(void *(*)(const char *)))ocerzSymbol("ocerz_bridge_set_host_symbol");
+    if (!ocerzMain || !setHostOpen || !setHostSymbol) { NSLog(@"[MacShack] AArchX (libOcerz) did not load: %s", dlerror()); return 127; }
+    setHostOpen(ocerzHostOpen);
+    setHostSymbol(ShackHookForGuestSymbol);   // game bundle identity, case-insensitive paths
     int argc = 3 + (int)args.count;
     char **argv = calloc((size_t)argc + 1, sizeof *argv);   // lives for the process
     argv[0] = strdup("ocerz"); argv[1] = strdup("-native"); argv[2] = strdup(exePath.fileSystemRepresentation);
     for (NSUInteger i = 0; i < args.count; i++) argv[3 + i] = strdup(args[i].UTF8String);
-    return ocerz_main(argc, argv);   // runs the guest's main on this thread, as ShackStartGuest does
+    return ocerzMain(argc, argv);   // runs the guest's main on this thread, as ShackStartGuest does
 }
 
 static void *translatedThread(void *arg) {
@@ -86,7 +94,7 @@ BOOL ShackStartTranslated(NSString *exePath, NSArray<NSString *> *args, NSError 
 static const void *gShimBase;
 BOOL ShackTranslatedSteamUse(void *shim) {
     Dl_info d;
-    if (!shim || !dladdr(dlsym(shim, "semget"), &d)) return NO;
+    if (!shim || !dladdr(dlsym(shim, "semget"), &d) || !ocerzSymbol("ocerz_main")) return NO;   // libOcerz loaded: its imports are rebound
     gShimBase = d.dli_fbase;
     struct rebinding r[] = {{"sem_open", dlsym(shim, "sem_open"), NULL}, {"shm_open", dlsym(shim, "shm_open"), NULL},
                             {"semctl", dlsym(shim, "semctl"), NULL}, {"popen", dlsym(shim, "popen"), NULL},
