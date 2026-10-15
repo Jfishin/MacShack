@@ -86,6 +86,8 @@ or iOS kills dyld on a cached invalid page.
 | Text input (`interpretKeyEvents:`) | `clang -fobjc-arc shims/AppKit/ShackTextInput.m host/probe/test_textinput.m -framework Foundation -o /tmp/t && /tmp/t` (expect `text input ok`) |
 | Key events from Steam's on-screen keyboard (`CGEventPost`, iOS simulator) | header of `host/probe/test_cg_keys.m` (expect `cg keys ok`) |
 | Pointer warp and read-back (`CGWarpMouseCursorPosition`, `HIGetMousePosition`, iOS simulator) | header of `host/probe/test_mouse_warp.m` (expect `mouse warp ok`) |
+| Carbon shim: folders, catalog info, dates, Multiprocessing Services semaphores and critical regions (iOS simulator) | header of `host/probe/test_carbon.m` (expect `carbon ok`) |
+| metalgldrv's CGL-over-EGL adapter (Mac, against a metalgldrv macOS build) | header of `host/probe/test_gldrv.m` (expect `gldrv ok`) |
 
 ### Steam
 

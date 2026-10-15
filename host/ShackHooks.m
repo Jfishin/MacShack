@@ -761,6 +761,7 @@ void *ShackHookForGuestSymbol(const char *name) {
     if (!gGuestCFBundle) return NULL;   // before ShackHooksInstall the originals are not set yet
     // Desktop GL (SHACK_OPENGL=1): the same translations and ES functions an arm64 game gets through dlsym
     if (gGLGetProc && name[0] == 'g' && name[1] == 'l') return gGLGetProc(name);
+    if (gGLGetProc && !strncmp(name, "CGL", 3)) { void *f = gGLGetProc(name); if (f) return f; }   // metalgldrv's (ShackGLDrv.m)
     for (size_t i = 0; i < sizeof hooks / sizeof *hooks; i++)
         if (!strcmp(name, hooks[i].name)) return hooks[i].fn;
     return gGuestSymbolAnswer ? gGuestSymbolAnswer(name) : NULL;

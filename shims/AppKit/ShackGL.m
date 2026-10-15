@@ -95,8 +95,14 @@ void ShackGLSurfaceBlit(const GLuint names[3], const GLint size[2], GLuint dst, 
 }
 static _Atomic unsigned gGLFrames;
 unsigned ShackGLTakeFrameCount(void) { return atomic_exchange(&gGLFrames, 0); }   // presents since the last call (ShackWatch)
-- (void)flushBuffer {
+void ShackGLPresented(void) {   // every present, on the ES layer or on metalgldrv (ShackGLDrv.m)
     atomic_fetch_add(&gGLFrames, 1);
+    static atomic_bool presented;   // the launch splash (GameOverlay.swift) waits for the game to draw, as for Metal
+    if (!atomic_exchange(&presented, true)) dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:@"ShackGameFirstFrame" object:nil];
+    });
+}
+- (void)flushBuffer {
     traceFrame();
     if (_size.width) {
         if (tLayerFBO == _surface[0] && _surface[0]) ShackGLSurfaceBlit(_surface, _surfaceSize, _fbo, (GLint)_size.width, (GLint)_size.height);
@@ -104,10 +110,7 @@ unsigned ShackGLTakeFrameCount(void) { return atomic_exchange(&gGLFrames, 0); } 
         glBindRenderbuffer(GL_RENDERBUFFER, _color);
         [_ctx presentRenderbuffer:GL_RENDERBUFFER];
         glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)rb);
-        static atomic_bool presented;   // the launch splash (GameOverlay.swift) waits for the game to draw, as for Metal
-        if (!atomic_exchange(&presented, true)) dispatch_async(dispatch_get_main_queue(), ^{
-            [NSNotificationCenter.defaultCenter postNotificationName:@"ShackGameFirstFrame" object:nil];
-        });
+        ShackGLPresented();
     }
     [self fitLayer];
     [self useDefaultFramebuffer];
@@ -610,7 +613,9 @@ S256(0) S256(1) S256(2) S256(3)
 #define P256(n) P64(n##0) P64(n##1) P64(n##2) P64(n##3)
 static void *const gMissingStub[SHACK_GL_SLOTS] = { P256(0) P256(1) P256(2) P256(3) };
 
+BOOL ShackGLDrvOn(void); void *ShackGLDrvProc(const char *name);   // ShackGLDrv.m: SHACK_GL=metalgldrv
 void *ShackGLGetProcAddress(const char *name) {
+    if (ShackGLDrvOn()) return ShackGLDrvProc(name);
     static const struct { const char *name; void *fn; } own[] = {
         {"glGetString", shack_glGetString}, {"glShaderSource", shack_glShaderSource}, {"glClearDepth", shack_glClearDepth},
         {"glDepthRange", shack_glDepthRange}, {"glBindFramebuffer", shack_glBindFramebuffer},
