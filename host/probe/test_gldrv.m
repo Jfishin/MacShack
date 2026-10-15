@@ -11,6 +11,7 @@
 typedef int Err;   // CGLError
 void *ShackGLDrvProc(const char *name);
 void ShackGLDrvAttach(void *ctx, CALayer *box, BOOL best);
+int ShackGLDrvMakeCurrentCalls(void);   // eglMakeCurrent calls so far (SHACK_GLDRV_TEST)
 
 int main(void) { @autoreleasepool {
     setenv("SHACK_GL", "metalgldrv", 1);
@@ -34,6 +35,11 @@ int main(void) { @autoreleasepool {
     CALayer *box = [CALayer layer]; box.bounds = CGRectMake(0, 0, 40, 20);
     ShackGLDrvAttach(ctx, box, NO);
     assert(setCurrent(ctx) == 0 && getCurrent() == ctx);
+    // Feral's renderer sets the current context around nearly every GL call: the same one again must not reach EGL, where
+    // each eglMakeCurrent flushes (Batman: a render pass per draw, 10 fps)
+    int calls = ShackGLDrvMakeCurrentCalls();
+    for (int i = 0; i < 100; i++) assert(setCurrent(ctx) == 0);
+    assert(ShackGLDrvMakeCurrentCalls() == calls);
     CAMetalLayer *layer = (CAMetalLayer *)box.sublayers.firstObject;
     assert([layer isKindOfClass:CAMetalLayer.class]);
 

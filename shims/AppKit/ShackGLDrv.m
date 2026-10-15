@@ -71,6 +71,16 @@ static void *driver(void) {   // NULL unless SHACK_GL=metalgldrv and the driver 
     return lib;
 }
 BOOL ShackGLDrvOn(void) { return driver() != NULL; }
+#ifdef SHACK_GLDRV_TEST
+static int gMakeCurrentCalls;
+int ShackGLDrvMakeCurrentCalls(void) { return gMakeCurrentCalls; }
+#endif
+static EGLBoolean makeCurrent(EGLSurface surface, EGLContext ctx) {
+#ifdef SHACK_GLDRV_TEST
+    gMakeCurrentCalls++;
+#endif
+    return egl.MakeCurrent(gDisplay, surface, surface, ctx);
+}
 
 @interface ShackDrvFormat : NSObject { @public EGLConfig config; BOOL core; } @end
 @implementation ShackDrvFormat @end
@@ -126,7 +136,7 @@ static void relayoutIfNeeded(ShackDrvContext *c) {
 void ShackGLDrvAttach(void *obj, CALayer *box, BOOL best) {
     ShackDrvContext *c = (__bridge ShackDrvContext *)obj;
     if (c->surface) {
-        if (tCurrent == c) { egl.MakeCurrent(gDisplay, NULL, NULL, c->ctx); tBound = NULL; }
+        if (tCurrent == c) { makeCurrent(NULL, c->ctx); tBound = NULL; }
         egl.DestroySurface(gDisplay, c->surface);
         c->surface = NULL;
     }
@@ -142,7 +152,7 @@ void ShackGLDrvAttach(void *obj, CALayer *box, BOOL best) {
     c->surface = egl.CreateWindowSurface(gDisplay, c->format->config, (__bridge void *)c->layer, NULL);
     NSLog(@"[ShackGL] metalgldrv window surface %.0fx%.0f: %@", c->laidSize.width, c->laidSize.height,
           c->surface ? @"made" : [NSString stringWithFormat:@"FAILED (EGL 0x%x)", egl.GetError()]);
-    if (tCurrent == c && c->surface && egl.MakeCurrent(gDisplay, c->surface, c->surface, c->ctx)) tBound = c->surface;
+    if (tCurrent == c && c->surface && makeCurrent(c->surface, c->ctx)) tBound = c->surface;
 }
 
 // ---- CGL ----------------------------------------------------------------------------------------------------------
@@ -197,13 +207,16 @@ static DrvError drv_CreateContext(void *pix, void *share, void **out) {
 }
 static DrvError drv_DestroyContext(void *ctx) {
     if (!ctx) return kDrvBadContext;
-    if (tCurrent == (__bridge ShackDrvContext *)ctx) { egl.MakeCurrent(gDisplay, NULL, NULL, NULL); tCurrent = nil; tBound = NULL; }
+    if (tCurrent == (__bridge ShackDrvContext *)ctx) { makeCurrent(NULL, NULL); tCurrent = nil; tBound = NULL; }
     CFRelease(ctx);
     return kDrvOK;
 }
 static DrvError drv_SetCurrentContext(void *ctx) {
     ShackDrvContext *c = (__bridge ShackDrvContext *)ctx;
-    if (!egl.MakeCurrent(gDisplay, c ? c->surface : NULL, c ? c->surface : NULL, c ? c->ctx : NULL)) return kDrvBadContext;
+    // Feral's renderer sets the current context around nearly every GL call; on EGL each make-current flushes the driver
+    // (Batman: a render pass per draw, 10 fps). The same context on the same surface again is nothing to do, as in CGL.
+    if (c == tCurrent && (!c || tBound == c->surface)) return kDrvOK;
+    if (!makeCurrent(c ? c->surface : NULL, c ? c->ctx : NULL)) return kDrvBadContext;
     tCurrent = c; tBound = c ? c->surface : NULL;
     if (c && c->surface) egl.SwapInterval(gDisplay, c->interval);
     return kDrvOK;
@@ -221,7 +234,7 @@ static DrvError drv_FlushDrawable(void *ctx) {
     relayoutIfNeeded(c);
     if (!c->surface) { ((void (*)(void))dlsym(driver(), "glFlush"))(); return kDrvOK; }
     // A view attached while the context was current on another thread: bind the surface here.
-    if (tCurrent == c && tBound != c->surface && egl.MakeCurrent(gDisplay, c->surface, c->surface, c->ctx)) tBound = c->surface;
+    if (tCurrent == c && tBound != c->surface && makeCurrent(c->surface, c->ctx)) tBound = c->surface;
     return egl.SwapBuffers(gDisplay, c->surface) ? kDrvOK : kDrvBadDrawable;
 }
 static DrvError drv_ClearDrawable(void *ctx) { if (ctx) ShackGLDrvAttach(ctx, nil, NO); return ctx ? kDrvOK : kDrvBadContext; }
