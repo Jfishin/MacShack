@@ -3,7 +3,7 @@
 // CGL and NSOpenGLContext a Mac game uses run here on EGL: a CGL context is an EGL context and, once a view is attached, a
 // window surface on a CAMetalLayer inside the view's layer. The game's gl* lookups go to the driver and its CGL context
 // calls to the functions below (ShackGLGetProcAddress, ShackHooks); renderer queries and CGLLockContext stay
-// libShackOpenGL's. libmetalgldrv.dylib (the driver's cmake/ios.cmake build) goes in the app's Frameworks.
+// libShackOpenGL's. libmetalgldrv.dylib is vendor/metalgldrv, built and embedded by prep/metalgldrv/build.sh.
 // host/probe/test_gldrv.m checks the CGL part on the Mac (SHACK_GLDRV_TEST: no AppKit shim there).
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>

@@ -89,7 +89,8 @@ MacShack is source only for now: you build it on a Mac and install it with your 
 **On your Mac**
 
 - Xcode 26.4 or newer (Mac App Store), signed in to your Apple Account (Xcode > Settings > Accounts).
-- [Homebrew](https://brew.sh), then XcodeGen: `brew install xcodegen`.
+- [Homebrew](https://brew.sh), then XcodeGen, CMake and Ninja: `brew install xcodegen cmake ninja` (CMake and Ninja
+  build the OpenGL driver, metalgldrv; without them the apps build without it).
 - An Apple developer account. A free one works, with limits: apps stop opening after 7 days until you install them
   again, at most 3 apps can be installed through it at once, and it can register 10 new App IDs a week. MacShack uses
   two App IDs (the app and its JIT extension); MacShack Play, for Windows games, is a third, and a second installed app.

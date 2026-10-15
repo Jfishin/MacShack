@@ -326,6 +326,11 @@ targets:
       - target: ShackSwiftUI
         link: false
         embed: false
+    preBuildScripts:
+      - name: Build metalgldrv
+        script: |
+          bash "$SRCROOT/prep/metalgldrv/build.sh" "$PLATFORM_NAME" "$TARGET_TEMP_DIR/metalgldrv"
+        basedOnDependencyAnalysis: false
     postCompileScripts:
       - name: Embed the Steam client's shims
         script: |
@@ -338,6 +343,10 @@ targets:
             cp -f "$BUILT_PRODUCTS_DIR/libShack$n.dylib" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/libShack$n.dylib" || exit 1
           done
           cp -f "$BUILT_PRODUCTS_DIR/libOcerz.dylib" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/libOcerz.dylib" || exit 1
+          # metalgldrv (prep/metalgldrv/README.md), when it was built: the OpenGL of SHACK_GL=metalgldrv games
+          if [ -f "$TARGET_TEMP_DIR/metalgldrv/libmetalgldrv.dylib" ]; then
+            cp -f "$TARGET_TEMP_DIR/metalgldrv/libmetalgldrv.dylib" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/libmetalgldrv.dylib" || exit 1
+          fi
           # AArchX's API databases and x86 guest C++ runtime, as in MacShack (its "Embed Shack shim dylibs"): data to
           # AArchX's own loader, found beside the app (ShackTranslated.m).
           rm -rf "$TARGET_BUILD_DIR/$WRAPPER_NAME/AArchX"
@@ -491,6 +500,10 @@ targets:
           bash "$SRCROOT/host/probe/build_probe_fixtures.sh"
         outputFiles:
           - $(SRCROOT)/host/probe/out/mac.metallib
+      - name: Build metalgldrv
+        script: |
+          bash "$SRCROOT/prep/metalgldrv/build.sh" "$PLATFORM_NAME" "$TARGET_TEMP_DIR/metalgldrv"
+        basedOnDependencyAnalysis: false
     postCompileScripts:
       - name: Embed Shack shim dylibs
         script: |
@@ -499,6 +512,10 @@ targets:
           for d in "$BUILT_PRODUCTS_DIR"/libShack*.dylib "$BUILT_PRODUCTS_DIR"/libOcerz.dylib; do
             cp -f "$d" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/$(basename "$d")" || exit 1
           done
+          # metalgldrv (prep/metalgldrv/README.md), when it was built: the OpenGL of SHACK_GL=metalgldrv games
+          if [ -f "$TARGET_TEMP_DIR/metalgldrv/libmetalgldrv.dylib" ]; then
+            cp -f "$TARGET_TEMP_DIR/metalgldrv/libmetalgldrv.dylib" "$FW/" && codesign -f -s "$EXPANDED_CODE_SIGN_IDENTITY" "$FW/libmetalgldrv.dylib" || exit 1
+          fi
           # Prep outputs (the Mono catalog) live in build/, which a git worktree does not share: use the main checkout's.
           ART="$SRCROOT/build"
           [ -d "$ART/mono-catalog" ] || ART="$(git -C "$SRCROOT" rev-parse --path-format=absolute --git-common-dir)/../build"

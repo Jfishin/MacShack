@@ -1,7 +1,7 @@
 // Mac check of the CGL-over-EGL adapter (shims/AppKit/ShackGLDrv.m) on metalgldrv's macOS build, which has EGL too
-// (cmake -G Ninja -B build-mac && ninja -C build-mac in a metalgldrv checkout):
+// (cd vendor/metalgldrv && cmake -G Ninja -B build/mac -DMGL_BUILD_TESTS=OFF && ninja -C build/mac, patch applied):
 //   clang -fobjc-arc -DSHACK_GLDRV_TEST shims/AppKit/ShackGLDrv.m host/probe/test_gldrv.m -framework Foundation \
-//     -framework QuartzCore -framework CoreGraphics -Wl,-rpath,<metalgldrv>/build-mac -o /tmp/t && /tmp/t
+//     -framework QuartzCore -framework CoreGraphics -Wl,-rpath,"$PWD/vendor/metalgldrv/build/mac" -o /tmp/t && /tmp/t
 // expect "gldrv ok". A context gets a window surface in a layer of the view, draws, presents, and follows the CGL surface
 // backing size (Batman: 1600x900 stretched over the window).
 #import <Foundation/Foundation.h>

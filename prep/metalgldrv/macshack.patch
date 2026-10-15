@@ -1,0 +1,306 @@
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 15a7d43..91a4aea 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -342,6 +342,10 @@ Read by the driver at startup (`envFlag`/`envInt` in `src/util/log.mm`, or `gete
+   * SPEEDDEMON, TURBOHAX plus: `GL_QUERY_RESULT` never waits for the GPU (an unfinished occlusion
+     query reads as visible, other queries give their previous result); `glFinish` submits without
+     waiting; robust-access contexts get no texelFetch bounds checks; anisotropy is capped at 2x.
++* `METALGLDRV_OCCLUSION_EARLY_SUBMIT=1` – the first draw outside an occlusion query after some ended submits the work so
++  far (at most twice between presents), so a game that reads last frame's results early in the next (Feral's Unreal
++  Engine 3 ports poll them) finds them done instead of waiting for that frame's GPU work, sent only at the present.
++  Results stay exact: answering "visible" instead would turn off the game's occlusion culling.
+ * macOS: `METALGLDRV_*=value` lines in `~/Library/Application Support/metalgldrv/metalgldrv.conf`
+   apply to every process that loads the driver, unless its environment sets them (for hosts whose
+   environment is hard to reach, such as Steam → NotProton → CrossOver). `METALGLDRV_CONF=<path>`
+@@ -404,6 +408,9 @@ Read by the driver at startup (`envFlag`/`envInt` in `src/util/log.mm`, or `gete
+   sync (without it frames show out of turn: the image jumps back and forth and tears, which Apple's GL, compositing
+   its windows, never shows), so they are capped at the display's refresh rate; only an explicit
+   `METALGLDRV_SWAP_INTERVAL=0` presents without display sync.
++* `METALGLDRV_RELEASE_NONE=1` – CGL contexts keep their open pass when released or switched (GL_KHR_context_flush_control's
++  release behavior none, which an EGL embedder asks for with `EGL_CONTEXT_RELEASE_BEHAVIOR_KHR`). For apps that set and
++  clear their context around nearly every call (Feral's ports): with the flush each call is its own render pass.
+ * `METALGLDRV_CAPTURE_SEQ=<file>` – appends every presented frame, downscaled to 480x270 RGB, to the file (read
+   back asynchronously; for finding out-of-order or glitched frames in a sequence).
+ * `METALGLDRV_MAX_FPS`, `METALGLDRV_CAPTURE*` (frame and
+diff --git a/src/egl/egl.mm b/src/egl/egl.mm
+index 30660af..36e4643 100644
+--- a/src/egl/egl.mm
++++ b/src/egl/egl.mm
+@@ -410,7 +410,7 @@ EGLAPI_EXPORT EGLContext EGLAPIENTRY eglCreateContext(EGLDisplay dpy, EGLConfig
+     const Config* c = configFromHandle(config);
+     if (!c && config != EGL_NO_CONFIG_KHR) return fail(EGL_BAD_CONFIG, EGL_NO_CONTEXT);
+     EGLint major = 0, minor = 0, profile = 0, flags = 0, clientVersion = 0;
+-    bool debug = false, fwd = false, robust = false, noError = false, loseOnReset = false;
++    bool debug = false, fwd = false, robust = false, noError = false, loseOnReset = false, releaseFlush = true;
+     for (const EGLint* a = attrib_list; a && *a != EGL_NONE; a += 2) {
+         switch (a[0]) {
+         case EGL_CONTEXT_MAJOR_VERSION: major = a[1]; break;  // == EGL_CONTEXT_CLIENT_VERSION
+@@ -423,7 +423,7 @@ EGLAPI_EXPORT EGLContext EGLAPIENTRY eglCreateContext(EGLDisplay dpy, EGLConfig
+         case EGL_CONTEXT_OPENGL_NO_ERROR_KHR: noError = a[1]; break;
+         case EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY:
+         case 0x3138 /* EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT */: loseOnReset = a[1] == EGL_LOSE_CONTEXT_ON_RESET; break;
+-        case EGL_CONTEXT_RELEASE_BEHAVIOR_KHR: break;  // KHR_context_flush_control: we always flush on release
++        case EGL_CONTEXT_RELEASE_BEHAVIOR_KHR: releaseFlush = a[1] != EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR; break;
+         default: return fail(EGL_BAD_ATTRIBUTE, EGL_NO_CONTEXT);
+         }
+     }
+@@ -453,6 +453,7 @@ EGLAPI_EXPORT EGLContext EGLAPIENTRY eglCreateContext(EGLDisplay dpy, EGLConfig
+     auto* impl = new EGLContextImpl();
+     impl->ctx = new Context(share, 4, 6, core, debug, fwd, robust, noError);
+     impl->ctx->loseContextOnReset = loseOnReset;
++    impl->ctx->releaseFlush = releaseFlush;
+     impl->config = c;
+     impl->clientVersion = clientVersion;
+     impl->api = t_egl.api;
+@@ -505,8 +506,13 @@ EGLAPI_EXPORT EGLBoolean EGLAPIENTRY eglMakeCurrent(EGLDisplay dpy, EGLSurface d
+     }
+     EGLContextImpl* old = t_egl.ctx;
+     if (old && old != c) {
+-        old->ctx->flush();
+-        old->ctx->bindSurfaces(nullptr, nullptr);
++        // KHR_context_flush_control: a context released with EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR keeps its open pass
++        // and surfaces, as Apple's CGL does on release. Mac games lock and release their context around nearly every GL
++        // call (Feral's ports); a flush there makes every draw its own render pass.
++        if (old->ctx->releaseFlush) {
++            old->ctx->flush();
++            old->ctx->bindSurfaces(nullptr, nullptr);
++        }
+         old->boundAnywhere = false;
+         bool orphaned;
+         {
+@@ -527,7 +533,9 @@ EGLAPI_EXPORT EGLBoolean EGLAPIENTRY eglMakeCurrent(EGLDisplay dpy, EGLSurface d
+         c->boundThread = std::this_thread::get_id();
+         if (d && !d->pbuffer) d->surf->syncSizeFromLayer();
+         if (r && !r->pbuffer && r != d) r->surf->syncSizeFromLayer();
+-        c->ctx->bindSurfaces(d ? d->surf.get() : nullptr, r ? r->surf.get() : nullptr);
++        Surface* ds = d ? d->surf.get() : nullptr;
++        Surface* rs = r ? r->surf.get() : nullptr;
++        if (c->ctx->drawSurface.get() != ds || c->ctx->readSurface.get() != rs) c->ctx->bindSurfaces(ds, rs);  // same: keep the pass
+         setCurrentContext(c->ctx.get());
+     } else {
+         setCurrentContext(nullptr);
+diff --git a/src/gl/api_get.mm b/src/gl/api_get.mm
+index 5bde2a7..54235fa 100644
+--- a/src/gl/api_get.mm
++++ b/src/gl/api_get.mm
+@@ -276,7 +276,7 @@ static bool getState(Context* ctx, GLenum pname, int index, Value& v) {
+     case GL_CLAMP_READ_COLOR: v = E(ctx->clampReadColor); return true;
+     case GL_PRIMITIVE_RESTART_FOR_PATCHES_SUPPORTED: v = B(false); return true;  // tess path ignores restart
+     case GL_RESET_NOTIFICATION_STRATEGY: v = E(ctx->loseContextOnReset ? GL_LOSE_CONTEXT_ON_RESET : GL_NO_RESET_NOTIFICATION); return true;
+-    case GL_CONTEXT_RELEASE_BEHAVIOR: v = E(GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH); return true;
++    case GL_CONTEXT_RELEASE_BEHAVIOR: v = E(ctx->releaseFlush ? GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH : GL_NONE); return true;
+     case GL_MAX_TEXTURE_SIZE: case GL_MAX_CUBE_MAP_TEXTURE_SIZE: case GL_MAX_RENDERBUFFER_SIZE: case GL_MAX_RECTANGLE_TEXTURE_SIZE:
+         v = I(16384); return true;
+     case GL_MAX_3D_TEXTURE_SIZE: v = I(2048); return true;
+diff --git a/src/gl/api_query.mm b/src/gl/api_query.mm
+index 118d37b..6c86930 100644
+--- a/src/gl/api_query.mm
++++ b/src/gl/api_query.mm
+@@ -268,6 +268,7 @@ static void endQuery(Context* ctx, GLenum target, GLuint index) {
+     ctx->activeQueries[ti][index] = nullptr;
+     q->active = false;
+     q->serial = ctx->serial();
++    if (isOcclusion(target)) ctx->occlusionEnded++;
+     if (target == GL_TIME_ELAPSED) ctx->flush();
+     if (isStatistics(target)) {
+         ctx->statsQueriesActive--;
+diff --git a/src/gl/context.h b/src/gl/context.h
+index 820ca2e..af289d6 100644
+--- a/src/gl/context.h
++++ b/src/gl/context.h
+@@ -73,6 +73,7 @@ public:
+     bool dsUsed = false;
+     bool srgbCapable = false;
+     int swapInterval = 1;
++    bool swapApplied = false;  // setSurfaceSwapInterval has set the layer for swapInterval
+     id<MTLTexture> color = nil, depthStencil = nil, msColor = nil;
+     // Non-sRGB views of color/msColor: GL_FRAMEBUFFER_SRGB disabled writes an sRGB-capable
+     // default framebuffer without encoding (linearWriteView). Rebuilt on resize.
+@@ -165,6 +166,11 @@ public:
+     bool strict() const { return strictLevel >= 1; }
+     bool superStrict() const { return strictLevel >= 2; }
+     bool loseContextOnReset = false;
++    // KHR_context_flush_control: false for EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR (no flush when released).
++    bool releaseFlush = true;
++    // Occlusion queries ended since the last submit, and early submits since the last present
++    // (METALGLDRV_OCCLUSION_EARLY_SUBMIT).
++    int occlusionEnded = 0, earlySubmits = 0;
+     GLenum clampReadColor = GL_FIXED_ONLY;  // glClampColor(GL_CLAMP_READ_COLOR)  // RESET_NOTIFICATION_STRATEGY requested at creation
+     bool everCurrent = false;
+ 
+diff --git a/src/gl/context.mm b/src/gl/context.mm
+index e552f9b..4473938 100644
+--- a/src/gl/context.mm
++++ b/src/gl/context.mm
+@@ -471,6 +471,8 @@ static uint64_t debugKey(GLenum source, GLenum type, GLenum severity) {
+     endEncoder();
+     [cb_ endCommandBuffer];
+     queueAfterTessSegments();
++    occlusionEnded = 0;
++    if (present) earlySubmits = 0;
+     dev->submit(cb_, alloc_, serial_, present);
+     lastWorkSerial_ = serial_;
+     if (cbUsed_) tessMtlWork = true;
+diff --git a/src/gl/draw.mm b/src/gl/draw.mm
+index bf3aca3..837a083 100644
+--- a/src/gl/draw.mm
++++ b/src/gl/draw.mm
+@@ -3561,6 +3561,15 @@ static bool programHasSideEffects(const glsl::Reflection& r) {
+ // in one emulation pass.
+ static void executeDrawImpl(Context* ctx, const DrawParams& d, const DrawParams* batch, int batchCount);
+ static void executeDraw(Context* ctx, const DrawParams& d, const DrawParams* batch = nullptr, int batchCount = 0) {
++    // METALGLDRV_OCCLUSION_EARLY_SUBMIT=1: the first draw outside an occlusion query after a run of them sends the
++    // work so far to the GPU (at most twice a frame). A game that reads last frame's results at the start of the next
++    // (Feral's Unreal Engine 3 ports poll them) then finds them done instead of waiting for that whole frame's GPU work,
++    // which was only sent at the present.
++    if (ctx->occlusionEnded && ctx->earlySubmits < 2 && !mglQueryVisibilityActive(ctx) &&
++        envFlagCached("METALGLDRV_OCCLUSION_EARLY_SUBMIT", false)) {
++        ctx->earlySubmits++;
++        ctx->flush();
++    }
+     executeDrawImpl(ctx, d, batch, batchCount);
+     flushImageWritebacks(ctx);
+ }
+diff --git a/src/gl/winsys.mm b/src/gl/winsys.mm
+index f05f11a..8ab196c 100644
+--- a/src/gl/winsys.mm
++++ b/src/gl/winsys.mm
+@@ -296,8 +296,12 @@ void setSurfaceSwapInterval(Surface* s, int interval) {
+     // and never shows that, so swap interval 0 presents with display sync too: frame rates above the display's
+     // refresh rate are capped. METALGLDRV_SWAP_INTERVAL=<n> overrides the app's interval, and only an explicit 0 there
+     // presents without display sync.
+-    const char* e = getenv("METALGLDRV_SWAP_INTERVAL");
++    // CGL syncs the drawable on every CGLSetCurrentContext (Feral's renderer: around nearly every call), so this runs
++    // thousands of times a frame: the environment is read once and the layer set only when the interval changes.
++    static const char* e = getenv("METALGLDRV_SWAP_INTERVAL");
+     if (e && *e) interval = atoi(e);
++    if (s->swapApplied && s->swapInterval == interval) return;
++    s->swapApplied = true;
+     bool displaySync = interval > 0 || !(e && *e);
+     s->swapInterval = interval;
+ #if !TARGET_OS_IPHONE
+diff --git a/src/macos/cgl.mm b/src/macos/cgl.mm
+index b50d02f..320072b 100644
+--- a/src/macos/cgl.mm
++++ b/src/macos/cgl.mm
+@@ -552,6 +552,10 @@ CGL_EXPORT CGLError CGLCreateContext(CGLPixelFormatObj pix, CGLContextObj share,
+     auto* c = new ContextImpl();
+     // macOS core profile contexts are forward-compatible.
+     c->ctx = new Context(group, 4, 6, core, false, core, false, false);
++    // METALGLDRV_RELEASE_NONE=1: no flush when the context stops being current (GL_KHR_context_flush_control's
++    // RELEASE_BEHAVIOR_NONE, what an EGL embedder asks with EGL_CONTEXT_RELEASE_BEHAVIOR_KHR). Feral's renderer sets
++    // and clears its context around nearly every call: with the flush, a render pass per call.
++    if (const char* r = getenv("METALGLDRV_RELEASE_NONE")) c->ctx->releaseFlush = strcmp(r, "1") != 0;
+     c->pf = pf;
+     pf->refs.fetch_add(1);
+     c->enables = {kCGLCERasterization, kCGLCEDisplayListOptimization};  // on by default
+@@ -606,7 +610,7 @@ CGL_EXPORT CGLError CGLCopyContext(CGLContextObj src, CGLContextObj dst, GLbitfi
+ CGL_EXPORT CGLError CGLSetCurrentContext(CGLContextObj ctx) {
+     if (!ctx) {
+         if (t_current) {
+-            t_current->ctx->flush();
++            if (t_current->ctx->releaseFlush) t_current->ctx->flush();
+             t_current = nullptr;
+             setCurrentContext(nullptr);
+         }
+@@ -614,7 +618,7 @@ CGL_EXPORT CGLError CGLSetCurrentContext(CGLContextObj ctx) {
+     }
+     ContextImpl* c = lookup(ctx);
+     if (!c) return kCGLBadContext;
+-    if (t_current && t_current != c) t_current->ctx->flush();
++    if (t_current && t_current != c && t_current->ctx->releaseFlush) t_current->ctx->flush();
+     t_current = c;
+     setCurrentContext(c->ctx.get());
+     syncDrawable(c);
+diff --git a/tests/host/test_macos.mm b/tests/host/test_macos.mm
+index 2887ea9..9171b72 100644
+--- a/tests/host/test_macos.mm
++++ b/tests/host/test_macos.mm
+@@ -206,6 +206,29 @@ GLint describe(CGLPixelFormatObj pix, int attr) {
+ }
+ 
+ // Wine's pbuffers: render into one, then bind it as a texture in a shared context.
++// METALGLDRV_RELEASE_NONE=1: CGL contexts keep their work when released (GL_KHR_context_flush_control's release
++// behavior none), as an EGL context created with EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR does.
++TEST(cgl_release_none) {
++    EGLRestore restore;
++    CGLPixelFormatObj pix = choose({kCGLPFAAccelerated, kCGLPFADoubleBuffer});
++    CHECK(pix);
++    if (!pix) return;
++    for (int none = 0; none < 2; none++) {
++        if (none) setenv("METALGLDRV_RELEASE_NONE", "1", 1);
++        else unsetenv("METALGLDRV_RELEASE_NONE");
++        CGLContextObj ctx = nullptr;
++        CHECK_EQ(CGLCreateContext(pix, nullptr, &ctx), kCGLNoError);
++        CHECK_EQ(CGLSetCurrentContext(ctx), kCGLNoError);
++        GLint behavior = -1;
++        glGetIntegerv(0x82FB /* GL_CONTEXT_RELEASE_BEHAVIOR */, &behavior);
++        CHECK_EQ(behavior, none ? 0 /* GL_NONE */ : 0x82FC /* GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH */);
++        CGLSetCurrentContext(nullptr);
++        CGLDestroyContext(ctx);
++    }
++    unsetenv("METALGLDRV_RELEASE_NONE");
++    CGLDestroyPixelFormat(pix);
++}
++
+ TEST(cgl_pbuffer) {
+     EGLRestore restore;
+     CGLPixelFormatObj pix = choose({kCGLPFAAccelerated, kCGLPFADoubleBuffer, kCGLPFAColorSize, 32, kCGLPFAAlphaSize, 8,
+diff --git a/tests/host/test_runtime.cpp b/tests/host/test_runtime.cpp
+index 96193de..a32db12 100644
+--- a/tests/host/test_runtime.cpp
++++ b/tests/host/test_runtime.cpp
+@@ -1,8 +1,11 @@
+ // Runtime tests that don't require the shader compiler.
+ #include "harness.h"
+ #include <cmath>
++#include <unistd.h>
+ #include <vector>
+ 
++extern "C" void mglTestEnvChanged(void);
++
+ static GLuint makeTex2D(GLenum ifmt, int w, int h, GLenum fmt, GLenum type, const void* data) {
+     GLuint t;
+     glGenTextures(1, &t);
+@@ -299,6 +302,40 @@ TEST(buffer_storage_persistent) {
+     CHECK_GL();
+ }
+ 
++// METALGLDRV_OCCLUSION_EARLY_SUBMIT=1: the first draw after a run of occlusion queries sends the work to the GPU, so
++// the result is there for a poll a while later (the next frame, in a game); without it the work waits for a flush.
++TEST(occlusion_early_submit) {
++    static const char* vs = "#version 330 core\nvoid main() { gl_Position = vec4((gl_VertexID & 1) * 4 - 1, (gl_VertexID & 2) * 2 - 1, 0, 1); }\n";
++    static const char* fs = "#version 330 core\nout vec4 c;\nvoid main() { c = vec4(1); }\n";
++    GLuint prog = compileProgram(vs, fs), vao = 0, q = 0;
++    glGenVertexArrays(1, &vao);
++    glBindVertexArray(vao);
++    glUseProgram(prog);
++    glGenQueries(1, &q);
++    for (int early = 0; early < 2; early++) {
++        setenv("METALGLDRV_OCCLUSION_EARLY_SUBMIT", early ? "1" : "0", 1);
++        mglTestEnvChanged();
++        glFinish();
++        glBeginQuery(GL_SAMPLES_PASSED, q);
++        glDrawArrays(GL_TRIANGLES, 0, 3);
++        glEndQuery(GL_SAMPLES_PASSED);
++        glDrawArrays(GL_TRIANGLES, 0, 3);
++        usleep(200 * 1000);
++        GLint avail = -1;
++        glGetQueryObjectiv(q, GL_QUERY_RESULT_AVAILABLE, &avail);
++        CHECK_EQ(avail, early ? 1 : 0);
++        GLuint samples = 0;
++        glGetQueryObjectuiv(q, GL_QUERY_RESULT, &samples);
++        CHECK(samples > 1);
++    }
++    unsetenv("METALGLDRV_OCCLUSION_EARLY_SUBMIT");
++    mglTestEnvChanged();
++    glDeleteQueries(1, &q);
++    glDeleteVertexArrays(1, &vao);
++    glDeleteProgram(prog);
++    CHECK_GL();
++}
++
+ TEST(timer_query) {
+     if (strictLevelFromEnv() <= -2) return;  // SPEEDDEMON: GL_QUERY_RESULT doesn't wait for the GPU
+     GLuint q;

@@ -4,3 +4,6 @@
 [submodule "vendor/AArchX"]
 	path = vendor/AArchX
 	url = https://github.com/mont127/AArchX.git
+[submodule "vendor/metalgldrv"]
+	path = vendor/metalgldrv
+	url = https://github.com/bomberfish/metalgldrv.git
