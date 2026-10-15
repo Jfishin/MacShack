@@ -20,7 +20,12 @@ enum AutoConfig {
         "com.feralinteractive.bioshockremastered": ["--shack-env=SHACK_OPENGL=1", "--shack-env=SHACK_APP_THREAD=main", "-no-feral-options"],
         // Feral, i386 (AArchX m32): the same OpenGL and main-thread model; its options window is skipped by its own
         // registry (GameOptionsDialogShouldShow=0), and IndirectX takes its GLSL path (UseGLSL=1) - ShackGL has no ARB programs.
-        "com.feralinteractive.bmaa": ["--shack-env=SHACK_OPENGL=1", "--shack-env=SHACK_APP_THREAD=main"],
+        // Its GL runs on metalgldrv when the app carries the driver (ShackGLDrv.m; else on ShackGL): Feral skips the 3D
+        // scene on a GL 4 version string, so the driver reports Apple's 2.1 and GLSL 1.20, and it sends occlusion work to
+        // the GPU early, since the game reads last frame's results at the start of the next.
+        "com.feralinteractive.bmaa": ["--shack-env=SHACK_OPENGL=1", "--shack-env=SHACK_APP_THREAD=main", "--shack-env=SHACK_GL=metalgldrv",
+                                      "--shack-env=METALGLDRV_VERSION_STRING=2.1 Metal - 90.5", "--shack-env=METALGLDRV_GLSL_VERSION_STRING=1.20",
+                                      "--shack-env=METALGLDRV_OCCLUSION_EARLY_SUBMIT=1"],
     ]
     struct Rule { let signatures: [String]; let args: [String] }
     // A log containing every signature needs `args`. ponytail: plain substring match; add rules as games show them.

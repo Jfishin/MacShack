@@ -81,8 +81,12 @@ differ now, so retest those from Big Picture.
 ### i386 (32-bit): experimental
 
 AArchX's m32 runs i386-only Mac games ([prep/aarchx/README.md](../prep/aarchx/README.md)). Batman: Arkham Asylum
-(Feral) launches on the iPhone and stops early, at its PhysX setup (10-03); no i386 game is confirmed playable on a
-device.
+(Feral) plays on an iPhone 17 Pro Max in MacShack Play (10-15): menu, cutscenes and gameplay with a pad, about 45 fps,
+falling to the high 30s as the phone heats up; the render thread's CPU is the limit. Its GL runs on
+[metalgldrv](https://github.com/bomberfish/metalgldrv): `libmetalgldrv.dylib` from the driver's iOS build
+(`cmake/ios.cmake`), with EGL release behavior none and `METALGLDRV_OCCLUSION_EARLY_SUBMIT`, goes in
+`MacShackPlay.app/Frameworks`, and `host/AutoConfig.swift` gives the game the settings it needs. Without the driver
+the game runs on ShackGL's ES layer, which reaches the menu.
 
 ## Open across games
 
