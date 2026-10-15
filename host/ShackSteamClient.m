@@ -35,7 +35,7 @@ enum { kHelperPid = 1000001, kGamePid = 1000002, kWindowsPid = ShackPlaySteamPid
 void ShackCVSleepLinksOf(const char *image);   // libShackCV
 void ShackAppKitRestoreAppLoop(void);   // libShackAppKit
 void ShackHIDForgetSecondGuest(void);   // libShackIOKit
-void ShackHIDSetXbox2016(BOOL on);
+void ShackHIDSetPad(const char *pad);
 void ShackHIDSetSecondGuestTest(BOOL (*isSecond)(const void *pc));   // macOS and iOS pids stay below 100000: never a real process
 static NSString *gBundle, *gCode;
 static volatile int gHelperState;   // 0 not started, 1 running, 2 ended
@@ -471,7 +471,7 @@ static void gameEnded(int status) {
     // but is torn down), its frame cap and render scale, its display links awake before its window has the screen.
     ShackAppKitRestoreAppLoop();
     ShackHIDForgetSecondGuest();
-    ShackHIDSetXbox2016(NO);   // Steam's own identity again
+    ShackHIDSetPad(NULL);   // Steam's own identity again
     ShackMetalSetFrameCap(ShackSteamUIFrameCap());
     ShackAppKitSetRenderScale(ShackSteamUIRenderScale());
     ShackCVSleepLinksOf(NULL);
@@ -770,7 +770,7 @@ static int startSteamGame(NSString *app, NSString *path, char **argv, char **env
     ShackHomePrefsSync();   // the game's settings as MacShack Play last left them
     ShackHooksAddGuest(app, path, code, gGame.translated, ^(int status) { gameEnded(status); });
     ShackHIDSetSecondGuestTest(ShackHooksIsSecondCaller);   // the game's pad callbacks apart from Steam's
-    ShackHIDSetXbox2016(ShackWantsXbox2016(app));
+    ShackHIDSetPad(ShackPadIdentity(app));
     // The game's own frame cap and render scale (the same settings as in MacShack's Local Games; the island menu sets them).
     NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
     ShackMetalSetFrameCap(ShackGameFrameCap(name, gGame.translated));

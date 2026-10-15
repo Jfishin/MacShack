@@ -1,6 +1,7 @@
 // Mac-side check of the virtual HID gamepad (shims/IOKit/ShackHID.m): matching, properties, raw reports in the byte
 // layout Unity's XboxOneGampadMacOSWireless reads, element values, queues, type ids.
 // clang -fobjc-arc -DSHACK_HID_TEST shims/IOKit/ShackHID.m host/probe/test_shack_hid.m -framework Foundation -framework GameController -o /tmp/t && /tmp/t
+// (and again with SHACK_HID_PAD=xbox2016, then SHACK_HID_PAD=xbox360)
 #import <Foundation/Foundation.h>
 #import <assert.h>
 #import <objc/message.h>
@@ -60,7 +61,52 @@ static void *element(void *dev, int page, int usage) {
     assert(a && CFArrayGetCount(a) == 1); void *e = (void *)CFArrayGetValueAtIndex(a, 0); CFRelease(a); return e;
 }
 
+// SHACK_HID_PAD=xbox360: the wired Xbox 360 pad as the Mac's 360Controller driver shows it (045e:028e), which older Feral
+// games (Batman: Arkham Asylum) know and the Xbox One pads not: HID buttons 1-15 in the driver's order with the D-pad as
+// buttons 12-15, signed 16-bit sticks (y grows downward), 8-bit triggers on Z and Rz. Batman reads it through the
+// manager's input value callback, keyed by usage page and usage.
+void IOHIDManagerRegisterInputValueCallback(void *, void (*)(void *, int32_t, void *, void *), void *);
+uint32_t IOHIDElementGetUsagePage(void *);
+uint32_t IOHIDElementGetUsage(void *);
+CFIndex IOHIDElementGetLogicalMin(void *);
+static NSMutableDictionary<NSNumber *, NSNumber *> *gValues;   // (page << 16 | usage) -> latest value from the callback
+static void valueArrived(void *ctx, int32_t r, void *sender, void *value) {
+    void *e = IOHIDValueGetElement(value);
+    gValues[@(IOHIDElementGetUsagePage(e) << 16 | IOHIDElementGetUsage(e))] = @(IOHIDValueGetIntegerValue(value));
+}
+static void check360(void) {
+    gValues = [NSMutableDictionary dictionary];
+    void *mgr = IOHIDManagerCreate(NULL, 0);
+    IOHIDManagerSetDeviceMatchingMultiple(mgr, (__bridge CFArrayRef)@[@{@"DeviceUsagePage": @1, @"DeviceUsage": @5}]);
+    IOHIDManagerRegisterDeviceMatchingCallback(mgr, matched, NULL);
+    IOHIDManagerRegisterInputValueCallback(mgr, valueArrived, NULL);
+    IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+    assert(IOHIDManagerOpen(mgr, 0) == 0);
+    void *dev = ShackHIDTestAddPad(); spin();
+    assert(gMatched == dev);
+    assert([(__bridge id)IOHIDDeviceGetProperty(dev, CFSTR("VendorID")) intValue] == 0x45E);
+    assert([(__bridge id)IOHIDDeviceGetProperty(dev, CFSTR("ProductID")) intValue] == 0x28E);
+    CFArrayRef buttons = IOHIDDeviceCopyMatchingElements(dev, (__bridge CFDictionaryRef)@{@"Type": @2}, 0);
+    assert(buttons && CFArrayGetCount(buttons) == 15); CFRelease(buttons);
+    CFArrayRef hat = IOHIDDeviceCopyMatchingElements(dev, (__bridge CFDictionaryRef)@{@"UsagePage": @1, @"Usage": @0x39}, 0);
+    assert(!hat || CFArrayGetCount(hat) == 0);
+    assert(IOHIDElementGetLogicalMin(element(dev, 1, 0x30)) == -32768);
+    // left stick full left and up, left trigger full, D-pad up, A + Menu (Start) + View (Back)
+    ShackHIDTestSet(dev, -1, 1, 1, YES, NO, 1 << 0 | 1 << 11 | 1 << 16); spin();
+    assert([gValues[@(9 << 16 | 1)] intValue] == 1 && [gValues[@(9 << 16 | 9)] intValue] == 1 && [gValues[@(9 << 16 | 10)] intValue] == 1);
+    assert([gValues[@(9 << 16 | 12)] intValue] == 1 && !gValues[@(9 << 16 | 15)]);        // D-pad up as button 12, right untouched
+    assert([gValues[@(1 << 16 | 0x30)] intValue] == -32768 && [gValues[@(1 << 16 | 0x31)] intValue] == -32768);   // left, up
+    assert([gValues[@(1 << 16 | 0x32)] intValue] == 255 && !gValues[@(1 << 16 | 0x35)]);  // LT on Z; RT (Rz) untouched
+    void *v; assert(IOHIDDeviceGetValue(dev, element(dev, 1, 0x33), &v) == 0 && IOHIDValueGetIntegerValue(v) == 0);   // RX centered
+    ShackHIDTestSet(dev, 1, -1, 0, NO, NO, 0); spin();
+    assert([gValues[@(1 << 16 | 0x30)] intValue] == 32767 && [gValues[@(1 << 16 | 0x31)] intValue] == 32767);     // right, down
+    assert([gValues[@(9 << 16 | 1)] intValue] == 0 && [gValues[@(9 << 16 | 12)] intValue] == 0);
+    ShackHIDTestRemovePads(); spin();
+    puts("ShackHID xbox360 checks passed: 045e:028e, 15 buttons with the D-pad, signed sticks, 8-bit triggers, value callbacks.");
+}
+
 int main(void) { @autoreleasepool {
+    if (getenv("SHACK_HID_PAD") && !strcmp(getenv("SHACK_HID_PAD"), "xbox360")) { check360(); return 0; }
     void *mgr = IOHIDManagerCreate(NULL, 0);
     IOHIDManagerSetDeviceMatchingMultiple(mgr, (__bridge CFArrayRef)@[@{@"DeviceUsagePage": @1, @"DeviceUsage": @4}, @{@"DeviceUsagePage": @1, @"DeviceUsage": @5}]);
     IOHIDManagerRegisterDeviceMatchingCallback(mgr, matched, NULL);

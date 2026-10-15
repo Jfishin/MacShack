@@ -16,7 +16,7 @@ NSString *ShackSteamClientGameName(void);   // the game the Steam client runs no
 // Intel games (AArchX): engine default arguments and JIT pool size (the game's start: ShackTranslated.h).
 NSArray<NSString *> *ShackTranslatedArgs(NSString *appPath, NSArray<NSString *> *args);
 int ShackTranslatedJITMB(NSString *appPath);
-BOOL ShackWantsXbox2016(NSString *appPath);   // the virtual pad's 2016 identity (Rewired games)
+const char *ShackPadIdentity(NSString *appPath);   // the virtual pad's identity for this game (SHACK_HID_PAD), NULL: default
 
 @interface ShackLoader : NSObject
 /// Validate prepared/embedded code before installing process-wide guest hooks.

@@ -19,6 +19,11 @@
 // (045e:02e0), where View is HID button 17 and Guide button 16 instead of Consumer AC Back; the report bytes are the
 // same. Rewired before 2019 (Cuphead) knows only that one on macOS and maps 02fd as an unknown controller (up/down
 // swapped, buttons guessed); every Rewired keeps the old entry.
+//
+// SHACK_HID_PAD=xbox360 (the loader sets it for games whose own controller list knows the wired Xbox 360 pad and not
+// these, as older Feral ports do): the wired Xbox 360 pad as the Mac's 360Controller driver shows it (045e:028e), report
+// without an id, 12 bytes: s16 LX LY RX RY (y grows downward), u8 LT RT, u16 buttons: bit n = HID button n+1 (A B X Y LB
+// RB LS RS Start Back Guide, then D-pad up down left right). Report callbacks still get 18 bytes, the rest zero.
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
 #import <dlfcn.h>
@@ -74,10 +79,43 @@ static const uint8_t kButtons2016[] = {   // buttons 1-17 (16 Guide, 17 View), 1
 // ---- pad state -> report -------------------------------------------------------------------------------------
 typedef struct { float lx, ly, rx, ry, lt, rt; BOOL up, down, left, right; uint32_t buttons; } PadInput;   // buttons: report bits
 enum { kA = 1 << 0, kB = 1 << 1, kX = 1 << 3, kY = 1 << 4, kLB = 1 << 6, kRB = 1 << 7, kMenu = 1 << 11, kLS = 1 << 13, kRS = 1 << 14, kView = 1 << 16 };
+enum { kPad2019, kPad2016, kPad360 };
+static int gPad;   // SHACK_HID_PAD (header): the identity every pad gets
+static int PadNamed(const char *pad) { return !pad ? kPad2019 : !strcmp(pad, "xbox2016") ? kPad2016 : !strcmp(pad, "xbox360") ? kPad360 : kPad2019; }
+
+static const Spec kSpecs360[] = {
+    {1, 0x30, kTypeMisc, -32768, 32767, -32768, 32767, 16, 0},  {1, 0x31, kTypeMisc, -32768, 32767, -32768, 32767, 16, 16},
+    {1, 0x33, kTypeMisc, -32768, 32767, -32768, 32767, 16, 32}, {1, 0x34, kTypeMisc, -32768, 32767, -32768, 32767, 16, 48},
+    {1, 0x32, kTypeMisc, 0, 255, 0, 255, 8, 64}, {1, 0x35, kTypeMisc, 0, 255, 0, 255, 8, 72},
+    {9, 1, kTypeButton, 0, 1, 0, 1, 1, 80},  {9, 2, kTypeButton, 0, 1, 0, 1, 1, 81},  {9, 3, kTypeButton, 0, 1, 0, 1, 1, 82},
+    {9, 4, kTypeButton, 0, 1, 0, 1, 1, 83},  {9, 5, kTypeButton, 0, 1, 0, 1, 1, 84},  {9, 6, kTypeButton, 0, 1, 0, 1, 1, 85},
+    {9, 7, kTypeButton, 0, 1, 0, 1, 1, 86},  {9, 8, kTypeButton, 0, 1, 0, 1, 1, 87},  {9, 9, kTypeButton, 0, 1, 0, 1, 1, 88},
+    {9, 10, kTypeButton, 0, 1, 0, 1, 1, 89}, {9, 11, kTypeButton, 0, 1, 0, 1, 1, 90}, {9, 12, kTypeButton, 0, 1, 0, 1, 1, 91},
+    {9, 13, kTypeButton, 0, 1, 0, 1, 1, 92}, {9, 14, kTypeButton, 0, 1, 0, 1, 1, 93}, {9, 15, kTypeButton, 0, 1, 0, 1, 1, 94},
+};
+static const uint8_t kDescriptor360[] = {
+    0x05,0x01, 0x09,0x05, 0xA1,0x01,
+    0x09,0x30, 0x09,0x31, 0x09,0x33, 0x09,0x34, 0x16,0x00,0x80, 0x26,0xFF,0x7F, 0x75,0x10, 0x95,0x04, 0x81,0x02,
+    0x09,0x32, 0x09,0x35, 0x15,0x00, 0x26,0xFF,0x00, 0x75,0x08, 0x95,0x02, 0x81,0x02,
+    0x05,0x09, 0x19,0x01, 0x29,0x0F, 0x15,0x00, 0x25,0x01, 0x75,0x01, 0x95,0x0F, 0x81,0x02, 0x95,0x01, 0x81,0x03,
+    0xC0,
+};
 
 static void Put16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 static uint16_t Axis(float v) { return (uint16_t)lrintf(fminf(fmaxf((v + 1) * 32767.5f, 0), 65535)); }
+static uint16_t Axis360(float v) { v = fminf(fmaxf(v, -1), 1); return (uint16_t)(int16_t)lrintf(v < 0 ? v * 32768 : v * 32767); }
+static uint8_t Trigger(float v) { return (uint8_t)lrintf(fminf(fmaxf(v, 0), 1) * 255); }
+static void Encode360(const PadInput *in, uint8_t r[REPORT_LEN]) {
+    memset(r, 0, REPORT_LEN);
+    Put16(r, Axis360(in->lx)); Put16(r + 2, Axis360(-in->ly)); Put16(r + 4, Axis360(in->rx)); Put16(r + 6, Axis360(-in->ry));   // GC y is up
+    r[8] = Trigger(in->lt); r[9] = Trigger(in->rt);
+    static const uint32_t order[] = { kA, kB, kX, kY, kLB, kRB, kLS, kRS, kMenu, kView };   // buttons 1-10; 11 (Guide) is the system's
+    uint16_t b = 0;
+    for (int i = 0; i < 10; i++) if (in->buttons & order[i]) b |= 1 << i;
+    Put16(r + 10, b | in->up << 11 | in->down << 12 | in->left << 13 | in->right << 14);
+}
 static void Encode(const PadInput *in, uint8_t r[REPORT_LEN]) {
+    if (gPad == kPad360) { Encode360(in, r); return; }
     memset(r, 0, REPORT_LEN); r[0] = 1;
     Put16(r + 1, Axis(in->lx)); Put16(r + 3, Axis(-in->ly)); Put16(r + 5, Axis(in->rx)); Put16(r + 7, Axis(-in->ry));   // GC y is up
     Put16(r + 9, (uint16_t)lrintf(fminf(fmaxf(in->lt, 0), 1) * 1023)); Put16(r + 11, (uint16_t)lrintf(fminf(fmaxf(in->rt, 0), 1) * 1023));
@@ -89,6 +127,7 @@ static void Encode(const PadInput *in, uint8_t r[REPORT_LEN]) {
 static int32_t Extract(const uint8_t *r, const Spec *s) {
     uint32_t v = 0;
     for (int i = 0; i < s->bits; i++) { int b = s->bit + i; v |= (uint32_t)((r[b >> 3] >> (b & 7)) & 1) << i; }
+    if (s->min < 0 && s->bits < 32 && (v >> (s->bits - 1) & 1)) v |= ~0u << s->bits;   // signed field
     return (int32_t)v;
 }
 
@@ -192,24 +231,27 @@ static void DeviceLoop(SHDevice *d, int k, CFRunLoopRef *rl, CFStringRef *mode) 
 // Utilities read "DeviceUsage" as a 64-bit CFNumber into a 32-bit stack slot; a real device has no such top-level key
 // (it lives only inside DeviceUsagePairs), so on a Mac the overflow never happens. Exposing it here clobbered a saved
 // register and crashed the first joystick button press.
-static BOOL gXbox2016;   // SHACK_HID_PAD=xbox2016 (header)
 static SHDevice *NewDevice(GCController *gc, uint32_t index) {
     SHDevice *d = [SHDevice new]; d->gc = gc;
     PadInput idle = {0}; Encode(&idle, d->report);
     NSString *serial = [NSString stringWithFormat:@"shack-%u", index];
     NSMutableData *descriptor = [NSMutableData dataWithBytes:kDescriptor length:sizeof kDescriptor];
-    if (gXbox2016) [descriptor appendBytes:kButtons2016 length:sizeof kButtons2016]; else [descriptor appendBytes:kButtons2019 length:sizeof kButtons2019];
-    d->props = [@{ @"Transport": @"Bluetooth", @"VendorID": @0x045E, @"ProductID": gXbox2016 ? @0x02E0 : @0x02FD, @"VersionNumber": @0x0903,
+    if (gPad == kPad360) descriptor = [NSMutableData dataWithBytes:kDescriptor360 length:sizeof kDescriptor360];
+    else if (gPad == kPad2016) [descriptor appendBytes:kButtons2016 length:sizeof kButtons2016]; else [descriptor appendBytes:kButtons2019 length:sizeof kButtons2019];
+    d->props = [@{ @"Transport": @"Bluetooth", @"VendorID": @0x045E, @"ProductID": gPad == kPad2016 ? @0x02E0 : @0x02FD, @"VersionNumber": @0x0903,
         @"Manufacturer": @"Microsoft", @"Product": @"Xbox Wireless Controller", @"SerialNumber": serial,
         @"PrimaryUsagePage": @1, @"PrimaryUsage": @5, @"DeviceUsagePairs": @[@{@"DeviceUsagePage": @1, @"DeviceUsage": @5}],
         @"MaxInputReportSize": @REPORT_LEN, @"MaxOutputReportSize": @9, @"MaxFeatureReportSize": @0,
         @"LocationID": @(0x5348 << 16 | index), @"ReportInterval": @8000, @"CountryCode": @0,
         @"ReportDescriptor": descriptor, @"PhysicalDeviceUniqueID": serial } mutableCopy];
+    if (gPad == kPad360) [d->props addEntriesFromDictionary:@{ @"Transport": @"USB", @"ProductID": @0x028E, @"VersionNumber": @0x0114,
+        @"Product": @"Xbox 360 Wired Controller", @"MaxInputReportSize": @12, @"MaxOutputReportSize": @0 }];
     SHElement *app = [SHElement new]; app->type = kTypeCollection; app->cookie = 1; app->device = d;
     NSMutableArray *all = [NSMutableArray arrayWithObject:app], *kids = [NSMutableArray array];
     NSMutableArray<NSValue *> *specs = [NSMutableArray array];
-    for (uint32_t i = 0; i < NSPECS; i++) if (!gXbox2016 || kSpecs[i].page != 0x0C) [specs addObject:[NSValue valueWithPointer:&kSpecs[i]]];
-    if (gXbox2016) for (size_t i = 0; i < sizeof kSpecs2016 / sizeof *kSpecs2016; i++) [specs addObject:[NSValue valueWithPointer:&kSpecs2016[i]]];
+    if (gPad == kPad360) for (size_t i = 0; i < sizeof kSpecs360 / sizeof *kSpecs360; i++) [specs addObject:[NSValue valueWithPointer:&kSpecs360[i]]];
+    else for (uint32_t i = 0; i < NSPECS; i++) if (gPad != kPad2016 || kSpecs[i].page != 0x0C) [specs addObject:[NSValue valueWithPointer:&kSpecs[i]]];
+    if (gPad == kPad2016) for (size_t i = 0; i < sizeof kSpecs2016 / sizeof *kSpecs2016; i++) [specs addObject:[NSValue valueWithPointer:&kSpecs2016[i]]];
     for (NSValue *v in specs) {
         const Spec *s = v.pointerValue;
         SHElement *e = [SHElement new]; e->spec = s; e->type = s->type; e->cookie = (uint32_t)all.count + 1; e->device = d; e->parent = app;
@@ -351,7 +393,8 @@ static void Attach(GCController *gc) {
     BOOL known = NO; for (SHDevice *d in gDevices) known |= d->gc == gc;
     if (!known && gc.extendedGamepad) {
         static uint32_t n; SHDevice *d = NewDevice(gc, ++n); [gDevices addObject:d];
-        fprintf(stderr, "[ShackHID] %s (%s) -> virtual Xbox Wireless Controller (045e:%s) #%u\n", gc.vendorName.UTF8String ?: "pad", gc.productCategory.UTF8String ?: "", gXbox2016 ? "02e0" : "02fd", n);
+        fprintf(stderr, "[ShackHID] %s (%s) -> virtual %s #%u\n", gc.vendorName.UTF8String ?: "pad", gc.productCategory.UTF8String ?: "",
+                gPad == kPad360 ? "Xbox 360 Wired Controller (045e:028e)" : gPad == kPad2016 ? "Xbox Wireless Controller (045e:02e0)" : "Xbox Wireless Controller (045e:02fd)", n);
         fprintf(stderr, "[ShackHID] %lu manager(s)\n", (unsigned long)gManagers.allObjects.count);
         for (SHManager *m in gManagers) {
             fprintf(stderr, "[ShackHID]   manager %p open=%d callback=%d loop=%s matches=%d\n", m, m->open, m->matchCB != NULL, LoopName(m->rl), Matches(d, m->matching));
@@ -406,7 +449,7 @@ static void Start(void) {
             class_addMethod(gcMeta, supSel, imp_implementationWithBlock(^BOOL(id cls, id dev) { return [dev isKindOfClass:SHDevice.class]; }), "B@:@");
         }
         const char *pad = getenv("SHACK_HID_PAD");
-        gXbox2016 = pad && !strcmp(pad, "xbox2016");
+        gPad = PadNamed(pad);
         gTap = getenv("SHACK_HID_TAP") != NULL;
         const char *env = getenv("SHACK_HID_GAMEPAD");
         if (env && !strcmp(env, "0")) { gPadsOff = YES; fprintf(stderr, "[ShackHID] virtual gamepads off (SHACK_HID_GAMEPAD=0)\n"); return; }
@@ -777,11 +820,12 @@ void ShackHIDForgetSecondGuest(void) {
 
 // The pad identity for a game that starts after the pads exist (the Steam client's, where SHACK_HID_PAD came too late):
 // each pad becomes a new device with it, as if unplugged and plugged in again; the first guest sees that too.
-void ShackHIDSetXbox2016(BOOL on) {
+void ShackHIDSetPad(const char *pad) {   // a SHACK_HID_PAD name, NULL for the default
     Start();
-    if (gPadsOff || on == gXbox2016) return;
+    int want = PadNamed(pad);
+    if (gPadsOff || want == gPad) return;
     [gLock lock];
-    gXbox2016 = on;
+    gPad = want;
     for (SHDevice *d in [gDevices copy]) if (d->gc) { GCController *gc = d->gc; Detach(gc); Attach(gc); }
     [gLock unlock];
 }

@@ -79,10 +79,24 @@ NSArray<NSString *> *ShackTranslatedArgs(NSString *appPath, NSArray<NSString *> 
 // Translated x86 fills a pool faster than Mono (Hades: 51 MB in its first 14 s; Celeste's x86 Mono JIT: 256 MB in
 // 4.5 min); a full pool runs new code interpreted, which Celeste did not survive. ponytail: AArchX never reuses its
 // pool; flushing it when full (or sharing block prologues, ~100 words each) is the real fix.
-// Rewired (Unity) maps the virtual pad's 2019 Xbox identity as an unknown controller before 2019 (Cuphead: up/down
-// swapped) and knows the 2016 one in every version (ShackHID.m).
-BOOL ShackWantsXbox2016(NSString *appPath) {
-    return [NSFileManager.defaultManager fileExistsAtPath:[appPath stringByAppendingString:@"/Contents/Resources/Data/Managed/Rewired_Core.dll"]];
+// The virtual pad's identity for a game (SHACK_HID_PAD, ShackHID.m; NULL: the Xbox Wireless Controller, 045e:02fd).
+// Rewired (Unity) maps the 2019 identity as an unknown controller before 2019 (Cuphead: up/down swapped) and knows the
+// 2016 one in every version. Older Feral ports carry their own list of known pads (Resources/InputDevices/<kind>/<pad>.plist,
+// VendorID and ProductID) and ignore any other (Batman: Arkham Asylum knows the wired Xbox 360 pad, no Xbox Wireless one).
+const char *ShackPadIdentity(NSString *appPath) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if ([fm fileExistsAtPath:[appPath stringByAppendingString:@"/Contents/Resources/Data/Managed/Rewired_Core.dll"]]) return "xbox2016";
+    NSString *devices = [appPath stringByAppendingPathComponent:@"Contents/Resources/InputDevices"];
+    BOOL x360 = NO;
+    for (NSString *rel in [fm enumeratorAtPath:devices]) {
+        if (![rel.pathExtension isEqualToString:@"plist"]) continue;
+        NSDictionary *pad = [NSDictionary dictionaryWithContentsOfFile:[devices stringByAppendingPathComponent:rel]];
+        if (![pad isKindOfClass:NSDictionary.class] || [pad[@"VendorID"] intValue] != 0x45E) continue;
+        int product = [pad[@"ProductID"] intValue];
+        if (product == 0x2FD || product == 0x2E0) return NULL;   // it knows the Xbox Wireless Controller
+        x360 |= product == 0x28E;
+    }
+    return x360 ? "xbox360" : NULL;
 }
 
 int ShackTranslatedJITMB(NSString *appPath) {
@@ -236,7 +250,8 @@ NSDictionary *ShackGamePrepareProcess(NSDictionary *launch, NSError **error) {
         // brought up with); other guests get the Mac model where -run's thread is the app thread.
         setenv("SHACK_APP_THREAD", "main", 0);
     }
-    if (ShackWantsXbox2016(appPath)) setenv("SHACK_HID_PAD", "xbox2016", 0);
+    const char *pad = ShackPadIdentity(appPath);
+    if (pad) setenv("SHACK_HID_PAD", pad, 0);
     // ponytail: UE4-specific, keyed on the MacNoEditor config dir. The engine only creates
     // Library/Application Support/<Company>/<Project>/Saved/Config/MacNoEditor on its first run, so this seeds
     // Engine.ini on the second launch, once, if the engine has not written one. GameUserSettings.ini stays the user's.
