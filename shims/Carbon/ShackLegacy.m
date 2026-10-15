@@ -175,3 +175,93 @@ OSStatus HIGetMousePosition(uint32_t space, void *object, CGPoint *out) {
     *out = (CGPoint){p.x, frame.size.height - p.y};
     return 0;
 }
+
+// Multiprocessing Services semaphores and critical regions (CarbonCore), which iOS lacks. Older engines hand work between
+// threads with them (Batman: Arkham Asylum after a skipped cutscene): stubs that return at once left one thread spinning
+// and the game thread waiting forever. Duration: 0 = no wait, 0x7FFFFFFF = forever, > 0 milliseconds, < 0 microseconds.
+// A critical region can be entered again by the thread that holds it. ponytail: deleting one that a thread still waits on
+// is not handled (Apple returns kMPDeletedErr to the waiter).
+#import <pthread.h>
+enum { kMPTimeoutErr = -29296, kMPInsufficientResourcesErr = -29298, kMPParamErr = -50, kMPForever = 0x7FFFFFFF };
+typedef struct { pthread_mutex_t m; pthread_cond_t c; unsigned long count, max; } ShackMPSemaphore;
+typedef struct { pthread_mutex_t m; pthread_cond_t c; pthread_t owner; unsigned long depth; } ShackMPRegion;
+
+// With m held: waits on c until ready() or the Duration runs out; NO on a timeout.
+static BOOL MPWait(pthread_cond_t *c, pthread_mutex_t *m, int32_t timeout, BOOL (^ready)(void)) {
+    if (ready() || timeout == 0) return ready();
+    struct timespec end; clock_gettime(CLOCK_REALTIME, &end);
+    int64_t ns = timeout > 0 ? (int64_t)timeout * 1000000 : -(int64_t)timeout * 1000;
+    end.tv_sec += ns / 1000000000; end.tv_nsec += ns % 1000000000;
+    if (end.tv_nsec >= 1000000000) { end.tv_sec++; end.tv_nsec -= 1000000000; }
+    while (!ready()) {
+        if (timeout == kMPForever) pthread_cond_wait(c, m);
+        else if (pthread_cond_timedwait(c, m, &end) == ETIMEDOUT) return ready();
+    }
+    return YES;
+}
+
+int32_t MPCreateSemaphore(unsigned long max, unsigned long initial, void **out) {
+    if (!out || initial > max) return kMPParamErr;
+    ShackMPSemaphore *s = calloc(1, sizeof *s);
+    pthread_mutex_init(&s->m, NULL); pthread_cond_init(&s->c, NULL);
+    s->count = initial; s->max = max;
+    *out = s;
+    return 0;
+}
+int32_t MPWaitOnSemaphore(void *sem, int32_t timeout) {
+    ShackMPSemaphore *s = sem;
+    if (!s) return kMPParamErr;
+    pthread_mutex_lock(&s->m);
+    BOOL got = MPWait(&s->c, &s->m, timeout, ^BOOL { return s->count > 0; });
+    if (got) s->count--;
+    pthread_mutex_unlock(&s->m);
+    return got ? 0 : kMPTimeoutErr;
+}
+int32_t MPSignalSemaphore(void *sem) {
+    ShackMPSemaphore *s = sem;
+    if (!s) return kMPParamErr;
+    pthread_mutex_lock(&s->m);
+    BOOL room = s->count < s->max;
+    if (room) { s->count++; pthread_cond_signal(&s->c); }
+    pthread_mutex_unlock(&s->m);
+    return room ? 0 : kMPInsufficientResourcesErr;
+}
+int32_t MPDeleteSemaphore(void *sem) {
+    ShackMPSemaphore *s = sem;
+    if (!s) return kMPParamErr;
+    pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->c); free(s);
+    return 0;
+}
+
+int32_t MPCreateCriticalRegion(void **out) {
+    if (!out) return kMPParamErr;
+    ShackMPRegion *r = calloc(1, sizeof *r);
+    pthread_mutex_init(&r->m, NULL); pthread_cond_init(&r->c, NULL);
+    *out = r;
+    return 0;
+}
+int32_t MPEnterCriticalRegion(void *region, int32_t timeout) {
+    ShackMPRegion *r = region;
+    if (!r) return kMPParamErr;
+    pthread_t me = pthread_self();
+    pthread_mutex_lock(&r->m);
+    BOOL in = MPWait(&r->c, &r->m, timeout, ^BOOL { return r->depth == 0 || pthread_equal(r->owner, me); });
+    if (in) { r->owner = me; r->depth++; }
+    pthread_mutex_unlock(&r->m);
+    return in ? 0 : kMPTimeoutErr;
+}
+int32_t MPExitCriticalRegion(void *region) {
+    ShackMPRegion *r = region;
+    if (!r) return kMPParamErr;
+    pthread_mutex_lock(&r->m);
+    BOOL mine = r->depth && pthread_equal(r->owner, pthread_self());
+    if (mine && --r->depth == 0) pthread_cond_signal(&r->c);
+    pthread_mutex_unlock(&r->m);
+    return mine ? 0 : kMPParamErr;
+}
+int32_t MPDeleteCriticalRegion(void *region) {
+    ShackMPRegion *r = region;
+    if (!r) return kMPParamErr;
+    pthread_mutex_destroy(&r->m); pthread_cond_destroy(&r->c); free(r);
+    return 0;
+}

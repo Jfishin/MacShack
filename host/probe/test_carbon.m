@@ -1,5 +1,6 @@
 // iOS simulator check of the Carbon shim (shims/Carbon/ShackLegacy.m; macOS's own Carbon headers clash with it):
-// FSFindFolder (the system's Frameworks, the simulator app's home), FSGetCatalogInfo on a scratch folder, the LongDateTime converters against macOS's own answers:
+// FSFindFolder (the system's Frameworks, the simulator app's home), FSGetCatalogInfo on a scratch folder, the LongDateTime converters against macOS's own answers,
+// Multiprocessing Services semaphores and critical regions (waits, timeouts, recursion, another thread):
 //   xcrun --sdk iphonesimulator clang -arch arm64 -mios-simulator-version-min=17.0 -fobjc-arc shims/Carbon/ShackLegacy.m \
 //     shims/Carbon/ShackCarbon.m host/probe/test_carbon.m -framework Foundation -framework QuartzCore -o /tmp/t && xcrun simctl spawn booted /tmp/t
 // expect `carbon ok`.
@@ -25,6 +26,45 @@ typedef struct {
 _Static_assert(sizeof(CatInfo) == 148 && offsetof(CatInfo, valence) == 140, "FSCatalogInfo");
 int32_t UCConvertCFAbsoluteTimeToLongDateTime(CFAbsoluteTime at, int64_t *ldt);
 int32_t UCConvertLongDateTimeToCFAbsoluteTime(int64_t ldt, CFAbsoluteTime *at);
+
+int32_t MPCreateSemaphore(unsigned long max, unsigned long initial, void **out);
+int32_t MPWaitOnSemaphore(void *sem, int32_t timeout);
+int32_t MPSignalSemaphore(void *sem);
+int32_t MPDeleteSemaphore(void *sem);
+int32_t MPCreateCriticalRegion(void **out);
+int32_t MPEnterCriticalRegion(void *region, int32_t timeout);
+int32_t MPExitCriticalRegion(void *region);
+int32_t MPDeleteCriticalRegion(void *region);
+enum { kForever = 0x7FFFFFFF, kMPTimeoutErr = -29296, kMPInsufficientResourcesErr = -29298 };
+static void onThread(void (^b)(void)) {   // dispatch_sync would run it on this thread
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    [NSThread detachNewThreadWithBlock:^{ b(); dispatch_semaphore_signal(done); }];
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+}
+static int checkMP(void) {
+    void *sem = NULL;
+    if (MPCreateSemaphore(1, 0, &sem) || !sem) return fprintf(stderr, "FAIL: MPCreateSemaphore\n"), 1;
+    CFAbsoluteTime t = CFAbsoluteTimeGetCurrent();
+    if (MPWaitOnSemaphore(sem, 0) != kMPTimeoutErr || MPWaitOnSemaphore(sem, 20) != kMPTimeoutErr ||
+        MPWaitOnSemaphore(sem, -20000) != kMPTimeoutErr || CFAbsoluteTimeGetCurrent() - t < 0.035)   // 20 ms, then 20,000 us
+        return fprintf(stderr, "FAIL: semaphore timeouts\n"), 1;
+    if (MPSignalSemaphore(sem) || MPSignalSemaphore(sem) != kMPInsufficientResourcesErr || MPWaitOnSemaphore(sem, kForever))   // maximum 1
+        return fprintf(stderr, "FAIL: semaphore count\n"), 1;
+    [NSThread detachNewThreadWithBlock:^{ usleep(50000); MPSignalSemaphore(sem); }];
+    t = CFAbsoluteTimeGetCurrent();
+    if (MPWaitOnSemaphore(sem, kForever) || CFAbsoluteTimeGetCurrent() - t < 0.04) return fprintf(stderr, "FAIL: semaphore wake\n"), 1;
+    if (MPDeleteSemaphore(sem)) return 1;
+    void *region = NULL;
+    if (MPCreateCriticalRegion(&region) || MPEnterCriticalRegion(region, kForever) || MPEnterCriticalRegion(region, 0))   // recursive
+        return fprintf(stderr, "FAIL: critical region enter\n"), 1;
+    __block int32_t other = 0;
+    onThread(^{ other = MPEnterCriticalRegion(region, 10); });
+    if (other != kMPTimeoutErr) return fprintf(stderr, "FAIL: another thread entered a held region (%d)\n", other), 1;
+    if (MPExitCriticalRegion(region) || MPExitCriticalRegion(region)) return fprintf(stderr, "FAIL: critical region exit\n"), 1;
+    onThread(^{ other = MPEnterCriticalRegion(region, 0); if (!other) other = MPExitCriticalRegion(region); });
+    if (other || MPDeleteCriticalRegion(region)) return fprintf(stderr, "FAIL: free region (%d)\n", other), 1;
+    return 0;
+}
 
 int main(void) {
     @autoreleasepool {
@@ -97,6 +137,7 @@ int main(void) {
         CFTimeZoneSetDefault(CFTimeZoneCreateWithName(NULL, CFSTR("Asia/Tokyo"), true));
         int64_t tokyo = 0; UCConvertCFAbsoluteTimeToLongDateTime(0, &tokyo);
         if (tokyo != 3061184400) { fprintf(stderr, "FAIL: Tokyo %lld\n", (long long)tokyo); return 1; }
+        if (checkMP()) return 1;
         puts("carbon ok");
     }
 }
