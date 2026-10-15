@@ -9,7 +9,7 @@ NSApplication *NSApp;
 // relies on thread-locals set up in main()). SHACK_APP_THREAD=main keeps the older model, the delegate on UIKit's main
 // thread, for engines built around it (the loader sets it for Unreal, which runs its game on a thread of its own).
 NSArray *ShackNibLaunchWindows(void);   // ShackNib.m
-@implementation NSApplication { NSMutableArray<NSWindow *> *_windows; NSWindow *_key; dispatch_semaphore_t _forever; NSEvent *_current; CFRunLoopRef _appLoop; NSMutableArray<NSEvent *> *_pumpQueue; BOOL _pumping; CFRunLoopRef _pumpLoop; CFRunLoopSourceRef _pumpWake; BOOL _running; }
+@implementation NSApplication { NSMutableArray<NSWindow *> *_windows; NSWindow *_key; dispatch_semaphore_t _forever; NSEvent *_current; CFRunLoopRef _appLoop; NSMutableArray<NSEvent *> *_pumpQueue; BOOL _pumping; CFRunLoopRef _pumpLoop; CFRunLoopSourceRef _pumpWake; BOOL _running; BOOL _stopRequested; }
 + (NSApplication *)sharedApplication {
     static dispatch_once_t o; dispatch_once(&o, ^{ NSApp = [self new]; });
     return NSApp;
@@ -70,8 +70,13 @@ static void KeepAlive(void *info) {}
     NSLog(@"[ShackAppKit] -[NSApplication run]: app run loop on the guest main thread");
     CFRunLoopSourceContext ctx = { .perform = KeepAlive };   // a loop with no sources returns at once
     CFRunLoopSourceRef keep = CFRunLoopSourceCreate(NULL, 0, &ctx); CFRunLoopAddSource(CFRunLoopGetCurrent(), keep, kCFRunLoopCommonModes);
-    for (;;) @autoreleasepool { CFRunLoopRun(); }
+    while (!_stopRequested) @autoreleasepool { CFRunLoopRun(); }   // -stop: (even from the delegate's launch) ends it
+    CFRunLoopRemoveSource(CFRunLoopGetCurrent(), keep, kCFRunLoopCommonModes); CFRelease(keep);
+    _stopRequested = NO; _running = NO;
 }
+// -stop: makes -run return once the event or timer being handled is done, as on a Mac. ponytail: the app-thread model
+// only; the older model's -run parks for good and nested -run loops never return, as before.
+- (void)stop:(id)s { _stopRequested = YES; if (_appLoop) CFRunLoopStop(_appLoop); }
 - (void)sendEvent:(NSEvent *)e {
     // A window made on UIKit's main thread is handled there: Steam Helper runs in-process with steam_osx (the app
     // thread), and its Chromium checks that its views get events on the main thread.
@@ -163,7 +168,7 @@ static pthread_mutex_t gPumpLock = PTHREAD_MUTEX_INITIALIZER;
 - (NSInteger)runModalForWindow:(NSWindow *)w { return 0; }
 - (id)dockTile { return nil; }
 #define NOP(decl) - (void)decl {}
-NOP(updateWindows) NOP(stop:(id)s) NOP(abortModal) NOP(stopModal) NOP(orderFrontStandardAboutPanel:(id)s) NOP(hideOtherApplications:(id)s)
+NOP(updateWindows) NOP(abortModal) NOP(stopModal) NOP(orderFrontStandardAboutPanel:(id)s) NOP(hideOtherApplications:(id)s)
 NOP(preventWindowOrdering) NOP(addWindowsItem:(NSWindow *)w title:(NSString *)t filename:(BOOL)f) NOP(changeWindowsItem:(NSWindow *)w title:(NSString *)t filename:(BOOL)f)
 NOP(requestUserAttention:(NSInteger)t) NOP(cancelUserAttentionRequest:(NSInteger)r)
 #undef NOP
