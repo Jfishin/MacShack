@@ -240,6 +240,7 @@ int main(int argc, const char **argv) {
             Check([m32[@"translate"] isEqual:@"i386"] && [ShackInstaller translatesAtAppPath:data32] && [ShackInstaller requiresJITAtAppPath:data32],
                   @"i386 game translated with JIT");
             Check([[ShackInstaller preparedCodeRootForAppPath:data32 error:&error] isEqual:data32], @"i386 code root is its data folder");
+            Check([[ShackInstaller translationForAppPath:data32] isEqual:@"i386"], @"i386 game takes Play's translated route");
         }
         // Native code inside a .framework folder (Godot GDExtensions: Fountains' EOS plugin) is signed like any dylib.
         NSString *fwGame = App(root, @"FrameworkGame", fixture);

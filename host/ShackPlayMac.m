@@ -36,15 +36,19 @@ void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs) {
     NSString *sharedArgs = [shared.stringByDeletingPathExtension stringByAppendingPathExtension:@"args"];
     NSError *error = nil;
     [fm createDirectoryAtPath:games withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSString *dataReport = ShackShareGameData([docs stringByAppendingPathComponent:@"Games"], games);   // BMAAData beside Batman
+    if (dataReport.length) say(dataReport);
     if (![fm fileExistsAtPath:shared] && ![fm copyItemAtPath:app toPath:shared error:&error]) { say([@"copy into the App Group failed: " stringByAppendingString:error.localizedDescription]); return; }
     if ([fm fileExistsAtPath:args]) { [fm removeItemAtPath:sharedArgs error:NULL]; [fm copyItemAtPath:args toPath:sharedArgs error:NULL]; }
+    NSString *arch = [ShackInstaller translationForAppPath:shared];   // x86_64 or i386: AArchX in Play, nothing prepared
     NSString *code = [ShackInstaller playCodeRootForAppPath:shared guests:[group stringByAppendingPathComponent:@"Guests"]
-                                                identifier:[ShackPlayHostBundleID() stringByAppendingString:@".play"] steam:NO error:&error];
+                                                identifier:[ShackPlayHostBundleID() stringByAppendingString:@".play"] steam:NO
+                                                translated:arch != nil error:&error];
     if (!code) { say([@"not prepared for Play: " stringByAppendingString:error.localizedDescription]); return; }
     NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[group stringByAppendingFormat:@"/Guests/Play.%@/current.plist", name]];
     NSMutableDictionary *launch = [@{@"app": shared, @"code": code, @"logs": [group stringByAppendingPathComponent:@"Logs"], @"argsFile": sharedArgs,
-        @"translate": @NO, @"requiresJIT": manifest[@"requiresJIT"] ?: @NO, @"fpsCap": @(ShackGameFrameCap(name, NO)),
-        @"renderScale": @(ShackGameRenderScale(name, NO)), @"swapMB": @0} mutableCopy];
+        @"translate": @(arch != nil), @"requiresJIT": @([manifest[@"requiresJIT"] boolValue] || arch),
+        @"fpsCap": @(ShackGameFrameCap(name, arch != nil)), @"renderScale": @(ShackGameRenderScale(name, arch != nil)), @"swapMB": @0} mutableCopy];
     NSString *displaySize = [NSUserDefaults.standardUserDefaults stringForKey:[@"displaySize." stringByAppendingString:name]];
     if (displaySize.length) launch[@"displaySize"] = displaySize;
     NSString *notes = [group stringByAppendingPathComponent:@"Launch"];

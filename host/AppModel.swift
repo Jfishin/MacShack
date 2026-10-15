@@ -387,6 +387,7 @@ final class AppModel {
         // (host/ShackPlayMac.m), asked to quit after N seconds, N times in a row.
         if let name = value("--play-mac") {
             let seconds = value("--play-mac-seconds").flatMap { UInt($0) } ?? 0, runs = value("--play-mac-runs").flatMap { UInt($0) } ?? 1
+            AutoConfig.prepare(game: Self.documents.appendingPathComponent("Games/\(name).app"))   // known launch arguments, as for a launch here
             DispatchQueue.global().async { ShackPlayMacRun(name, seconds, max(runs, 1)) }
         }
         if let exe = value("--play-run") {
