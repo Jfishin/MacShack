@@ -37,6 +37,10 @@ int main(void) { @autoreleasepool {
     assert(setCurrent(ctx) == 0 && getCurrent() == ctx);
     // Feral's renderer sets the current context around nearly every GL call: the same one again must not reach EGL, where
     // each eglMakeCurrent flushes (Batman: a render pass per draw, 10 fps)
+    // ...and releasing it (CGLSetCurrentContext(NULL), its unlock) must not flush either: no release flush, as in CGL
+    int release = -1; getIntegerv(0x82FB /* GL_CONTEXT_RELEASE_BEHAVIOR */, &release);
+    printf("release behavior 0x%x\n", release);
+    assert(release == 0 /* GL_NONE */);
     int calls = ShackGLDrvMakeCurrentCalls();
     for (int i = 0; i < 100; i++) assert(setCurrent(ctx) == 0);
     assert(ShackGLDrvMakeCurrentCalls() == calls);

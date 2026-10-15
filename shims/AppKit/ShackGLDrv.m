@@ -23,7 +23,8 @@ enum {
     EGL_ALPHA_SIZE = 0x3021, EGL_BLUE_SIZE = 0x3022, EGL_GREEN_SIZE = 0x3023, EGL_RED_SIZE = 0x3024, EGL_DEPTH_SIZE = 0x3025,
     EGL_STENCIL_SIZE = 0x3026, EGL_SAMPLES = 0x3031, EGL_SURFACE_TYPE = 0x3033, EGL_NONE = 0x3038, EGL_RENDERABLE_TYPE = 0x3040,
     EGL_WINDOW_BIT = 0x0004, EGL_OPENGL_BIT = 0x0008, EGL_OPENGL_API = 0x30A2, EGL_CONTEXT_MAJOR_VERSION = 0x3098,
-    EGL_CONTEXT_MINOR_VERSION = 0x30FB, EGL_CONTEXT_OPENGL_PROFILE_MASK = 0x30FD,
+    EGL_CONTEXT_MINOR_VERSION = 0x30FB, EGL_CONTEXT_OPENGL_PROFILE_MASK = 0x30FD, EGL_CONTEXT_RELEASE_BEHAVIOR_KHR = 0x2097,
+    EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR = 0,
     EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT = 1, EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT = 2,
 };
 typedef int DrvError, GLint;
@@ -191,10 +192,12 @@ static DrvError drv_CreateContext(void *pix, void *share, void **out) {
     if (!pix) return kDrvBadPixelFormat;
     ShackDrvFormat *f = (__bridge ShackDrvFormat *)pix;
     egl.BindAPI(EGL_OPENGL_API);
-    // A core profile needs 3.2 or later asked for (both get the driver's 4.6)
-    const EGLint core[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2,
-                           EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
-    const EGLint compat[] = {EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT, EGL_NONE};
+    // A core profile needs 3.2 or later asked for (both get the driver's 4.6). No flush when released, as in CGL
+    // (KHR_context_flush_control): Feral's renderer releases its context after nearly every GL call.
+    const EGLint core[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2, EGL_CONTEXT_OPENGL_PROFILE_MASK,
+                           EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_CONTEXT_RELEASE_BEHAVIOR_KHR, EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR, EGL_NONE};
+    const EGLint compat[] = {EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT,
+                             EGL_CONTEXT_RELEASE_BEHAVIOR_KHR, EGL_CONTEXT_RELEASE_BEHAVIOR_NONE_KHR, EGL_NONE};
     const EGLint *attribs = f->core ? core : compat;
     EGLContext ctx = egl.CreateContext(gDisplay, f->config, share ? ((__bridge ShackDrvContext *)share)->ctx : NULL, attribs);
     NSLog(@"[ShackGL] metalgldrv %s context: %@", f->core ? "core" : "compatibility",
