@@ -91,6 +91,9 @@ NSString *ShackHomeEnsure(void) {
     NSString *group = ShackHomeGroup();
     if (!group) return @"shared home: no App Group container";
     NSString *report = ShackHomeLink(NSHomeDirectory(), [group stringByAppendingPathComponent:@"Home"], @[@"Library/Application Support", @"Library/Logs"]);
+    NSString *imported = ShackHomeImport([NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]
+                                          stringByAppendingPathComponent:@"HomeImport"], [group stringByAppendingPathComponent:@"Home"]);
+    if (imported.length) report = [report stringByAppendingFormat:@"\n%@", imported];
     NSString *logs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0] stringByAppendingPathComponent:@"Logs"];
     [NSFileManager.defaultManager createDirectoryAtPath:logs withIntermediateDirectories:YES attributes:nil error:NULL];
     NSString *path = [logs stringByAppendingPathComponent:@"shared-home.txt"];
@@ -178,4 +181,60 @@ void ShackHomeMirrorLogs(void) {
     for (NSString *name in [fm contentsOfDirectoryAtPath:steamLogs error:NULL])
         if ([name.pathExtension isEqualToString:@"txt"] && ![name hasPrefix:@"cef_log"])   // Chromium's can be huge
             [fm copyItemAtPath:[steamLogs stringByAppendingPathComponent:name] toPath:[to stringByAppendingFormat:@"/Steam logs/%@", name] error:NULL];
+    NSString *group = ShackHomeGroup();   // what Documents/HomeExport.txt names (debugging a game's files in the shared home)
+    if (group) ShackHomeExport([docs stringByAppendingPathComponent:@"HomeExport.txt"], [group stringByAppendingPathComponent:@"Home"], [to stringByAppendingPathComponent:@"HomeExport"]);
+}
+
+NSString *ShackShareGameData(NSString *games, NSString *shared) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    for (NSString *name in [fm contentsOfDirectoryAtPath:games error:NULL]) {
+        NSString *from = [games stringByAppendingPathComponent:name], *to = [shared stringByAppendingPathComponent:name];
+        if ([@[@"app", @"args"] containsObject:name.pathExtension] || [name isEqual:@".DS_Store"] ||
+            [[fm attributesOfItemAtPath:from error:NULL].fileType isEqual:NSFileTypeSymbolicLink]) continue;
+        if ([fm fileExistsAtPath:to]) { [lines addObject:[name stringByAppendingString:@": already in the App Group's Games, left as is"]]; continue; }
+        NSError *error = nil;
+        [fm createDirectoryAtPath:shared withIntermediateDirectories:YES attributes:nil error:NULL];
+        BOOL ok = [fm moveItemAtPath:from toPath:to error:&error] && [fm createSymbolicLinkAtPath:from withDestinationPath:to error:&error];
+        [lines addObject:[NSString stringWithFormat:@"%@: %@", name, ok ? @"moved into the App Group's Games, linked" : error.localizedDescription]];
+    }
+    return [lines componentsJoinedByString:@"\n"];
+}
+
+NSString *ShackHomeImport(NSString *from, NSString *home) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if (![fm fileExistsAtPath:from]) return @"";
+    NSUInteger moved = 0;
+    NSMutableArray<NSString *> *failed = [NSMutableArray array];
+    for (NSString *rel in [fm enumeratorAtPath:from].allObjects) {
+        NSString *src = [from stringByAppendingPathComponent:rel], *dst = [home stringByAppendingPathComponent:rel];
+        BOOL dir = NO;
+        if (![fm fileExistsAtPath:src isDirectory:&dir] || dir || [rel.lastPathComponent isEqual:@".DS_Store"]) continue;
+        NSError *error = nil;
+        [fm createDirectoryAtPath:dst.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL];
+        [fm removeItemAtPath:dst error:NULL];
+        if ([fm moveItemAtPath:src toPath:dst error:&error]) moved++;
+        else [failed addObject:[NSString stringWithFormat:@"%@ (%@)", rel, error.localizedDescription]];
+    }
+    if (!failed.count) [fm removeItemAtPath:from error:NULL];
+    return [NSString stringWithFormat:@"imported %lu file(s) into the shared home%@", (unsigned long)moved,
+            failed.count ? [@"; not moved: " stringByAppendingString:[failed componentsJoinedByString:@", "]] : @""];
+}
+
+NSString *ShackHomeExport(NSString *list, NSString *home, NSString *to) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    NSString *text = [NSString stringWithContentsOfFile:list encoding:NSUTF8StringEncoding error:NULL];
+    for (NSString *raw in [text componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+        NSString *rel = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (!rel.length) continue;
+        if ([rel hasPrefix:@"/"] || [rel.pathComponents containsObject:@".."]) { [lines addObject:[rel stringByAppendingString:@": refused (outside the home)"]]; continue; }
+        NSString *from = [home stringByAppendingPathComponent:rel], *dst = [to stringByAppendingPathComponent:rel];
+        if (![fm fileExistsAtPath:from]) { [lines addObject:[rel stringByAppendingString:@": missing"]]; continue; }
+        NSError *error = nil;
+        [fm createDirectoryAtPath:dst.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:NULL];
+        [fm removeItemAtPath:dst error:NULL];
+        [lines addObject:[NSString stringWithFormat:@"%@: %@", rel, [fm copyItemAtPath:from toPath:dst error:&error] ? @"copied" : error.localizedDescription]];
+    }
+    return [lines componentsJoinedByString:@"\n"];
 }

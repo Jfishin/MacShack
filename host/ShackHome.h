@@ -27,4 +27,18 @@ NSString *ShackHomePrefsSync(void);
 // What devicectl cannot reach behind the links, copied into Documents/Logs/Shared: Library/Logs (Unity's Player.log)
 // and Steam's logs/*.txt. At app start and after each game.
 void ShackHomeMirrorLogs(void);
+// Data beside the games in Local Games (a staged folder's own: Batman's BMAAData, steam_appid.txt) for MacShack Play,
+// which reads only the App Group: each entry of games that is not a .app, an .args or a link moves (a rename) into
+// shared under the same name, and a link to it is left in games, so MacShack and Play both find it beside the game.
+// A name already in shared is left alone. Returns one line per entry, empty when there is nothing to do.
+NSString *ShackShareGameData(NSString *games, NSString *shared);
+// Files put in Documents/HomeImport (devicectl reaches Documents; the shared home is behind links it does not follow):
+// each moves into home at the same relative path, replacing a file already there (Batman's Feral settings); other files
+// in home stay. The import folder goes once everything moved. Returns "imported N file(s)" (and any that failed), or
+// nothing when there is nothing to import. ShackHomeEnsure calls it at app start.
+NSString *ShackHomeImport(NSString *from, NSString *home);
+// Debugging what devicectl cannot reach behind the links: each path (relative to home, one per line) in the file list
+// is copied to the same relative path under to, a folder whole. Paths that leave home are refused. One line per path.
+// ShackHomeMirrorLogs runs it with Documents/HomeExport.txt into Documents/Logs/Shared/HomeExport.
+NSString *ShackHomeExport(NSString *list, NSString *home, NSString *to);
 NS_ASSUME_NONNULL_END

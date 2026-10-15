@@ -123,6 +123,39 @@ int main(void) {
         [fm setAttributes:@{NSFileModificationDate: [NSDate dateWithTimeIntervalSinceNow:60]} ofItemAtPath:sharedFile error:NULL];
         check([ShackPrefsSync(local, shared, synced, @[]) containsString:@"1 in, 0 out"] && [value(@"volume") isEqual:@13], "both changed: the newer file wins");
         forget(domain);
+        // Data beside a Local Games game (a staged folder's BMAAData) moves into the shared Games, with a link back.
+        NSString *games = [container stringByAppendingPathComponent:@"Documents/Games"], *sharedGames = [scratch stringByAppendingPathComponent:@"group/Games"];
+        writeText([games stringByAppendingPathComponent:@"Game.app/Contents/Info.plist"], @"app");
+        writeText([games stringByAppendingPathComponent:@"Game.args"], @"--x");
+        writeText([games stringByAppendingPathComponent:@"BMAAData/a.upk"], @"data");
+        writeText([games stringByAppendingPathComponent:@"Taken"], @"mine");
+        writeText([sharedGames stringByAppendingPathComponent:@"Taken"], @"theirs");
+        NSString *dataReport = ShackShareGameData(games, sharedGames), *data = [games stringByAppendingPathComponent:@"BMAAData"];
+        check([linkOf(data) isEqual:[sharedGames stringByAppendingPathComponent:@"BMAAData"]] &&
+              [readText([data stringByAppendingPathComponent:@"a.upk"]) isEqual:@"data"], "game data moved into the shared Games, read through the link");
+        check(!linkOf([games stringByAppendingPathComponent:@"Game.app"]) && !linkOf([games stringByAppendingPathComponent:@"Game.args"]) &&
+              ![fm fileExistsAtPath:[sharedGames stringByAppendingPathComponent:@"Game.app"]], "the .app and its .args stay");
+        check([readText([games stringByAppendingPathComponent:@"Taken"]) isEqual:@"mine"] && [readText([sharedGames stringByAppendingPathComponent:@"Taken"]) isEqual:@"theirs"] &&
+              [dataReport containsString:@"Taken: already"], "a name already shared is left alone");
+        check(![ShackShareGameData(games, sharedGames) containsString:@"BMAAData"], "shared once: the link is not moved again");
+        // Files put in Documents/HomeImport move into the shared home at the same path; everything else there stays.
+        NSString *import = [container stringByAppendingPathComponent:@"Documents/HomeImport"];
+        NSString *feral = @"Library/Application Support/Feral Interactive/Batman";
+        writeText([import stringByAppendingPathComponent:[feral stringByAppendingPathComponent:@"Preferences Data"]], @"seeded");
+        writeText([home stringByAppendingPathComponent:[feral stringByAppendingPathComponent:@"Preferences Data"]], @"old");
+        writeText([home stringByAppendingPathComponent:[feral stringByAppendingPathComponent:@"Saves/s1"]], @"save");
+        check([ShackHomeImport(import, home) containsString:@"imported 1 file"] &&
+              [readText([home stringByAppendingPathComponent:[feral stringByAppendingPathComponent:@"Preferences Data"]]) isEqual:@"seeded"] &&
+              [readText([home stringByAppendingPathComponent:[feral stringByAppendingPathComponent:@"Saves/s1"]]) isEqual:@"save"] &&
+              ![fm fileExistsAtPath:import], "an imported file replaces its twin in the home, the rest stays, the import folder goes");
+        check(ShackHomeImport(import, home).length == 0, "nothing to import: nothing said");
+        // Paths listed in HomeExport.txt are copied out of the home (devicectl does not follow the links into it).
+        writeText([home stringByAppendingPathComponent:@"Library/Application Support/Feral Interactive/Batman/MacInit/BmEngine.ini"], @"[Engine.Engine]");
+        NSString *list = [container stringByAppendingPathComponent:@"Documents/HomeExport.txt"], *out = [container stringByAppendingPathComponent:@"Documents/Logs/Shared/HomeExport"];
+        writeText(list, @"Library/Application Support/Feral Interactive/Batman/MacInit\nnot/there\n../escape\n");
+        NSString *exported = ShackHomeExport(list, home, out);
+        check([readText([out stringByAppendingPathComponent:@"Library/Application Support/Feral Interactive/Batman/MacInit/BmEngine.ini"]) isEqual:@"[Engine.Engine]"] &&
+              [exported containsString:@"not/there: missing"] && [exported containsString:@"../escape: refused"], "listed home paths copied out; a missing one and one leaving the home are said");
         [fm removeItemAtPath:scratch error:NULL];
         puts("home move ok");
     }
