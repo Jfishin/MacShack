@@ -5,6 +5,8 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
 #import <math.h>
+#import <CoreGraphics/CoreGraphics.h>
+#import <objc/message.h>
 #import <sys/stat.h>
 #import <unistd.h>
 
@@ -158,5 +160,18 @@ int32_t UCConvertLongDateTimeToCFAbsoluteTime(int64_t ldt, CFAbsoluteTime *at) {
     CFAbsoluteTime local = (CFAbsoluteTime)(ldt - kLongDate2001);
     *at = local - CFTimeZoneGetSecondsFromGMT(tz, local);
     CFRelease(tz);
+    return 0;
+}
+
+// HIToolbox's pointer position, in CG's global space (top-left origin, points): what a game that is not Retina-aware gets
+// for kHICoordSpaceScreenPixel (1) and kHICoordSpace72DPIGlobal (2). It is NSEvent's mouseLocation (bottom-left
+// origin), which touches and CGWarpMouseCursorPosition move. ponytail: the view and window spaces are refused (paramErr)
+// until a game asks for them.
+OSStatus HIGetMousePosition(uint32_t space, void *object, CGPoint *out) {
+    if (!out || (space != 1 && space != 2)) return -50;
+    id screen = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"NSScreen"), NSSelectorFromString(@"mainScreen"));
+    CGRect frame = screen ? ((CGRect (*)(id, SEL))objc_msgSend)(screen, NSSelectorFromString(@"frame")) : (CGRect){{0, 0}, {0, 0}};
+    CGPoint p = ((CGPoint (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"NSEvent"), NSSelectorFromString(@"mouseLocation"));
+    *out = (CGPoint){p.x, frame.size.height - p.y};
     return 0;
 }

@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
 #import <dlfcn.h>
+#import <objc/message.h>
 #import "../ShackDisplay.h"
 
 typedef uint32_t CGDirectDisplayID;
@@ -112,11 +113,18 @@ void CGDisplayModeRelease(CGDisplayModeRef mode) { if (mode) CFRelease(mode); }
 CGError CGDisplayRegisterReconfigurationCallback(CGDisplayReconfigurationCallBack cb, void *userInfo) { return kCGErrorSuccess; }
 CGError CGDisplayRemoveReconfigurationCallback(CGDisplayReconfigurationCallBack cb, void *userInfo) { return kCGErrorSuccess; }
 
-// ponytail: touch screen, no pointer to hide or warp.
+// ponytail: touch screen, no pointer to hide.
 CGError CGDisplayHideCursor(CGDirectDisplayID display) { return kCGErrorSuccess; }
 CGError CGDisplayShowCursor(CGDirectDisplayID display) { return kCGErrorSuccess; }
 boolean_t CGCursorIsVisible(void) { return 1; }
-CGError CGWarpMouseCursorPosition(CGPoint p) { return kCGErrorSuccess; }
+// A warp moves the pointer, as on a Mac: mouse-look code warps to the window's middle every frame and reads the position
+// back for the difference (Batman: Arkham Asylum, through HIGetMousePosition), so a warp that went nowhere spins the
+// camera. CG's global space has a top-left origin; NSEvent's mouseLocation, which holds the pointer, a bottom-left one.
+CGError CGWarpMouseCursorPosition(CGPoint p) {
+    CGPoint bottomLeft = {p.x, CGDisplayBounds(CGMainDisplayID()).size.height - p.y};
+    ((void (*)(id, SEL, CGPoint))objc_msgSend)((id)NSClassFromString(@"NSEvent"), NSSelectorFromString(@"shack_setMouseLocation:"), bottomLeft);
+    return kCGErrorSuccess;
+}
 CGError CGAssociateMouseAndMouseCursorPosition(boolean_t connected) { return kCGErrorSuccess; }
 
 // ponytail: no display fades; the reservation is a token that does nothing.
