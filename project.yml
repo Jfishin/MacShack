@@ -48,6 +48,8 @@ targets:
         buildPhase: sources
       - path: vendor/AArchX/src/leaf.s
         buildPhase: sources
+      - path: vendor/AArchX/src/objcguard.s
+        buildPhase: sources
     settings:
       base:
         PRODUCT_NAME: Ocerz
@@ -60,6 +62,7 @@ targets:
         HEADER_SEARCH_PATHS: "$(SRCROOT)/vendor/AArchX/include"
         GCC_OPTIMIZATION_LEVEL: "2"
         OTHER_CFLAGS: "-w"
+        OTHER_LDFLAGS: "-lcompression -lobjc"   # tcache.c's compression; Xcode autolinks it only with modules on
         CLANG_ENABLE_OBJC_ARC: NO
   ShackCarbon:
     type: library.dynamic

@@ -6,35 +6,34 @@ Objective-C bridge. Only its **native mode** is usable on iOS: it synthesizes x8
 system libraries and bridges each call to the arm64 framework, so no Rosetta x86 shared cache is
 needed. Cache mode maps Rosetta's cache and exists only on a Mac.
 
-`macshack.patch` holds our changes to it, each marked `MacShack:`:
+The pinned commit is efd64711 of [Jfishin/AArchX](https://github.com/Jfishin/AArchX): mont127/AArchX's main
+plus the MW3 and L4D2 series (mont127/AArchX#13, #14), which carry MacShack's earlier fixes and m32 upstream.
+`macshack.patch` holds only what iOS needs and the phone-proven fixes not upstream, each marked `MacShack:`:
 
-- a `data <export> 0` record exports an absolute zero (`_objc_empty_vtable`, Shovel Knight)
-- sdkgen: OpenGL parses the libGL passes, `gl.h` and `gl3.h` (52 -> 1296 bridged), MediaToolbox library added,
-  keymgr and `__cxa_finalize` signatures (old GCC C++ runtimes), AudioUnit library (old
-  binaries import AudioToolbox's AudioUnit calls from it; FMOD)
-- `objc_msgSend{,_stret,Super2,Super2_stret}_fixup`: legacy msgref ABI (Akane)
-- lazy flat-namespace binds wait until all of the main executable's dependencies are loaded,
-  as dyld resolves them on first call (LÖVE's love.framework imports Lua flat)
-- `AudioUnitSetProperty` special: the render/input-callback struct's x86 proc is interned as a
-  callback, since CoreAudio's I/O thread calls it natively (Unity's FMOD)
-- a JIT lock still held where a fault recovery lands (`vm.c` sigsetjmp sites) is released and
-  logged as `JITLOCK-RECOVER`: a fault inside `translate()` otherwise self-deadlocks the thread and
-  every other thread behind it (Akane). `OCERZ_JITLOCKLOG` also prints where a recursive holder took it
-- guest `pthread_create` gets a host stack of at least 4 MB (ocerz's translator runs on it; a Unity
-  worker's small stack overflowed mid-translation)
-- when AppKit first opens, registers the default `NSViewFixupNilFromMakeBackingLayer=YES`: AppKit
-  judges by ocerz's (current) SDK, layer-backs every view, and traps on a nil `-makeBackingLayer`
-  that old-SDK apps never hit (Unity's PlayerWindowView under OpenGL)
-- dual-mapped JIT arena, as iOS requires: code runs from an executable mapping that is never
-  writable, and every store into it goes through `a64_w`/`JW()` to a writable alias at a fixed offset.
-  `OCERZ_JIT_POOL="<rx>,<rw>,<size>"` (hex) takes the host's pool (MacShack's `ShackJITPoolSetup`);
-  `OCERZ_JIT_POOL_MB=<n>` builds one on the Mac, where a store that misses the alias faults exactly as
-  it would on the phone
-- `OCERZ_FPS=1` works in native mode: counts the `CGLFlushDrawable` stub and `-flushBuffer` sends
-  (a native `NSOpenGLContext` swaps without reaching the stub)
-- a message whose method the guest implemented jumps straight to the x86 IMP instead of crossing
-  (Unity's `UnityPLCrashSignalHandler` passes x86 function pointers; also saves a crossing per
-  guest-to-guest send)
+- iOS declarations: `include/ocerz/mach_vm_compat.h` (the iOS SDK's `mach_vm.h` is a bare `#error`, though
+  libsystem_kernel exports every function; `pthread_jit_write_protect_np` becomes a no-op there) and
+  `bootstrap_look_up`/`bootstrap_check_in` prototypes (no `servers/bootstrap.h` on iOS)
+- dual-mapped JIT arena, as iOS requires: code runs from an executable mapping that is never writable, and every
+  store into it goes through `a64_w`/`JW()` to a writable alias at a fixed offset. `OCERZ_JIT_POOL="<rx>,<rw>,<size>"`
+  (hex) takes the host's pool (MacShack's `ShackJITPoolSetup`); `OCERZ_JIT_POOL_MB=<n>` builds one on the Mac, where a
+  store that misses the alias faults exactly as it would on the phone
+- native-mode memory that fits iOS: `OCERZ_ARENA_GB` sizes the identity arena (256 GB by default), and a non-PIE main
+  is always slid into the arena on iOS (its low addresses are the host's, so the low shadow is never needed there)
+- `src/keymgr.c`: libkeymgr for hosts without one (old GCC C++ runtimes: FMOD Ex, Shovel Knight)
+- an offline libcurl (iOS has none): every request on a multi handle ends at once with
+  `CURLE_COULDNT_RESOLVE_HOST` (Feral's HTTP thread)
+- `pthread_attr_setstacksize` rounds a guest's 4 KB-page size up to the host page (FMOD Studio's 72 KB mixer
+  thread, refused by iOS)
+- a fault recovery releases a JIT lock its thread still holds (`JITLOCK-RECOVER`; Akane)
+- LAHF, the BCD ops, LOOP, PUSHA and POPA count as writers of the registers they change (diff32 seed 0x99)
+- an `ldr`/`str` offset that does not encode aborts instead of corrupting the opcode
+- i386 crash and abort reports print the guest's stack words and EBP chain
+- the x87 TOP check after a slow run reads `ftop` through the control word (a byte `ldr` cannot reach its offset)
+
+Not carried over from the old patch (no failing test on this base): the side-gap fusion check (`check_sidegap.c`
+passes without it), the low-shadow fallback (it broke cache mode on the Mac; unreachable on iOS) and the bridged-call
+page commit (Subnautica's GL upload; a host read of untouched guest memory works without it on the Mac). If a game
+on the phone shows one of them, it comes back with that game as its test.
 
 ## Build (Mac)
 
@@ -48,6 +47,9 @@ git submodule update --init vendor/AArchX
 cd vendor/AArchX && git apply ../../prep/aarchx/macshack.patch
 export DEVELOPER_DIR=<path to Xcode 27>.app/Contents/Developer
 make -j && make apis && bash tools/build_guest_cxx.sh   # guest x86 libc++ in runtime/guest
+# make apis stops at DVDPlayback (gone from the macOS 27 SDK): run tools/sdkgen.sh --no-baseline <library> for the
+# rest of tools/sdkgen/libraries (and --guest i386 <library> runtime/apis32 for APIS32_LIBS), then touch the stamps
+bash tools/fetch_guest32_cxx.sh   # i386 libstdc++, libgcc and libc++ in runtime/guest32 (m32)
 bash ../../prep/aarchx/guest_libstdcxx.sh   # GNU libstdc++.6 (old Unity, Aragami, Blasphemous, Gungeon)
 echo 'int ocerz_libstdcxx_shim;' > /tmp/stdcxx.c && G=runtime/guest/usr/lib
 # libgcc_s.1 stand-in (FMOD links it, imports nothing): re-exports the guest libunwind
@@ -55,8 +57,10 @@ clang -arch x86_64 -dynamiclib -install_name /usr/lib/libgcc_s.1.dylib -nostdlib
   -Wl,-reexport_library,$G/libunwind.1.dylib /tmp/stdcxx.c -o $G/libgcc_s.1.dylib
 bash tests/run_dynamic_tests.sh && bash tests/run_native_tests.sh   # 134/134, 87/87
 # MacShack checks: pthread_exit runs guest cleanup handlers; a non-PIE executable slides (scan rebase)
-for t in check_cleanup.c check_nopie.m check_packmul.c check_l0loop.c check_builtins.c check_ssemisc.c check_dlsym_deps.c check_cfuuid.c check_printf_l.c check_mmx.c check_shiftcl.c; do clang -arch x86_64 -mmacosx-version-min=10.9 -framework Foundation -framework IOKit \
-  -framework CoreFoundation -msse4.1 -Wl,-no_pie ../../prep/aarchx/$t -o /tmp/$t.x && ./ocerz -native /tmp/$t.x; done   # ran=11, nopie ok, packmul ok 48000, l0loop ok, builtins ok, ssemisc ok 90000, dlsym deps ok, cfuuid ok, printf_l ok, mmx ok 2dab7468d93168e0 (same as -no-jit), shiftcl ok ea85a0352a21c4f6
+for t in check_cleanup.c check_nopie.m check_packmul.c check_l0loop.c check_builtins.c check_ssemisc.c check_dlsym_deps.c check_cfuuid.c check_printf_l.c check_mmx.c check_shiftcl.c check_stacksize.c check_sidegap.c; do clang -arch x86_64 -mmacosx-version-min=10.9 -framework Foundation -framework IOKit \
+  -framework CoreFoundation -msse4.1 -Wl,-no_pie ../../prep/aarchx/$t -o /tmp/$t.x && ./ocerz -native /tmp/$t.x; done   # ran=11, nopie ok, packmul ok 48000, l0loop ok, builtins ok, ssemisc ok 90000, dlsym deps ok, cfuuid ok, printf_l ok, mmx ok 2dab7468d93168e0 (same as -no-jit), shiftcl ok ea85a0352a21c4f6, stacksize ok, sidegap ok 3300000
+clang -arch x86_64 -mmacosx-version-min=10.9 ../../prep/aarchx/check_curl.c -lcurl -o /tmp/curl.x && ./ocerz -native /tmp/curl.x   # curl offline ok
+# the same with OCERZ_JIT_POOL_MB=1024 (and the test suites above): the dual-mapped arena the phone uses
 ```
 
 After editing `vendor/AArchX`, regenerate the committed patch (it must stay byte-identical to a fresh build's diff):
@@ -111,7 +115,7 @@ MacShack integration:
   install name with the library `+[ShackPrep hostLibraryForInstallName:]` maps it to (the same shim or
   iOS framework an arm64 game's load command is rewritten to).
 - The pool is `--shack-jit-mb` (Intel games default to 512 MB, MonoKickstart games to 1 GB); raise it if AArchX logs
-  "JIT code arena full". AArchX never reuses its pool: a full pool runs new code interpreted.
+  "JIT code arena full". A full pool is rewound and reused (AArchX retranslates).
 
 ## Tips
 
@@ -126,7 +130,7 @@ MacShack integration:
 ## 32-bit (i386) Mac games: m32 (experimental)
 
 m32 runs i386-only Mac programs. No i386 game is confirmed playable on a device yet; Batman: Arkham Asylum (Feral)
-launches. The code is `src/m32*.c` and `include/ocerz/m32*.h` in AArchX (inside `macshack.patch`), plus two hooks:
+launches. The code is `src/m32*.c` and `include/ocerz/m32*.h` in AArchX (upstream since mont127/AArchX#8), plus two hooks:
 `main.c` routes an i386-only program to `m32_run`, and `ocerz_dyldapi_dispatch` hands a 32-bit cpu's trap to
 `m32_trap`.
 
@@ -157,6 +161,6 @@ launches. The code is `src/m32*.c` and `include/ocerz/m32*.h` in AArchX (inside 
 - Diagnostics: `OCERZ_M32LOG=imports,calls,images` (also `keys`, `monitors`); `OCERZ_M32_KEEP_GOING=1` runs with
   unresolved imports.
 
-Checks (Mac): `make apis32 && bash tests/m32/dbcheck.sh && make check-m32` (34 programs in `tests/m32`, each with an
+Checks (Mac): `make apis32 && bash tests/m32/dbcheck.sh && make check-m32` (76 programs in `tests/m32`, prebuilt in `tests/m32/bin`, each with an
 `.expected` output, built with `clang -arch i386 -Wl,-ld_classic` against generated stub `.tbd`s; `tests/m32/build.sh`
 uses Xcode 26 from `/Applications/Xcode.app`, whose linker still links i386), also with `OCERZ_NOJIT=1`.
