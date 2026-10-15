@@ -446,7 +446,11 @@ BOOL ShackResolveCase(const char *path, char *out, size_t n) {
     }
     const char *root = ""; size_t skip = 0;
     if (path[0] == '/') {
-        const char *roots[] = {gGuestRoot, gHome, gHomeReal, gSecond.root};
+        // The folder holding the guest's .app is the game's too: its data sits beside it in a Steam layout (Batman's
+        // BMAAData in MacShack Play's App Group Games, outside the home).
+        char folder[PATH_MAX]; strlcpy(folder, gGuestRoot, sizeof folder);
+        char *slash = strrchr(folder, '/'); if (slash && slash != folder) *slash = 0;
+        const char *roots[] = {folder, gHome, gHomeReal, gSecond.root};
         for (int i = 0; i < 4 && !skip; i++)
             for (int spelling = 0; spelling < 2 && !skip; spelling++) {   // as realpath gives it, and as NSString does (no /private)
                 const char *r = roots[i];

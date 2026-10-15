@@ -79,6 +79,14 @@ static int run(const char *vol) {
     CHECK(ci_rename(from, to) == 0);
     snprintf(made, sizeof made, "%s/Library/Application Support/Pearl Abyss/CD/save/1/slot0/steam.cfg", gHome); CHECK(stat(made, &st) == 0);
     o_rename = rename;
+    // MacShack Play: the game's .app in the App Group's Games, its data beside it (Batman's BMAAData/BmGame, asked for
+    // as BMGame) outside the home: the folder holding the .app is the game's too.
+    char rv[PATH_MAX]; realpath(vol, rv);
+    snprintf(gGuestRoot, sizeof gGuestRoot, "%s/Group/Games/Batman.app", rv);
+    snprintf(cmd, sizeof cmd, "mkdir -p '%s/Group/Games/Batman.app' '%s/Group/Games/BMAAData/BmGame/Splash/PC' && echo b > '%s/Group/Games/BMAAData/BmGame/Splash/PC/Splash.bmp'", vol, vol, vol);
+    CHECK(system(cmd) == 0);
+    snprintf(p, sizeof p, "%s/Group/Games/BMAAData/BMGame/Splash/PC/Splash.bmp", vol);
+    CHECK(ci_stat(p, &st) == 0);
     return 0;
 }
 
