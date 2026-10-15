@@ -8,7 +8,8 @@ needed. Cache mode maps Rosetta's cache and exists only on a Mac.
 
 The pinned commit is efd64711 of [Jfishin/AArchX](https://github.com/Jfishin/AArchX): mont127/AArchX's main
 plus the MW3 and L4D2 series (mont127/AArchX#13, #14), which carry MacShack's earlier fixes and m32 upstream.
-`macshack.patch` holds only what iOS needs and the phone-proven fixes not upstream, each marked `MacShack:`:
+`macshack.patch` (`git diff efd64711 ios` of Jfishin/AArchX, without test binaries) holds what iOS needs and the
+phone-proven fixes not upstream; the iOS changes are marked `MacShack:` in the source:
 
 - iOS declarations: `include/ocerz/mach_vm_compat.h` (the iOS SDK's `mach_vm.h` is a bare `#error`, though
   libsystem_kernel exports every function; `pthread_jit_write_protect_np` becomes a no-op there) and
@@ -29,6 +30,14 @@ plus the MW3 and L4D2 series (mont127/AArchX#13, #14), which carry MacShack's ea
 - an `ldr`/`str` offset that does not encode aborts instead of corrupting the opcode
 - i386 crash and abort reports print the guest's stack words and EBP chain
 - the x87 TOP check after a slow run reads `ftop` through the control word (a byte `ldr` cannot reach its offset)
+- `OCERZ_WILDDUMP=1` names the host function a wild fault hit (`dladdr` of pc and lr) and its argument registers
+- m32 OpenGL: a pointer argument that is an offset into a bound buffer reaches GL as the offset
+  (`tests/m32/glbufferoffset`), and buffer bindings are kept per context instead of asked of GL on every draw
+- m32 JIT coverage (Batman's renderer ran millions of instructions a second in the interpreter): a shift by cl whose
+  flags nothing reads no longer keeps the earlier flags live (shld/shrd); shifts, rotates, adc, sbb, setcc and
+  mul/div with a memory operand run as load, register form, store; pushf, popf, movs, stos, shifts of ah-bh, haddps,
+  rsqrtss and rcpss run translated (`docs/m32.md` lists their switches; diff32 covers each). These are also the
+  `m32-speed` branch on efd64711, for upstream.
 
 Not carried over from the old patch (no failing test on this base): the side-gap fusion check (`check_sidegap.c`
 passes without it), the low-shadow fallback (it broke cache mode on the Mac; unreachable on iOS) and the bridged-call

@@ -1,3 +1,29 @@
+diff --git a/docs/m32.md b/docs/m32.md
+index 5b12a34f..e1429e12 100644
+--- a/docs/m32.md
++++ b/docs/m32.md
+@@ -118,6 +118,9 @@ without `make steam32`.
+ | `OCERZ_NO_M32_LEAF=1` | leaf exports cross like any other import |
+ | `OCERZ_NO_HIGH8_ARITH=1` | instructions on ah, ch, dh and bh go to the interpreter again (64-bit code too; `docs/reference.md`) |
+ | `OCERZ_NO_SHIFT_MEM_IMM=1` | shifts of memory by an immediate go to the interpreter again (64-bit code too) |
++| `OCERZ_NO_M32_MEMRW=1` | shifts and rotates of memory, adc and sbb with a memory operand, setcc to memory and mul, imul, div and idiv of memory go to the interpreter again, instead of a load into r10, the register form and a store |
++| `OCERZ_NO_M32_HIGH8=1` | shl, shr and sar of ah, ch, dh or bh go to the interpreter again, instead of the same shift of r8b |
++| `OCERZ_NO_CLSHIFT_DEAD=1` | a shift by cl whose flags nothing reads keeps the flags before it live (64-bit code too; `docs/reference.md`) |
+ 
+ ## Limits
+ 
+diff --git a/docs/reference.md b/docs/reference.md
+index 7464d4e9..04d6b71a 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -104,6 +104,7 @@ bug is in what that switch controls.
+ | `OCERZ_NO_JIT_MMX=1` | run MMX instructions in the interpreter |
+ | `OCERZ_NO_HIGH8_ARITH=1` | run arithmetic, compares, moves and setcc on ah, ch, dh and bh in the interpreter, in 64-bit code as in 32-bit |
+ | `OCERZ_NO_SHIFT_MEM_IMM=1` | run a shift of memory by an immediate (`shr dword [ebp-0x3c], 2`) in the interpreter, in 64-bit code as in 32-bit |
++| `OCERZ_NO_CLSHIFT_DEAD=1` | keep the flags before a shift by cl live when nothing reads the shift's own (they pass through it only at a count of 0), which sends a shld or shrd by cl whose flags are live to the interpreter |
+ | `OCERZ_NZCV_GAP=<n>` | hand a compare's flags straight to the setcc, cmov, adc, sbb or jcc reading them only across at most n instructions between (0 to 8, default 8; 3 was the limit before 2026-10-11) |
+ | `OCERZ_NO_NZCV_GAP_LOAD=1` | end the window at a load, instead of letting a load sit in it and building the flags again from the compare's record after it |
+ | `OCERZ_NO_ADC_CINC=1` | set the carry in a register and add it for an adc or sbb of an immediate whose carry comes straight from a compare, instead of one csinc after at most one add or sub |
 diff --git a/include/ocerz/a64emit.h b/include/ocerz/a64emit.h
 index ef526689..58e22395 100644
 --- a/include/ocerz/a64emit.h
@@ -23,6 +49,19 @@ index ef526689..58e22395 100644
  void a64_emit32(A64Buf *b, uint32_t w);
  uint32_t *a64_label(A64Buf *b);
  
+diff --git a/include/ocerz/cpu.h b/include/ocerz/cpu.h
+index 07df074e..4508ee23 100644
+--- a/include/ocerz/cpu.h
++++ b/include/ocerz/cpu.h
+@@ -117,6 +117,8 @@ typedef struct OcerzCPU {
+     uint16_t fpr_xe[8];
+     uint16_t jit_x87_top0;  /* TOP as the running translated x87 run found it (src/jit.c) */
+     uint64_t jit_fcmp_mem;  /* the operand a translated comiss/ucomiss loaded from memory (src/jit.c) */
++    uint64_t jit_m32_r10;   /* r10 while an i386 instruction borrows it for its memory operand (src/jit.c) */
++    uint64_t jit_m32_r8;    /* r8 while an i386 shift borrows it for a high-byte register (src/jit.c) */
+     struct OcerzVM *vm;
+     int terminated;
+     int interp_once;
 diff --git a/include/ocerz/jit.h b/include/ocerz/jit.h
 index 362d0ed3..1fea7e47 100644
 --- a/include/ocerz/jit.h
@@ -36,10 +75,10 @@ index 362d0ed3..1fea7e47 100644
  struct OcerzCPU *ocerz_jit_lock_owner_cpu(void);
  void ocerz_jit_prefork(void);
 diff --git a/include/ocerz/m32.h b/include/ocerz/m32.h
-index ad3138b7..48bc384a 100644
+index ad3138b7..f65ed214 100644
 --- a/include/ocerz/m32.h
 +++ b/include/ocerz/m32.h
-@@ -52,12 +52,20 @@ uint32_t m32_steam_dlsym(uint32_t handle, const char *sym);
+@@ -52,12 +52,21 @@ uint32_t m32_steam_dlsym(uint32_t handle, const char *sym);
  /* imports the JIT calls straight from a stub block (m32_leaf.c): nargs 4-byte cdecl arguments, the pointers among
   * them (bit k: argument k) passed as host addresses.  simd: the host code it calls may use SIMD registers, so the
   * JIT saves the guest's xmm around it.  tramp: called as m32_leaf_tramp(leaf, raw arguments...), which converts the
@@ -59,6 +98,7 @@ index ad3138b7..48bc384a 100644
 + * buffer is bound to target in the current context */
 +unsigned m32_gl_offset_target(const char *name, int arg);
 +int m32_gl_buffer_bound(unsigned target);
++void *m32_gl_wrap(const char *sym, void *fn);   /* the host function for an export, wrapped when it changes a binding */
  
  static inline void *m32_h(uint32_t g) { return (void *)(uintptr_t)(ocerz_guest_base + g); }
  static inline uint32_t m32_rd(uint32_t g) { uint32_t v; memcpy(&v, m32_h(g), 4); return v; }
@@ -418,7 +458,7 @@ index 039958e3..b057a5c0 100644
  
      static OcerzCache cache;
 diff --git a/src/jit.c b/src/jit.c
-index 2b93f952..40e893ae 100644
+index 2b93f952..ed0f9a64 100644
 --- a/src/jit.c
 +++ b/src/jit.c
 @@ -702,7 +702,7 @@
@@ -475,7 +515,333 @@ index 2b93f952..40e893ae 100644
  const int *ocerz_jit_lock_depth_ptr(void)
  {
      return &ocerz_critical_depth;
-@@ -17296,7 +17327,7 @@ static void patch_local_adr(uint32_t *at, uint32_t *target, int rd)
+@@ -2843,6 +2874,9 @@ static int probe_wanted(uint64_t jcc_rip, uint64_t ft_rip)
+ }
+ 
+ static void emit_slowcall(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits);
++/* While the i386 memory-operand rewrite (m32_mem_rewrite_emit) translates stack copies of an instruction, the block's
++ * own: a slow path an inner emitter embeds (emit_div's) runs that in exec_one, never the copy, gone by then. */
++static const X86Insn *g_rewrite_orig;
+ static void emit_slowcall_keep_lanes(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits);
+ static void yc_reload_all(A64Buf *b);
+ 
+@@ -6579,6 +6613,84 @@ static int emit_leave32(A64Buf *b, const X86Insn *insn)
+     return 1;
+ }
+ 
++/*
++ * i386 pushf and popf inline (each ran in exec_one; Batman's renderer pairs
++ * them about 300 thousand times a second).  pushf stores the materialized
++ * EFLAGS; popf writes them back as op_stack does - the user-writable bits, the
++ * fixed 1 and IF - and leaves nothing deferred.  popf defines every flag
++ * (ocerz_flags_defuse), so no producer is fused across it.
++ */
++static int emit_pushf_popf32(A64Buf *b, const X86Insn *insn)
++{
++    if ((insn->opsize ? insn->opsize : 4) != 4 || !m32_stack_ok(insn) || !mem_native_store_ok())
++        return 0;
++    int hs = pin_hreg(pin_slot(OCERZ_RSP));
++    if (insn->op == OCERZ_OP_PUSHF) {
++        emit_materialize(b);
++        a64_ldr(b, 8, JT1, 20, RF_OFF);
++        a64_sub_imm(b, 0, JTA, hs, 4);
++        m32_stack_st(b, JT1, JTA);
++        a64_mov_reg(b, 0, hs, JTA);
++        return 1;
++    }
++    uint64_t writable = OCERZ_CF | OCERZ_PF | OCERZ_AF | OCERZ_ZF | OCERZ_SF |
++                        OCERZ_TF | OCERZ_DF | OCERZ_OF | ((uint64_t)1 << 18) | ((uint64_t)1 << 21);
++    m32_stack_ld(b, JT1, hs);
++    a64_add_imm(b, 0, hs, hs, 4);
++    a64_mov_imm64(b, JT0, writable);
++    a64_and_reg(b, 1, JT1, JT1, JT0, 0);
++    a64_mov_imm64(b, JT0, OCERZ_FLAG_FIXED1 | OCERZ_IF);
++    a64_orr_reg(b, 1, JT1, JT1, JT0, 0);
++    a64_str(b, 8, JT1, 20, RF_OFF);
++    a64_str(b, 4, A64_ZR, 20, CC_OP_OFF);
++    return 1;
++}
++
++/*
++ * i386 movs and stos (rep or single) inline, element by element as
++ * interp_ext.c's ext_string does them, so an overlapping copy comes out the
++ * same, in whichever direction DF says (rep movs ran in exec_one about 340
++ * thousand times a second in Batman's renderer).  A fault on an element leaves
++ * esi, edi and ecx where they were, and the instruction restarts from there as
++ * the interpreter's would.
++ */
++static int emit_string32(A64Buf *b, const X86Insn *insn)
++{
++    int size = insn->opsize, op = insn->op;
++    if (insn->addrsize != 4 || insn->seg != OCERZ_SEG_NONE || (size != 1 && size != 2 && size != 4))
++        return 0;
++    if (!jgb_usable() || mem_guard_needed() || !mem_native_store_ok())
++        return 0;
++    int ps = pin_slot(OCERZ_RSI), pd = pin_slot(OCERZ_RDI), pc = pin_slot(OCERZ_RCX), pa = pin_slot(OCERZ_RAX);
++    if (ps < 0 || pd < 0 || pc < 0 || pa < 0)
++        return 0;
++    int rsi = pin_hreg(ps), rdi = pin_hreg(pd), rcx = pin_hreg(pc), rax = pin_hreg(pa);
++    int rep = insn->rep != OCERZ_REP_NONE;
++    a64_ldr(b, 8, JT2, 20, RF_OFF);
++    a64_ubfx(b, 0, JT2, JT2, 10, 1);                                    /* DF */
++    a64_lsl_imm(b, 0, JT2, JT2, size == 1 ? 1 : size == 2 ? 2 : 3);    /* 2 * size * DF */
++    a64_mov_imm64(b, JT0, (uint64_t)size);
++    a64_sub_reg(b, 0, JT2, JT0, JT2, 0);                                /* step: size, or -size going down */
++    uint32_t *done = NULL;
++    if (rep) { done = a64_label(b); a64_cbz(b, 0, rcx, 0); }
++    uint32_t *loop = a64_label(b);
++    if (op == OCERZ_OP_MOVS) {
++        a64_ldr_regoff_uxtw(b, size, JT1, JGB, rsi);
++        a64_str_regoff_uxtw(b, size, JT1, JGB, rdi);
++        a64_add_reg(b, 0, rsi, rsi, JT2, 0);
++    } else {
++        a64_str_regoff_uxtw(b, size, rax, JGB, rdi);
++    }
++    a64_add_reg(b, 0, rdi, rdi, JT2, 0);
++    if (rep) {
++        a64_sub_imm(b, 0, rcx, rcx, 1);
++        uint32_t *here = a64_label(b);
++        a64_cbnz(b, 0, rcx, (int32_t)(loop - here));
++        a64_patch_cbz(done, a64_label(b));
++    }
++    return 1;
++}
++
+ static int emit_push_pop(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits)
+ {
+     const X86Operand *o = &insn->ops[0];
+@@ -11176,6 +11288,45 @@ static int emit_sse_blendp(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites
+     return 1;
+ }
+ 
++/* haddps/haddpd: the even and the odd elements of d:s (uzp1, uzp2) added lane by lane, so the NaN arm sees each
++ * sum's own two operands, as the interpreter's fixnan does */
++static int emit_sse_hadd(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits)
++{
++    if (insn->nops != 2) return 0;
++    const X86Operand *d = &insn->ops[0], *s = &insn->ops[1];
++    if (d->kind != OCERZ_OPK_XMM) return 0;
++    int dbl = insn->op == OCERZ_OP_HADDPD;
++    int vs = emit_sse_src_reg(b, insn, s, 16, VX1, exit_sites, n_exits);
++    if (vs < 0) return 0;
++    int vd = xmm_dst_reg(d->reg, VX0);
++    if (vd == VX0) emit_xmm_ld(b, VX0, d->reg);
++    a64_v_uzp1(b, dbl ? 3 : 2, VX2, vd, vs);
++    a64_v_uzp2(b, dbl ? 3 : 2, VX3, vd, vs);
++    a64_v_fadd(b, dbl, VX1, VX2, VX3);
++    emit_nan_fix_packed2(b, dbl, VX1, VX2, VX3, VX0, VX0);
++    if (vd == VX0) emit_xmm_st(b, VX1, d->reg);
++    else a64_v_mov(b, vd, VX1);
++    return 1;
++}
++
++/* rsqrtss/rcpss as the interpreter computes them, 1.0f / sqrtf(x) and 1.0f / x (exact rather than the hardware's
++ * 12-bit estimate, so diff32 can hold them to it); the upper lanes stay */
++static int emit_sse_rsqrt_rcp_ss(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits)
++{
++    const X86Operand *d = &insn->ops[0], *s = &insn->ops[1];
++    if (insn->nops != 2 || d->kind != OCERZ_OPK_XMM)
++        return 0;
++    if (!emit_sse_src(b, insn, s, 4, VX0, exit_sites, n_exits))
++        return 0;
++    if (insn->op == OCERZ_OP_RSQRTSS)
++        a64_fsqrt_s(b, 0, VX0, VX0);
++    a64_mov_imm64(b, JT0, 0x3f800000u);
++    a64_fmov_v_from_x(b, 0, VX1, JT0);
++    a64_fdiv_s(b, 0, VX0, VX1, VX0);
++    emit_xmm_st_lo(b, 4, VX0, d->reg);
++    return 1;
++}
++
+ static int emit_sse_movsdup(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits)
+ {
+     if (insn->nops != 2) return 0;
+@@ -12299,6 +12450,10 @@ static int emit_sse(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *
+         return emit_sse_blendp(b, insn, exit_sites, n_exits);
+     case OCERZ_OP_MOVSHDUP: case OCERZ_OP_MOVSLDUP:
+         return emit_sse_movsdup(b, insn, exit_sites, n_exits);
++    case OCERZ_OP_HADDPS: case OCERZ_OP_HADDPD:
++        return emit_sse_hadd(b, insn, exit_sites, n_exits);
++    case OCERZ_OP_RSQRTSS: case OCERZ_OP_RCPSS:
++        return emit_sse_rsqrt_rcp_ss(b, insn, exit_sites, n_exits);
+     case OCERZ_OP_MOVMSKPS: case OCERZ_OP_MOVMSKPD:
+         return emit_sse_movmskp(b, insn);
+     case OCERZ_OP_CMPPS: case OCERZ_OP_CMPPD:
+@@ -15279,6 +15434,7 @@ static int m32_inline_ok(const X86Insn *insn)
+     case OCERZ_OP_PMOVMSKB:
+     case OCERZ_OP_XCHG: case OCERZ_OP_XADD: case OCERZ_OP_CMPXCHG: case OCERZ_OP_CMPXCHGXB:
+     case OCERZ_OP_BT: case OCERZ_OP_BTS: case OCERZ_OP_BTR: case OCERZ_OP_BTC:
++    case OCERZ_OP_PUSHF: case OCERZ_OP_POPF: case OCERZ_OP_MOVS: case OCERZ_OP_STOS:
+         return 1;
+     default:
+         return insn->op >= OCERZ_OP_MOVUPS && insn->op <= OCERZ_OP_PBLENDVB;
+@@ -15408,13 +15564,157 @@ static int emit_sidt(A64Buf *b, const X86Insn *insn)
+     return 1;
+ }
+ 
++/*
++ * i386 shifts and rotates of memory, adc and sbb with a memory operand, setcc
++ * to memory and mul, imul and div of memory have no emitter of their own in
++ * 32-bit blocks: they run as a load into r10, the register form on r10 and a
++ * store back (Batman's renderer ran about 2 million of them a second in
++ * exec_one: adc [mem], 0 and shr [mem], cl). i386 code has no r10, and its
++ * slot is kept in cpu->jit_m32_r10 meanwhile, so nothing guest-visible
++ * changes. The store cannot decline once the load of the same operand was
++ * emitted (emit_mov_mem), so the flags the middle step wrote are never seen by
++ * a re-run of the whole instruction in exec_one. No locked or segment forms.
++ * OCERZ_NO_M32_MEMRW=1 leaves them in exec_one.
++ */
++static int try_inline(A64Buf *b, const X86Insn *insn, uint64_t need, uint32_t **exit_sites, int *n_exits);
++static int m32_mem_rewrite_ok(const X86Insn *insn, int *mi_out)
++{
++    static int off = -1;
++    if (off < 0) off = getenv("OCERZ_NO_M32_MEMRW") ? 1 : 0;
++    if (off || !insn->mode32 || insn->addrsize != 4)
++        return 0;
++    int mi = -1;
++    for (int i = 0; i < insn->nops; i++)
++        if (insn->ops[i].kind == OCERZ_OPK_MEM) {
++            if (mi >= 0) return 0;
++            mi = i;
++        }
++    if (mi < 0 || insn->lock || insn->seg != OCERZ_SEG_NONE || pin_slot(OCERZ_R10) < 0 || !mem_native_store_ok())
++        return 0;
++    int sz = insn->ops[mi].size;
++    if (sz != 1 && sz != 2 && sz != 4)
++        return 0;
++    switch (insn->op) {
++    case OCERZ_OP_SHL: case OCERZ_OP_SHR: case OCERZ_OP_SAR: case OCERZ_OP_ROL: case OCERZ_OP_ROR:
++    case OCERZ_OP_SETCC:
++        if (mi != 0) return 0;
++        break;
++    case OCERZ_OP_ADC: case OCERZ_OP_SBB:
++        break;
++    case OCERZ_OP_MUL: case OCERZ_OP_IMUL: case OCERZ_OP_DIV: case OCERZ_OP_IDIV:   /* the operand is only read */
++        if (mi != 0 || insn->nops != 1) return 0;
++        break;
++    default:
++        return 0;
++    }
++    *mi_out = mi;
++    return 1;
++}
++static int m32_mem_rewrite_emit(A64Buf *b, const X86Insn *insn, uint64_t need, int mi,
++                                uint32_t **exit_sites, int *n_exits)
++{
++    X86Operand tmp = { 0 };
++    tmp.kind = OCERZ_OPK_REG;
++    tmp.reg = OCERZ_R10;
++    tmp.size = insn->ops[mi].size;
++    X86Insn mid = *insn;
++    mid.ops[mi] = tmp;
++    int r10 = pin_hreg(pin_slot(OCERZ_R10));
++    uint32_t save = (uint32_t)offsetof(OcerzCPU, jit_m32_r10);
++    int stores = insn->op != OCERZ_OP_MUL && insn->op != OCERZ_OP_IMUL && insn->op != OCERZ_OP_DIV &&
++                 insn->op != OCERZ_OP_IDIV;
++    a64_str(b, 8, r10, 20, save);
++    if (insn->op != OCERZ_OP_SETCC) {
++        X86Insn ld = *insn;
++        ld.op = OCERZ_OP_MOV;
++        ld.nops = 2;
++        ld.ops[0] = tmp;
++        ld.ops[1] = insn->ops[mi];
++        if (!try_inline(b, &ld, 0, exit_sites, n_exits))
++            return 0;   /* only the save was emitted */
++    }
++    if (!try_inline(b, &mid, need, exit_sites, n_exits)) {
++        a64_ldr(b, 8, r10, 20, save);
++        return 0;
++    }
++    if (mi == 0 && stores) {
++        X86Insn st = *insn;
++        st.op = OCERZ_OP_MOV;
++        st.nops = 2;
++        st.ops[0] = insn->ops[mi];
++        st.ops[1] = tmp;
++        if (!try_inline(b, &st, 0, exit_sites, n_exits)) {
++            assert(insn->op == OCERZ_OP_SETCC && "the store of an operand whose load was emitted");
++            a64_ldr(b, 8, r10, 20, save);
++            return 0;   /* setcc loaded nothing: nothing but r10 written yet */
++        }
++    }
++    a64_ldr(b, 8, r10, 20, save);
++    return 1;
++}
++
++/*
++ * An i386 shift of a high-byte register (shr bh, 4: about 100 thousand a second
++ * in Batman's renderer) runs as the same shift of r8b: the byte is copied out
++ * (ubfx), shifted, and put back (bfi). i386 code has no r8; its slot is kept in
++ * cpu->jit_m32_r8 meanwhile. The deferred flags hold values, not registers, and
++ * no fusion takes a high-byte producer, so nothing reads r8 after. A count in
++ * cl stays cl, which is never a high byte. OCERZ_NO_M32_HIGH8=1 leaves them in
++ * exec_one.
++ */
++static int m32_high8_shift_ok(const X86Insn *insn)
++{
++    static int off = -1;
++    if (off < 0) off = getenv("OCERZ_NO_M32_HIGH8") ? 1 : 0;
++    if (off || !insn->mode32 || insn->nops != 2)
++        return 0;
++    if (insn->op != OCERZ_OP_SHL && insn->op != OCERZ_OP_SHR && insn->op != OCERZ_OP_SAR)
++        return 0;
++    const X86Operand *d = &insn->ops[0];
++    return d->kind == OCERZ_OPK_REG && d->high8 && pin_slot(d->reg) >= 0 && pin_slot(OCERZ_R8) >= 0;
++}
++static int m32_high8_shift_emit(A64Buf *b, const X86Insn *insn, uint64_t need, uint32_t **exit_sites, int *n_exits)
++{
++    X86Insn t = *insn;
++    t.ops[0].reg = OCERZ_R8;
++    t.ops[0].high8 = 0;
++    int r8 = pin_hreg(pin_slot(OCERZ_R8)), hr = pin_hreg(pin_slot(insn->ops[0].reg));
++    uint32_t save = (uint32_t)offsetof(OcerzCPU, jit_m32_r8);
++    a64_str(b, 8, r8, 20, save);
++    a64_ubfx(b, 0, r8, hr, 8, 8);
++    int r = try_inline(b, &t, need, exit_sites, n_exits);
++    if (r)
++        a64_bfi(b, 1, hr, r8, 8, 8);
++    a64_ldr(b, 8, r8, 20, save);
++    return r;
++}
++
+ static int try_inline(A64Buf *b, const X86Insn *insn, uint64_t need,
+                       uint32_t **exit_sites, int *n_exits)
+ {
++    if (m32_high8_shift_ok(insn)) {
++        const X86Insn *outer = g_rewrite_orig;
++        if (!outer) g_rewrite_orig = insn;
++        int r = m32_high8_shift_emit(b, insn, need, exit_sites, n_exits);
++        g_rewrite_orig = outer;
++        return r;
++    }
++    int mi;
++    if (m32_mem_rewrite_ok(insn, &mi)) {
++        const X86Insn *outer = g_rewrite_orig;
++        if (!outer) g_rewrite_orig = insn;
++        int r = m32_mem_rewrite_emit(b, insn, need, mi, exit_sites, n_exits);
++        g_rewrite_orig = outer;
++        return r;
++    }
+     if (ocerz_insn_has_mmx(insn)) return emit_mmx(b, insn, exit_sites, n_exits);
+     if (insn->vex) return emit_vex(b, insn, exit_sites, n_exits);
+     if (insn->mode32 && !m32_inline_ok(insn))
+         return 0;
++    if (insn->mode32 && (insn->op == OCERZ_OP_PUSHF || insn->op == OCERZ_OP_POPF))
++        return emit_pushf_popf32(b, insn);
++    if (insn->mode32 && (insn->op == OCERZ_OP_MOVS || insn->op == OCERZ_OP_STOS))
++        return emit_string32(b, insn);
+     if (insn->op > OCERZ_OP_X87_FIRST && insn->op < OCERZ_OP_SSE_FIRST)
+         return emit_x87(b, insn, need, exit_sites, n_exits);
+     if (insn->op == OCERZ_OP_NOP || insn->op == OCERZ_OP_PAUSE ||
+@@ -15619,6 +15919,7 @@ static int try_inline(A64Buf *b, const X86Insn *insn, uint64_t need,
+     case OCERZ_OP_PHADDW: case OCERZ_OP_PHADDD: case OCERZ_OP_PHSUBW: case OCERZ_OP_PHSUBD: case OCERZ_OP_PHADDSW: case OCERZ_OP_PHSUBSW:
+     case OCERZ_OP_PSHUFLW: case OCERZ_OP_PSHUFHW: case OCERZ_OP_PSLLDQ: case OCERZ_OP_PSRLDQ:
+     case OCERZ_OP_BLENDPS: case OCERZ_OP_BLENDPD: case OCERZ_OP_MOVSHDUP: case OCERZ_OP_MOVSLDUP:
++    case OCERZ_OP_HADDPS: case OCERZ_OP_HADDPD: case OCERZ_OP_RSQRTSS: case OCERZ_OP_RCPSS:
+     case OCERZ_OP_MOVMSKPS: case OCERZ_OP_MOVMSKPD: case OCERZ_OP_CMPPS: case OCERZ_OP_CMPPD:
+     case OCERZ_OP_CVTTPS2DQ: case OCERZ_OP_CVTPS2DQ: case OCERZ_OP_CVTDQ2PD:
+     case OCERZ_OP_CVTPS2PD: case OCERZ_OP_CVTPD2PS:
+@@ -17296,7 +17597,7 @@ static void patch_local_adr(uint32_t *at, uint32_t *target, int rd)
      if (!(off >= -(1 << 20) && off < (1 << 20)))
          return;
      uint32_t imm = (uint32_t)((uint64_t)off & 0x1fffffu);
@@ -484,7 +850,7 @@ index 2b93f952..40e893ae 100644
            (((imm >> 2) & 0x7ffffu) << 5) | (uint32_t)(rd & 31);
  }
  
-@@ -17473,7 +17504,7 @@ static int emit_call_ret32(A64Buf *b, const X86Insn *insn,
+@@ -17473,7 +17774,7 @@ static int emit_call_ret32(A64Buf *b, const X86Insn *insn,
              patch_local_adr(adr_site, cont, JT0);
              uint32_t *pb_ret = emit_body_chain_tail(b, retaddr, 0, epi_sites, n_epi);
              uint32_t *callee_fb = a64_label(b);
@@ -493,7 +859,7 @@ index 2b93f952..40e893ae 100644
              a64_mov_imm64(b, JT0, target);
              a64_str(b, 8, JT0, 20, RIP_OFF);
              a64_mov_imm64(b, 0, OCERZ_STEP_OK);
-@@ -17637,7 +17668,7 @@ static int emit_call_ret(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites,
+@@ -17637,7 +17938,7 @@ static int emit_call_ret(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites,
              patch_local_adr(adr_site, cont, JT0);
              uint32_t *pb_ret = emit_body_chain_tail(b, retaddr, 0, epi_sites, n_epi);
              uint32_t *callee_fb = a64_label(b);
@@ -502,7 +868,16 @@ index 2b93f952..40e893ae 100644
              a64_mov_imm64(b, JT0, target);
              a64_str(b, 8, JT0, 20, RIP_OFF);
              a64_mov_imm64(b, 0, OCERZ_STEP_OK);
-@@ -19149,12 +19180,12 @@ static void chain_cond_short(uint32_t *cond_site, void *dst)
+@@ -18923,6 +19224,8 @@ static int emit_indirect_call(A64Buf *b, const X86Insn *insn, uint32_t **exit_si
+ 
+ static void emit_slowcall(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits)
+ {
++    if (g_rewrite_orig)
++        insn = g_rewrite_orig;
+     int32_t lazy_pend = g_lazy_end >= 0 ? g_rsp_pend : 0;
+     int lazy_hs = pin_slot(OCERZ_RSP) >= 0 ? pin_hreg(pin_slot(OCERZ_RSP)) : -1;
+     if (lazy_pend && lazy_hs >= 0)
+@@ -19149,12 +19452,12 @@ static void chain_cond_short(uint32_t *cond_site, void *dst)
          nw = (w & ~(0x3fffu << 5)) | (((uint32_t)off & 0x3fffu) << 5);
      } else return;
      if (g_chain_batching) {
@@ -517,7 +892,7 @@ index 2b93f952..40e893ae 100644
          pthread_jit_write_protect_np(1);
          sys_icache_invalidate(cond_site, 4);
      }
-@@ -19205,9 +19236,9 @@ static uint32_t *veneer_make(OcerzJit *jit, const uint32_t *site, const void *ds
+@@ -19205,9 +19508,9 @@ static uint32_t *veneer_make(OcerzJit *jit, const uint32_t *site, const void *ds
      uint32_t *v = (uint32_t *)((uint8_t *)jit->veneer_pool[best] + jit->veneer_used[best] * VENEER_BYTES);
      uint64_t target = (uint64_t)(uintptr_t)dst;
      if (!batching) pthread_jit_write_protect_np(0);
@@ -530,7 +905,7 @@ index 2b93f952..40e893ae 100644
      if (!batching) pthread_jit_write_protect_np(1);
      sys_icache_invalidate(v, VENEER_BYTES);
      jit->veneer_used[best]++;
-@@ -19379,7 +19410,7 @@ static void pending_drain(uint64_t key, JitBlock *target)
+@@ -19379,7 +19682,7 @@ static void pending_drain(uint64_t key, JitBlock *target)
          if (e->target_key == key) {
              if (e->ras_slot) {
                  chaincheck("ras_slot", ras_entry_for(target));
@@ -539,7 +914,7 @@ index 2b93f952..40e893ae 100644
              }
              else if (e->kind == EDGE_BODY) {
                  int compatible = e->pin_class
-@@ -19515,7 +19546,19 @@ static int insn_may_write_gpr(const X86Insn *in, unsigned reg)
+@@ -19515,7 +19818,19 @@ static int insn_may_write_gpr(const X86Insn *in, unsigned reg)
          if (reg == OCERZ_RSI || reg == OCERZ_RDI || reg == OCERZ_RCX || reg == OCERZ_RAX) return 1;
          break;
      case OCERZ_OP_SYSCALL: case OCERZ_OP_INT: case OCERZ_OP_INT3:
@@ -559,7 +934,16 @@ index 2b93f952..40e893ae 100644
      case OCERZ_OP_XCHG: case OCERZ_OP_XADD:
          for (int k = 0; k < in->nops; k++)
              if (in->ops[k].kind == OCERZ_OPK_REG && (in->ops[k].reg & 15) == reg) return 1;
-@@ -20383,7 +20426,10 @@ static void emit_x87_arms(A64Buf *b, uint32_t **exit_sites, int *n_exits, uint32
+@@ -20162,7 +20477,7 @@ static int oolslow_add(const X86Insn *insn, uint32_t **sites, int nsites, uint32
+     ea_cache_reset();
+     for (int i = 0; i < nsites; i++) g_oolslow[g_n_oolslow].sites[i] = sites[i];
+     g_oolslow[g_n_oolslow].nsites = nsites;
+-    g_oolslow[g_n_oolslow].insn = insn;
++    g_oolslow[g_n_oolslow].insn = g_rewrite_orig ? g_rewrite_orig : insn;
+     g_oolslow[g_n_oolslow].back = back;
+     g_oolslow[g_n_oolslow].pre = g_oolslow_pre;
+     for (int r = 0; r < 16; r++) { g_oolslow[g_n_oolslow].l0[r] = g_l0[r]; g_oolslow[g_n_oolslow].l0_dbl[r] = g_l0_dbl[r]; }
+@@ -20383,7 +20698,10 @@ static void emit_x87_arms(A64Buf *b, uint32_t **exit_sites, int *n_exits, uint32
               * translated for: leave after the run with side_idx -3, and C
               * retranslates the block without the known TOP.
               */
@@ -571,7 +955,7 @@ index 2b93f952..40e893ae 100644
              a64_subs_imm(b, 0, A64_ZR, JT0, (uint32_t)run->top_end);
              uint32_t *same = a64_label(b);
              a64_bcond(b, A64_EQ, 0);
-@@ -21074,16 +21120,16 @@ static int tc_imm_shape(const uint32_t *w)
+@@ -21074,16 +21392,16 @@ static int tc_imm_shape(const uint32_t *w)
  static void tc_imm_write(uint32_t *w, uint64_t v)
  {
      for (int k = 0; k < 4; k++)
@@ -591,7 +975,7 @@ index 2b93f952..40e893ae 100644
          pending_add_ras(jit_key(retaddr, mode32), cell);
      }
  }
-@@ -21125,7 +21171,7 @@ static int tc_bind(OcerzJit *jit, JitBlock *blk, uint32_t *code, const TcReloc *
+@@ -21125,7 +21443,7 @@ static int tc_bind(OcerzJit *jit, JitBlock *blk, uint32_t *code, const TcReloc *
          if (r->kind == TCR_RASSLOT)
              tc_ras_fill(jit, (void **)(uintptr_t)g_tc_val[i], r->arg, mode32);
          if (r->form == 1)
@@ -600,7 +984,7 @@ index 2b93f952..40e893ae 100644
          else
              tc_imm_write(w, g_tc_val[i]);
      }
-@@ -21315,14 +21361,14 @@ static uint32_t *tc_roundtrip(OcerzJit *jit, JitBlock *blk, uint32_t *entry)
+@@ -21315,14 +21633,14 @@ static uint32_t *tc_roundtrip(OcerzJit *jit, JitBlock *blk, uint32_t *entry)
      }
      uint32_t *c = (uint32_t *)copy;
      pthread_jit_write_protect_np(0);
@@ -617,7 +1001,7 @@ index 2b93f952..40e893ae 100644
      pthread_jit_write_protect_np(1);
      sys_icache_invalidate(entry, (size_t)words * 4);
      sys_icache_invalidate(c, (size_t)words * 4);
-@@ -21830,7 +21876,7 @@ static JitBlock *tc_load(OcerzJit *jit, const OcerzTcRecHead *h, uint64_t rip, i
+@@ -21830,7 +22148,7 @@ static JitBlock *tc_load(OcerzJit *jit, const OcerzTcRecHead *h, uint64_t rip, i
          tc_free_blk(blk);
          return NULL;
      }
@@ -626,7 +1010,7 @@ index 2b93f952..40e893ae 100644
      if (!tc_bind(jit, blk, c, v.rel, (int)r->n_rel, 1)) {
          pthread_jit_write_protect_np(1);
          tc_free_blk(blk);
-@@ -22604,8 +22650,8 @@ static JitBlock *translate(OcerzJit *jit, uint64_t rip, int mode32)
+@@ -22604,8 +22922,8 @@ static JitBlock *translate(OcerzJit *jit, uint64_t rip, int mode32)
                size_t pad = ((uintptr_t)la - ((uintptr_t)b.p & (uintptr_t)(la - 1))) & (uintptr_t)(la - 1);
                pad /= 4;
                if (pad && b.p + pad < b.end) {
@@ -637,7 +1021,36 @@ index 2b93f952..40e893ae 100644
                    g_body_entry += pad;
                    if (body_noreload) body_noreload += pad;
                    b.p += pad;
-@@ -23758,27 +23804,27 @@ promo_push_fallthrough:
+@@ -22748,8 +23066,26 @@ static JitBlock *translate(OcerzJit *jit, uint64_t rip, int mode32)
+                 use = 0;
+             fl_need[i] = def & live_seam;
+             fl_live[i] = live_seam;
+-            live_seam = (live_seam & ~def) | use;
+-            live_all = (live_all & ~def) | use;
++            /*
++             * A shift by %cl hands its incoming flags on only when the count is
++             * 0, so when nothing reads its flags nothing reads the incoming ones
++             * through it either. The 64-bit shift helpers of i386 code (shld r,
++             * r, cl; shl r, cl; test cl, 0x20; cmov) otherwise kept each shld's
++             * flags live, and a shld with live flags runs in exec_one: ~4 million
++             * a second in Batman's renderer. OCERZ_NO_CLSHIFT_DEAD=1 keeps them.
++             */
++            static int clshift_live = -1;
++            if (clshift_live < 0) clshift_live = getenv("OCERZ_NO_CLSHIFT_DEAD") ? 1 : 0;
++            const X86Insn *si = &blk->insns[i];
++            int cl_shift = !clshift_live &&
++                           (((si->op == OCERZ_OP_SHL || si->op == OCERZ_OP_SHR || si->op == OCERZ_OP_SAR) &&
++                             si->nops == 2 && si->ops[1].kind == OCERZ_OPK_REG) ||
++                            ((si->op == OCERZ_OP_SHLD || si->op == OCERZ_OP_SHRD) &&
++                             si->nops == 3 && si->ops[2].kind == OCERZ_OPK_REG));
++            if (!cl_shift || (live_seam & OCERZ_FL_ALL))
++                live_seam = (live_seam & ~def) | use;
++            if (!cl_shift || (live_all & OCERZ_FL_ALL))
++                live_all = (live_all & ~def) | use;
+ 
+             if (g_no_lazyflags) {
+                 fl_need[i] = def;
+@@ -23758,27 +24094,27 @@ promo_push_fallthrough:
              if (g_raslit[i].kind == 2) {
                  a64_emit32(&b, 0); a64_emit32(&b, 0);
                  if (b.overflow) break;
@@ -672,7 +1085,7 @@ index 2b93f952..40e893ae 100644
              else
                  pending_add_ras(jit_key(g_raslit[i].retaddr, g_xlat_mode32), cell);
          }
-@@ -23799,9 +23845,9 @@ promo_push_fallthrough:
+@@ -23799,9 +24135,9 @@ promo_push_fallthrough:
              blk->stop_patch = g_stop_patch;
              blk->stop_insn = stop_retarget(running_insn, g_stop_patch, g_stop_target);
              if (jit->stop_requested)
@@ -684,7 +1097,7 @@ index 2b93f952..40e893ae 100644
          }
          blk->push_fix = NULL; blk->n_push_fix = 0;
          if (g_n_push_fix) {
-@@ -23819,7 +23865,7 @@ promo_push_fallthrough:
+@@ -23819,7 +24155,7 @@ promo_push_fallthrough:
                  stop_retarget(*site, site, g_stop_extra[i].target);
              blk->n_stop_extra++;
              if (jit->stop_requested)
@@ -693,7 +1106,7 @@ index 2b93f952..40e893ae 100644
          }
      }
  
-@@ -24530,7 +24576,7 @@ int ocerz_jit_hotpatch_align(struct OcerzVM *vm, const void *host_pc)
+@@ -24530,7 +24866,7 @@ int ocerz_jit_hotpatch_align(struct OcerzVM *vm, const void *host_pc)
          int ok = !b.overflow && a64_try_patch_b(back1, back) && a64_try_patch_b(back2, back);
          if (ok) {
              uint32_t saved = *site;
@@ -702,7 +1115,7 @@ index 2b93f952..40e893ae 100644
              if (a64_try_patch_b(site, arm)) {
                  if (pool >= 0)
                      jit->veneer_used[pool] += (unsigned)(((uint8_t *)b.p - (uint8_t *)arm +
-@@ -24541,7 +24587,7 @@ int ocerz_jit_hotpatch_align(struct OcerzVM *vm, const void *host_pc)
+@@ -24541,7 +24877,7 @@ int ocerz_jit_hotpatch_align(struct OcerzVM *vm, const void *host_pc)
                  sys_icache_invalidate(site, 4);
                  rc = 1;
              } else {
@@ -711,7 +1124,7 @@ index 2b93f952..40e893ae 100644
              }
          }
          pthread_jit_write_protect_np(1);
-@@ -24624,6 +24670,47 @@ void ocerz_jit_forget(struct OcerzVM *vm)
+@@ -24624,6 +24960,47 @@ void ocerz_jit_forget(struct OcerzVM *vm)
          vm->jit = NULL;
  }
  
@@ -759,7 +1172,7 @@ index 2b93f952..40e893ae 100644
  OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
  {
      OcerzJit *jit = (OcerzJit *)calloc(1, sizeof *jit);
-@@ -24633,8 +24720,10 @@ OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
+@@ -24633,8 +25010,10 @@ OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
      jit->plain_mem = !vm->jit_ordered_required &&
          (vm->jit_plain_mem || getenv("OCERZ_PLAIN_MEM") != NULL);
      size_t bytes = jit_code_bytes();
@@ -772,7 +1185,7 @@ index 2b93f952..40e893ae 100644
      if (p == MAP_FAILED) {
          OCERZ_LOG("JIT unavailable (MAP_JIT failed); using interpreter\n");
          free(jit);
-@@ -24646,7 +24735,7 @@ OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
+@@ -24646,7 +25025,7 @@ OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
      size_t leaf_bytes = (size_t)(ocerz_leaf_hi - ocerz_leaf_lo);
      if (leaf_bytes && leaf_bytes + 64 < bytes) {
          pthread_jit_write_protect_np(0);
@@ -781,7 +1194,7 @@ index 2b93f952..40e893ae 100644
          pthread_jit_write_protect_np(1);
          sys_icache_invalidate(p, leaf_bytes);
          jit->leaf_near = (const char *)p;
-@@ -24797,12 +24886,12 @@ static int force_stop_sites_writable(OcerzJit *jit)
+@@ -24797,12 +25176,12 @@ static int force_stop_sites_writable(OcerzJit *jit)
                      (unsigned long long)blk_rip(b), (void *)b->stop_patch,
                      b->stop_patch ? *b->stop_patch : 0u, b->stop_insn);
          if (b->stop_patch && b->stop_insn && *b->stop_patch != b->stop_insn) {
@@ -796,7 +1209,7 @@ index 2b93f952..40e893ae 100644
                  patched = 1;
              }
          for (int i = 0; i < b->n_edges; i++) {
-@@ -24811,7 +24900,7 @@ static int force_stop_sites_writable(OcerzJit *jit)
+@@ -24811,7 +25190,7 @@ static int force_stop_sites_writable(OcerzJit *jit)
              for (int k = 0; k < b->n_stop_extra && !is_stop; k++)
                  is_stop = b->edges[i].patch_b == b->stop_extra[k].site;
              if (cs && b->edges[i].cond_orig && *cs != b->edges[i].cond_orig && is_stop) {
@@ -805,7 +1218,7 @@ index 2b93f952..40e893ae 100644
                  patched = 1;
              }
          }
-@@ -24830,19 +24919,19 @@ static void invalidate_all_locked(OcerzJit *jit)
+@@ -24830,19 +25209,19 @@ static void invalidate_all_locked(OcerzJit *jit)
      pthread_jit_write_protect_np(0);
      patched |= force_stop_sites_writable(jit);
      for (size_t i = 0; i < g_n_ras_cells; i++)
@@ -828,7 +1241,7 @@ index 2b93f952..40e893ae 100644
                  patched = 1;
              }
          }
-@@ -25224,17 +25313,17 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
+@@ -25224,17 +25603,17 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
      for (size_t i = 0; i < g_n_ras_cells; i++) {
          void *e = __atomic_load_n(g_ras_cells[i], __ATOMIC_RELAXED);
          if (e && ras_entry_in_hits(e, &set))
@@ -849,7 +1262,7 @@ index 2b93f952..40e893ae 100644
                  sys_icache_invalidate(b->stop_extra[i].site, 4);
              }
          for (int i = 0; i < b->n_edges; i++) {
-@@ -25243,7 +25332,7 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
+@@ -25243,7 +25622,7 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
              for (int q = 0; q < b->n_stop_extra && !is_stop; q++)
                  is_stop = b->edges[i].patch_b == b->stop_extra[q].site;
              if (cs && b->edges[i].cond_orig && *cs != b->edges[i].cond_orig && is_stop) {
@@ -858,7 +1271,7 @@ index 2b93f952..40e893ae 100644
                  sys_icache_invalidate(cs, 4);
              }
          }
-@@ -25253,13 +25342,13 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
+@@ -25253,13 +25632,13 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
          uint32_t fallback = (sblk)->edges[i].fallback_insn; \
          if (at && fallback && *at != fallback && \
              ptr_in_hits(hits, n_hits, chain_target(jit, at, *at))) { \
@@ -874,7 +1287,7 @@ index 2b93f952..40e893ae 100644
              sys_icache_invalidate(cs, 4); \
          } \
      } while (0)
-@@ -25689,12 +25778,12 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
+@@ -25689,12 +26068,12 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
      if (idx == jit->n_live) return;
      pthread_jit_write_protect_np(0);
      if (blk->stop_patch && blk->stop_insn && *blk->stop_patch != blk->stop_insn) {
@@ -889,7 +1302,7 @@ index 2b93f952..40e893ae 100644
              sys_icache_invalidate(blk->stop_extra[i].site, 4);
          }
      for (int i = 0; i < blk->n_edges; i++) {
-@@ -25703,7 +25792,7 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
+@@ -25703,7 +26082,7 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
          for (int q = 0; q < blk->n_stop_extra && !is_stop; q++)
              is_stop = blk->edges[i].patch_b == blk->stop_extra[q].site;
          if (cs && blk->edges[i].cond_orig && *cs != blk->edges[i].cond_orig && is_stop) {
@@ -898,7 +1311,7 @@ index 2b93f952..40e893ae 100644
              sys_icache_invalidate(cs, 4);
          }
      }
-@@ -25716,14 +25805,14 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
+@@ -25716,14 +26095,14 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
              uint32_t fallback = sblk->edges[i].fallback_insn;
              int cut = 0;
              if (at && fallback && *at != fallback && IN_BLK(chain_target(jit, at, *at))) {
@@ -915,7 +1328,7 @@ index 2b93f952..40e893ae 100644
                  sys_icache_invalidate(cs, 4);
                  cut = 1;
              }
-@@ -25736,7 +25825,7 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
+@@ -25736,7 +26115,7 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
      blk->n_preds = 0;
      for (size_t i = 0; i < g_n_ras_cells; i++)
          if (IN_BLK(*g_ras_cells[i]))
@@ -924,7 +1337,7 @@ index 2b93f952..40e893ae 100644
      pthread_jit_write_protect_np(1);
      unsigned h = hash_key(blk->key);
      JitBlock **pp = &jit->buckets[h];
-@@ -25798,8 +25887,8 @@ static int flip_decide_locked(JitBlock *blk, int e, int tk, int ft, int logit)
+@@ -25798,8 +26177,8 @@ static int flip_decide_locked(JitBlock *blk, int e, int tk, int ft, int logit)
          uint32_t tk = watch ? (pf->tk_word & ~((1u << 31) | (0x1fu << 19))) | ((uint32_t)WATCH_BIT << 19) : A64_NOP;
          if (watch) { pf->taken = 0; blk->edges[e].probing = 2; }
          pthread_jit_write_protect_np(0);
@@ -935,7 +1348,7 @@ index 2b93f952..40e893ae 100644
          pthread_jit_write_protect_np(1);
          sys_icache_invalidate(pf->ft_site, 4);
          sys_icache_invalidate(pf->tk_trip, 4);
-@@ -25851,8 +25940,8 @@ static void flip_side_hit(struct OcerzVM *vm, OcerzJit *jit, OcerzCPU *cpu)
+@@ -25851,8 +26230,8 @@ static void flip_side_hit(struct OcerzVM *vm, OcerzJit *jit, OcerzCPU *cpu)
          wp->windows = 0;
          wp->rearms++;
          pthread_jit_write_protect_np(0);
@@ -946,7 +1359,7 @@ index 2b93f952..40e893ae 100644
          pthread_jit_write_protect_np(1);
          sys_icache_invalidate(wp->ft_site, 4);
          sys_icache_invalidate(wp->tk_trip, 4);
-@@ -26029,7 +26118,7 @@ static StopUndo *stop_sites_force_undoable(OcerzJit *jit, size_t *n_out)
+@@ -26029,7 +26408,7 @@ static StopUndo *stop_sites_force_undoable(OcerzJit *jit, size_t *n_out)
          if (s_ && w_ && *s_ != w_) { \
              if (n == cap) { cap = cap ? cap * 2 : 256; StopUndo *nu = (StopUndo *)realloc(u, cap * sizeof *u); if (!nu) abort(); u = nu; } \
              u[n++] = (StopUndo){ s_, *s_, w_ }; \
@@ -955,7 +1368,7 @@ index 2b93f952..40e893ae 100644
          } \
      } while (0)
      pthread_jit_write_protect_np(0);
-@@ -26059,7 +26148,7 @@ static void stop_sites_undo(OcerzJit *jit, StopUndo *u, size_t n)
+@@ -26059,7 +26438,7 @@ static void stop_sites_undo(OcerzJit *jit, StopUndo *u, size_t n)
      pthread_jit_write_protect_np(0);
      for (size_t i = n; i-- > 0;)
          if (*u[i].site == u[i].now)
@@ -1075,6 +1488,19 @@ index 00000000..18840ca9
 +    (void)key;
 +    return 0;
 +}
+diff --git a/src/m32_bridge.c b/src/m32_bridge.c
+index 323539b3..6b9ba178 100644
+--- a/src/m32_bridge.c
++++ b/src/m32_bridge.c
+@@ -248,7 +248,7 @@ uint32_t m32_export(const char *lib, const char *name)
+                 e->kind = M32_EX_BAD;
+                 e->reason = "host-missing";
+             }
+-            e->host_fn = hud_wrap(r.host_symbol, e->host_fn);
++            e->host_fn = m32_gl_wrap(r.host_symbol, hud_wrap(r.host_symbol, e->host_fn));
+             char key[128];
+             snprintf(key, sizeof key, "|%s|", r.host_symbol);
+             e->file_ret = !!strstr("|fopen|fdopen|freopen|popen|tmpfile|funopen|fmemopen|open_memstream|", key);
 diff --git a/src/m32_cross.c b/src/m32_cross.c
 index 6fc64c9f..e6db41a4 100644
 --- a/src/m32_cross.c
@@ -1096,10 +1522,10 @@ index 6fc64c9f..e6db41a4 100644
      case '@': return (uint64_t)(uintptr_t)m32_objc_to_host((uint32_t)raw);
      case '#': return (uint64_t)(uintptr_t)m32_class_host((uint32_t)raw);
 diff --git a/src/m32_gl.c b/src/m32_gl.c
-index dbea7fbc..f8c60ebe 100644
+index dbea7fbc..04ad99fe 100644
 --- a/src/m32_gl.c
 +++ b/src/m32_gl.c
-@@ -103,6 +103,40 @@ static uint32_t bound(unsigned target)
+@@ -103,6 +103,155 @@ static uint32_t bound(unsigned target)
      return (uint32_t)b;
  }
  
@@ -1131,15 +1557,138 @@ index dbea7fbc..f8c60ebe 100644
 +            return g_offsets[i].target;
 +    return 0;
 +}
++/* Buffer bindings by context. Asking GL on every draw (m32_gl_buffer_bound) cost Batman about 1.5 ms a frame on Apple's
++ * GL, which answers state queries slowly; the guest's own bind calls (m32_gl_wrap) keep this record instead, and GL is
++ * asked only when it lost track: a context not seen yet, a vertex array object bound (it holds the element binding),
++ * buffers deleted, client state popped, and every new frame (CGLFlushDrawable), which also covers a destroyed context's
++ * address being reused. A context is current on one thread at a time, so its record needs no lock. */
++typedef struct { void *ctx; uint32_t known; uint32_t buf[6]; } Bindings;
++static Bindings g_bindings[32];
++
++static int bind_slot(unsigned target)
++{
++    switch (target) {
++    case 0x8892: return 0;   /* GL_ARRAY_BUFFER */
++    case 0x8893: return 1;   /* GL_ELEMENT_ARRAY_BUFFER */
++    case 0x88EB: return 2;   /* GL_PIXEL_PACK_BUFFER */
++    case 0x88EC: return 3;   /* GL_PIXEL_UNPACK_BUFFER */
++    case 0x8A11: return 4;   /* GL_UNIFORM_BUFFER */
++    case 0x8C8E: return 5;   /* GL_TRANSFORM_FEEDBACK_BUFFER */
++    default: return -1;
++    }
++}
++
++/* the current context's record, made on first use; NULL without a context or room (then GL is asked) */
++static Bindings *bindings(void)
++{
++    gl_init();
++    void *ctx = gl.current ? gl.current() : NULL;
++    if (!ctx)
++        return NULL;
++    for (int i = 0; i < 32; i++)
++        if (__atomic_load_n(&g_bindings[i].ctx, __ATOMIC_ACQUIRE) == ctx)
++            return &g_bindings[i];
++    Bindings *b = NULL;
++    pthread_mutex_lock(&g_lock);
++    for (int i = 0; i < 32 && !b; i++)
++        if (g_bindings[i].ctx == ctx || !g_bindings[i].ctx)
++            b = &g_bindings[i];
++    if (b && b->ctx != ctx) {
++        b->known = 0;
++        __atomic_store_n(&b->ctx, ctx, __ATOMIC_RELEASE);
++    }
++    pthread_mutex_unlock(&g_lock);
++    return b;
++}
++
++static void note(unsigned target, uint32_t buffer)
++{
++    int i = bind_slot(target);
++    Bindings *b = i >= 0 ? bindings() : NULL;
++    if (b) {
++        b->buf[i] = buffer;
++        __atomic_or_fetch(&b->known, 1u << i, __ATOMIC_RELEASE);
++    }
++}
++
++static void forget(uint32_t slots)
++{
++    Bindings *b = bindings();
++    if (b)
++        __atomic_and_fetch(&b->known, ~slots, __ATOMIC_RELEASE);
++}
++
 +int m32_gl_buffer_bound(unsigned target)
 +{
 +    gl_init();
-+    return gl.getiv && bound(target) != 0;
++    if (!gl.getiv)
++        return 0;
++    int i = bind_slot(target);
++    Bindings *b = i >= 0 ? bindings() : NULL;
++    if (!b)
++        return bound(target) != 0;
++    if (!(__atomic_load_n(&b->known, __ATOMIC_ACQUIRE) >> i & 1)) {
++        b->buf[i] = bound(target);
++        __atomic_or_fetch(&b->known, 1u << i, __ATOMIC_RELEASE);
++    }
++    return b->buf[i] != 0;
++}
++
++/* the host GL calls that change a binding, wrapped to keep the record (m32_bridge, as each export is resolved) */
++static void (*o_glBindBuffer)(unsigned, uint32_t), (*o_glBindBufferARB)(unsigned, uint32_t);
++static void (*o_glBindBufferBase)(unsigned, uint32_t, uint32_t);
++static void (*o_glBindBufferRange)(unsigned, uint32_t, uint32_t, intptr_t, intptr_t);
++static void (*o_glBindVertexArray)(uint32_t), (*o_glBindVertexArrayAPPLE)(uint32_t), (*o_glPopClientAttrib)(void);
++static int (*o_CGLFlushDrawable)(void *);
++static void w_glBindBuffer(unsigned t, uint32_t b) { o_glBindBuffer(t, b); note(t, b); }
++static void w_glBindBufferARB(unsigned t, uint32_t b) { o_glBindBufferARB(t, b); note(t, b); }
++static void w_glBindBufferBase(unsigned t, uint32_t i, uint32_t b) { o_glBindBufferBase(t, i, b); note(t, b); }
++static void w_glBindBufferRange(unsigned t, uint32_t i, uint32_t b, intptr_t o, intptr_t n)
++{
++    o_glBindBufferRange(t, i, b, o, n);
++    note(t, b);
++}
++static void w_glBindVertexArray(uint32_t a) { o_glBindVertexArray(a); forget(1u << 1); }
++static void w_glBindVertexArrayAPPLE(uint32_t a) { o_glBindVertexArrayAPPLE(a); forget(1u << 1); }
++static void w_glPopClientAttrib(void) { o_glPopClientAttrib(); forget(1u << 0 | 1u << 1); }
++static int w_CGLFlushDrawable(void *ctx)
++{
++    for (int i = 0; i < 32; i++)
++        __atomic_store_n(&g_bindings[i].known, 0, __ATOMIC_RELEASE);
++    return o_CGLFlushDrawable(ctx);
++}
++
++void *m32_gl_wrap(const char *sym, void *fn)
++{
++    static const struct { const char *name; void **orig; void *wrap; } w[] = {
++        { "glBindBuffer", (void **)&o_glBindBuffer, (void *)w_glBindBuffer },
++        { "glBindBufferARB", (void **)&o_glBindBufferARB, (void *)w_glBindBufferARB },
++        { "glBindBufferBase", (void **)&o_glBindBufferBase, (void *)w_glBindBufferBase },
++        { "glBindBufferRange", (void **)&o_glBindBufferRange, (void *)w_glBindBufferRange },
++        { "glBindVertexArray", (void **)&o_glBindVertexArray, (void *)w_glBindVertexArray },
++        { "glBindVertexArrayAPPLE", (void **)&o_glBindVertexArrayAPPLE, (void *)w_glBindVertexArrayAPPLE },
++        { "glPopClientAttrib", (void **)&o_glPopClientAttrib, (void *)w_glPopClientAttrib },
++        { "CGLFlushDrawable", (void **)&o_CGLFlushDrawable, (void *)w_CGLFlushDrawable },
++    };
++    for (size_t i = 0; fn && i < sizeof w / sizeof *w; i++)
++        if (!strcmp(sym, w[i].name)) {
++            *w[i].orig = fn;
++            return w[i].wrap;
++        }
++    return fn;
 +}
 +
  /* the shadow of (group, buffer), or NULL; with g_lock held */
  static Shadow *find(void *group, uint32_t buffer)
  {
+@@ -274,6 +423,7 @@ static int sp_glDeleteBuffers(struct OcerzVM *vm, OcerzCPU *cpu)
+     pthread_mutex_unlock(&g_lock);
+     if (n >= 0)
+         gl.delete_buffers(n, names ? (const uint32_t *)m32_h(names) : NULL);
++    forget(~0u);   /* a deleted buffer's bindings went back to 0 */
+     RET(0);
+ }
+ /* glFlushMappedBufferRange[APPLE](target, offset, size): the offset is within the mapped range */
 diff --git a/src/m32_leaf.c b/src/m32_leaf.c
 index 3bdaeb53..7d43b255 100644
 --- a/src/m32_leaf.c
@@ -1470,7 +2019,7 @@ index 78c47542..92023767 100644
              fprintf(stderr, "ocerz: rbp-chain:");
              for (int d = 0; d < 40 && fp >= 0x300000000ull; d++) {
 diff --git a/tests/diff32.c b/tests/diff32.c
-index cc0483fb..4c8e9143 100644
+index cc0483fb..f119319b 100644
 --- a/tests/diff32.c
 +++ b/tests/diff32.c
 @@ -1822,6 +1822,17 @@ static void plant_mark_retw(Case *c, uint64_t addr, uint32_t mark)
@@ -1491,7 +2040,71 @@ index cc0483fb..4c8e9143 100644
  static void h_highbyte(Gen *g)
  {
      eb(g, 0xb4); eb(g, 0x5a);
-@@ -2740,6 +2751,7 @@ static void h_x87_inexact(Gen *g)
+@@ -2211,6 +2222,28 @@ static void h_setcc_cmov(Gen *g)
+     }
+ }
+ 
++/* the 64-bit shift helpers of i386 code (a 64-bit value in edx:eax shifted by cl, 0-63): shld/shl then test cl, 0x20 and
++   cmov, the same for shrd/shr; the cl shifts' flags are dead, so the incoming ones they pass on at a zero count are too
++   (counts 0, 1, 31, 32 and 63 cover the pass-through and both halves) */
++static void h_shift64(Gen *g)
++{
++    static const uint8_t counts[] = { 0, 1, 31, 32, 63 };
++    for (unsigned k = 0; k < sizeof counts; k++) {
++        eb(g, 0xb1); eb(g, counts[k]);                          /* mov cl, n */
++        eb(g, 0x31); eb(g, 0xf6);                                /* xor esi, esi */
++        eb(g, 0x0f); eb(g, 0xa5); eb(g, 0xd0);                   /* shld eax, edx, cl */
++        eb(g, 0xd3); eb(g, 0xe2);                                /* shl edx, cl */
++        eb(g, 0xf6); eb(g, 0xc1); eb(g, 0x20);                   /* test cl, 0x20 */
++        eb(g, 0x0f); eb(g, 0x45); eb(g, 0xc2);                   /* cmovne eax, edx */
++        eb(g, 0x0f); eb(g, 0x45); eb(g, 0xd6);                   /* cmovne edx, esi */
++        eb(g, 0x0f); eb(g, 0xad); eb(g, 0xc2);                   /* shrd edx, eax, cl */
++        eb(g, 0xd3); eb(g, 0xe8);                                /* shr eax, cl */
++        eb(g, 0xf6); eb(g, 0xc1); eb(g, 0x20);                   /* test cl, 0x20 */
++        eb(g, 0x0f); eb(g, 0x44); eb(g, 0xc2);                   /* cmove eax, edx */
++        eb(g, 0x83); eb(g, 0xc2); eb(g, 0x07);                   /* add edx, 7 (fresh flags for the next round) */
++    }
++}
++
+ static void h_movzx_movsx(Gen *g)
+ {
+     for (unsigned r = 0; r < 8; r++) {
+@@ -2574,6 +2607,34 @@ static void h_comis_cc(Gen *g)
+     }
+ }
+ 
++/* haddps/haddpd on NaN pairs (the first NaN wins, quieted; inf + -inf is x86's default NaN), then rsqrtss and rcpss
++   of 3.75, a NaN, -4, 0 and a NaN, from registers and memory; the upper lanes they keep come from the random state */
++static void h_sse_hadd_rcp(Gen *g)
++{
++    static const uint32_t v[8][4] = {
++        { 0x3fc00000u, 0x40100000u, 0x7fc12345u, 0x40400000u },   /* 1.5 2.25 qNaN 3 */
++        { 0x7f800000u, 0xff800000u, 0x7f800001u, 0x80000000u },   /* inf -inf sNaN -0 */
++        { 0x7fc00002u, 0x7fc00003u, 0x40800000u, 0xc0800000u },   /* qNaN qNaN 4 -4 */
++        { 0x00000000u, 0x3ff00000u, 0x00000000u, 0x40000000u },   /* doubles 1 2 */
++        { 0x00000000u, 0x7ff00000u, 0x00000000u, 0xfff00000u },   /* doubles inf -inf */
++        { 0xc0800000u, 0, 0, 0 }, { 0, 0, 0, 0 }, { 0x7fc00004u, 0, 0, 0 },   /* -4, 0, qNaN */
++    };
++    uint32_t in = (uint32_t)(SCRATCH_MID + 0x480), out = (uint32_t)(SCRATCH_MID + 0x500);
++    for (int i = 0; i < 8; i++)
++        for (int k = 0; k < 4; k++) { eb(g, 0xc7); eb(g, 0x05); ed(g, in + 16 * (uint32_t)i + 4 * (uint32_t)k); ed(g, v[i][k]); }
++    for (unsigned i = 0; i < 5; i++) { eb(g, 0x0f); eb(g, 0x10); eb(g, 0x05 | (i << 3)); ed(g, in + 16 * i); }
++    eb(g, 0xf2); eb(g, 0x0f); eb(g, 0x7c); eb(g, 0xc1);   /* haddps xmm0, xmm1 */
++    eb(g, 0xf2); eb(g, 0x0f); eb(g, 0x7c); eb(g, 0xd2);   /* haddps xmm2, xmm2 */
++    eb(g, 0x66); eb(g, 0x0f); eb(g, 0x7c); eb(g, 0xdc);   /* haddpd xmm3, xmm4 */
++    eb(g, 0xf3); eb(g, 0x0f); eb(g, 0x52); eb(g, 0xe8);   /* rsqrtss xmm5, xmm0 */
++    eb(g, 0xf3); eb(g, 0x0f); eb(g, 0x53); eb(g, 0xf2);   /* rcpss xmm6, xmm2 */
++    for (unsigned j = 0; j < 3; j++)
++        for (unsigned rcp = 0; rcp < 2; rcp++) {
++            eb(g, 0xf3); eb(g, 0x0f); eb(g, 0x52 + rcp); eb(g, 0x3d); ed(g, in + 16 * (5 + j));   /* xmm7, [in + ...] */
++            eb(g, 0x0f); eb(g, 0x11); eb(g, 0x3d); ed(g, out + 32 * j + 16 * rcp);                 /* movups [out + ...], xmm7 */
++        }
++}
++
+ #define TAB(k) ((uint32_t)(X87TAB + 8 * (k)))
+ #define OUT(k) ((uint32_t)(X87OUT + 8 * (k)))
+ static void x87m(Gen *g, unsigned opc, unsigned digit, uint32_t addr)
+@@ -2740,6 +2801,7 @@ static void h_x87_inexact(Gen *g)
  
  static const struct { const char *name; void (*fn)(Gen *); } HANDS[] = {
      { "highbyte",      h_highbyte },
@@ -1499,32 +2112,43 @@ index cc0483fb..4c8e9143 100644
      { "highbyte-mem",  h_highbyte_mem },
      { "mov-sreg",      h_mov_sreg },
      { "disp32-abs",    h_disp32_abs },
+@@ -2762,6 +2824,7 @@ static const struct { const char *name; void (*fn)(Gen *); } HANDS[] = {
+     { "muldiv",        h_muldiv },
+     { "bt-bsf-bswap",  h_bt },
+     { "setcc-cmov",    h_setcc_cmov },
++    { "shift64",       h_shift64 },
+     { "movzx-movsx",   h_movzx_movsx },
+     { "zero-extend",   h_zeroext },
+     { "addr16",        h_addr16 },
+@@ -2777,6 +2840,7 @@ static const struct { const char *name; void (*fn)(Gen *); } HANDS[] = {
+     { "lock-many",     h_lock_many },
+     { "bt32",          h_bt32 },
+     { "comis-cc",      h_comis_cc },
++    { "sse-hadd-rcp",  h_sse_hadd_rcp },
+     { "x87-courier",   h_x87_courier },
+     { "x87-trunc",     h_x87_trunc },
+     { "x87-pc24",      h_x87_pc24 },
 diff --git a/tests/m32/glbufferoffset.c b/tests/m32/glbufferoffset.c
 new file mode 100644
-index 00000000..784703bd
+index 00000000..9a509bbb
 --- /dev/null
 +++ b/tests/m32/glbufferoffset.c
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,102 @@
 +/* GL calls whose pointer argument is an offset into a bound buffer (glVertexPointer with GL_ARRAY_BUFFER, glDrawElements
 + * and glDrawRangeElements with GL_ELEMENT_ARRAY_BUFFER, glTexImage2D with GL_PIXEL_UNPACK_BUFFER): the offset must reach
 + * GL as it is, not as a window address. Batman's IndirectX draws this way; iOS's GL read the indices at buffer + window
 + * address and faulted. A red quad from both buffers at non-zero offsets, a texture filled through an unpack buffer at
-+ * an offset; the centre pixel and the texel are read back (expected output written by hand). */
++ * an offset; the centre pixel and the texel are read back (expected output written by hand). Bindings are per context and
++ * m32 remembers them rather than asking GL on every draw: the same draws from client memory once nothing is bound, in a
++ * second context where nothing ever was, and from the buffers again back in the first. */
 +#include <OpenGL/OpenGL.h>
 +#include <OpenGL/gl.h>
 +#include <stdio.h>
 +#include <string.h>
 +
-+int main(void)
++/* an 8x8 colour target and red drawing in the current context */
++static void target(void)
 +{
-+    CGLPixelFormatAttribute at[] = { kCGLPFAAccelerated, 0 };
-+    CGLPixelFormatObj pf;
-+    CGLContextObj ctx;
-+    GLint n;
-+    if (CGLChoosePixelFormat(at, &pf, &n) || CGLCreateContext(pf, NULL, &ctx) || CGLSetCurrentContext(ctx)) {
-+        printf("no context\n");
-+        return 1;
-+    }
 +    GLuint fb, rb;
 +    glGenFramebuffersEXT(1, &fb);
 +    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, fb);
@@ -1534,6 +2158,32 @@ index 00000000..784703bd
 +    glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_RENDERBUFFER_EXT, rb);
 +    glViewport(0, 0, 8, 8);
 +    glClearColor(0, 0, 0, 1);
++    glColor4f(1, 0, 0, 1);
++    glEnableClientState(GL_VERTEX_ARRAY);
++}
++
++static void draw(const char *what, const void *vertices, const void *indices)
++{
++    unsigned char px[4];
++    glVertexPointer(2, GL_FLOAT, 0, vertices);
++    glClear(GL_COLOR_BUFFER_BIT);
++    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices);
++    glReadPixels(4, 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
++    printf("%s %d %d %d, error %#x\n", what, px[0], px[1], px[2], glGetError());
++}
++
++int main(void)
++{
++    CGLPixelFormatAttribute at[] = { kCGLPFAAccelerated, 0 };
++    CGLPixelFormatObj pf;
++    CGLContextObj ctx, ctx2;
++    GLint n;
++    if (CGLChoosePixelFormat(at, &pf, &n) || CGLCreateContext(pf, NULL, &ctx) || CGLCreateContext(pf, NULL, &ctx2) ||
++        CGLSetCurrentContext(ctx)) {
++        printf("no context\n");
++        return 1;
++    }
++    target();
 +
 +    /* 16 bytes of padding, then the quad's corners; the indices 0x10 bytes into theirs */
 +    GLfloat verts[4 + 8] = { 0, 0, 0, 0, -1, -1, 1, -1, 1, 1, -1, 1 };
@@ -1570,19 +2220,34 @@ index 00000000..784703bd
 +    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 +    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, back);
 +    printf("texImage %d %d %d, error %#x\n", back[0], back[1], back[2], glGetError());
++
++    glBindBuffer(GL_ARRAY_BUFFER, 0);
++    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
++    draw("client arrays", verts + 4, idx + 8);
++    glBindBuffer(GL_ARRAY_BUFFER, vb);
++    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ib);
++    CGLSetCurrentContext(ctx2);
++    target();
++    draw("second context", verts + 4, idx + 8);
++    CGLSetCurrentContext(ctx);
++    draw("first context again", (const void *)16, (const void *)0x10);
 +    CGLSetCurrentContext(NULL);
++    CGLDestroyContext(ctx2);
 +    CGLDestroyContext(ctx);
 +    return 0;
 +}
 diff --git a/tests/m32/glbufferoffset.expected b/tests/m32/glbufferoffset.expected
 new file mode 100644
-index 00000000..ed7ff2eb
+index 00000000..687c209a
 --- /dev/null
 +++ b/tests/m32/glbufferoffset.expected
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,7 @@
 +drawElements 255 0 0, error 0
 +drawRangeElements 255 0 0, error 0
 +texImage 10 20 30, error 0
++client arrays 255 0 0, error 0
++second context 255 0 0, error 0
++first context again 255 0 0, error 0
 +exit 0
 diff --git a/tests/m32/glbufferoffset.link b/tests/m32/glbufferoffset.link
 new file mode 100644
