@@ -5,6 +5,7 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/Foundation.h>
 #import <math.h>
+#import <sys/stat.h>
 #import <unistd.h>
 
 enum { kUnimp = -4, kFnfErr = -43, kEventNotHandled = -9874, kEventLoopTimedOut = -9875, kAppNotFound = -10814 };
@@ -37,9 +38,50 @@ int32_t FSCompareFSRefs(const void *a, const void *b) {
     return pa && [pa isEqual:pb] ? 0 : -1417;   // errFSRefsDifferent
 }
 // Only the parent of an FSRef is answered (Feral's launcher walks up from its bundle); the rest of the record stays zero.
+// macOS's FSCatalogInfo (CarbonCore Files.h, pack 2); m32 converts the i386 one (permissions 4 bytes shorter).
+#pragma pack(push, 2)
+typedef struct { UInt16 high; UInt32 low; UInt16 fraction; } ShackUTCDateTime;   // seconds since 1904, UTC
+typedef struct {
+    UInt16 nodeFlags; SInt16 volume; UInt32 parentDirID, nodeID; UInt8 sharingFlags, userPrivileges, reserved1, reserved2;
+    ShackUTCDateTime createDate, contentModDate, attributeModDate, accessDate, backupDate;
+    UInt32 userID, groupID; UInt8 permReserved, userAccess; UInt16 mode; void *fileSec;
+    UInt8 finderInfo[16], extFinderInfo[16];
+    UInt64 dataLogicalSize, dataPhysicalSize, rsrcLogicalSize, rsrcPhysicalSize;
+    UInt32 valence, textEncodingHint;
+} ShackCatalogInfo;
+#pragma pack(pop)
+_Static_assert(sizeof(ShackCatalogInfo) == 148, "FSCatalogInfo");
+static ShackUTCDateTime ShackUTCDate(struct timespec t) {
+    uint64_t s = (uint64_t)t.tv_sec + 2082844800;   // 1904-01-01 to 1970-01-01
+    return (ShackUTCDateTime){ (UInt16)(s >> 32), (UInt32)s, (UInt16)((uint64_t)t.tv_nsec * 65536 / 1000000000) };
+}
+// From stat: a folder's valence is its item count, and games size their listings from it (Batman: valence + 2 records
+// for readdir with . and ..; left untouched it overran the array). ponytail: every field is written whatever
+// whichInfo asks for; no Finder info, resource forks or locks.
 int32_t FSGetCatalogInfo(const void *ref, UInt32 whichInfo, void *info, void *name, void *spec, void *parentRef) {
     NSString *p = ShackFSRefPath(ref);
     if (!p) return -50;
+    struct stat st, up;
+    if (stat(p.fileSystemRepresentation, &st)) return kFnfErr;
+    if (info) {
+        ShackCatalogInfo *c = info; memset(c, 0, sizeof *c);
+        BOOL dir = S_ISDIR(st.st_mode);
+        c->nodeFlags = dir ? 0x10 : 0;   // kFSNodeIsDirectoryMask
+        c->volume = -100;                // FSGetVolumeInfo's one volume
+        c->parentDirID = stat(p.stringByDeletingLastPathComponent.fileSystemRepresentation, &up) ? 0 : (UInt32)up.st_ino;
+        c->nodeID = (UInt32)st.st_ino;
+        c->createDate = ShackUTCDate(st.st_birthtimespec);
+        c->contentModDate = ShackUTCDate(st.st_mtimespec);
+        c->attributeModDate = ShackUTCDate(st.st_ctimespec);
+        c->accessDate = ShackUTCDate(st.st_atimespec);
+        c->userID = st.st_uid; c->groupID = st.st_gid; c->mode = st.st_mode;
+        if (!dir) { c->dataLogicalSize = (UInt64)st.st_size; c->dataPhysicalSize = (UInt64)st.st_blocks * 512; }
+        else c->valence = (UInt32)[NSFileManager.defaultManager contentsOfDirectoryAtPath:p error:nil].count;
+    }
+    if (name) {   // HFSUniStr255
+        NSString *n = p.lastPathComponent; UInt16 len = (UInt16)MIN(n.length, 255);
+        ((UInt16 *)name)[0] = len; [n getCharacters:(unichar *)name + 1 range:NSMakeRange(0, len)];
+    }
     if (parentRef) ShackFSRefMake(p.stringByDeletingLastPathComponent, parentRef);
     return 0;
 }
@@ -62,6 +104,9 @@ int16_t FSFindFolder(int16_t vol, UInt32 type, Boolean create, void *ref) {
     case 'cach': case 'pcac': rel = @"Library/Caches"; break;
     case 'temp': case 'ttmp': rel = @"tmp"; break;
     case 'desk': rel = @"Documents"; break;
+    case 'fram':   // the system's (System.framework: Batman looks up free and ptrace there), else the user's own
+        if (vol == -32767 || vol == -32766) { ShackFSRefMake(@"/System/Library/Frameworks", ref); return 0; }   // kOnAppropriateDisk, kSystemDomain
+        rel = @"Library/Frameworks"; break;
     default: return kFnfErr;
     }
     NSString *path = [home stringByAppendingPathComponent:rel];
@@ -95,5 +140,23 @@ int32_t LSCopyItemInfoForURL(CFURLRef url, UInt32 which, void *info) { if (info)
 int32_t LSFindApplicationForInfo(UInt32 creator, CFStringRef bundleID, CFStringRef name, void *appRef, CFURLRef *appURL) {
     if (appURL) *appURL = NULL; return kAppNotFound;
 }
-int32_t UCConvertCFAbsoluteTimeToLongDateTime(CFAbsoluteTime at, int64_t *ldt) { if (ldt) *ldt = 0; return kUnimp; }
-int32_t UCConvertLongDateTimeToCFAbsoluteTime(int64_t ldt, CFAbsoluteTime *at) { if (at) *at = 0; return kUnimp; }
+// LongDateTime, as macOS keeps it: local seconds since 1904-01-01 (UTC plus the zone's offset at that moment), whole
+// seconds down. Batman's file timestamps go through these; at 0, UE3's ini versions all said 2001-01-01 and it threw
+// BmEngine.ini away every start, PhysX settings and all. ponytail: back from local time uses the offset at the local
+// reading, an hour off only inside a daylight-saving change.
+static const int64_t kLongDate2001 = 3061152000;   // 1904-01-01 to 2001-01-01
+int32_t UCConvertCFAbsoluteTimeToLongDateTime(CFAbsoluteTime at, int64_t *ldt) {
+    if (!ldt) return -50;   // paramErr
+    CFTimeZoneRef tz = CFTimeZoneCopyDefault();
+    *ldt = (int64_t)floor(at) + kLongDate2001 + (int64_t)CFTimeZoneGetSecondsFromGMT(tz, at);
+    CFRelease(tz);
+    return 0;
+}
+int32_t UCConvertLongDateTimeToCFAbsoluteTime(int64_t ldt, CFAbsoluteTime *at) {
+    if (!at) return -50;
+    CFTimeZoneRef tz = CFTimeZoneCopyDefault();
+    CFAbsoluteTime local = (CFAbsoluteTime)(ldt - kLongDate2001);
+    *at = local - CFTimeZoneGetSecondsFromGMT(tz, local);
+    CFRelease(tz);
+    return 0;
+}
