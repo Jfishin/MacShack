@@ -6,6 +6,7 @@
 // depth calls, the RGBA swizzle, FBO 0); add translations when another guest's GL log shows errors.
 #define GLES_SILENCE_DEPRECATION 1
 #import "ShackAppKit.h"
+#import <ImageIO/ImageIO.h>
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES3/gl.h>
 #import <dlfcn.h>
@@ -21,8 +22,10 @@ SHACK_SAFETY_NET
 - (instancetype)initWithAttributes:(const uint32_t *)attribs { return enabled() ? [super init] : nil; }
 @end
 
+static void traceFrame(void);   // SHACK_GL_DRAWTRACE (below), at each present
 @interface NSOpenGLContext : NSObject @end
-@implementation NSOpenGLContext { EAGLContext *_ctx; CAEAGLLayer *_layer; NSView *_view; GLuint _fbo, _color, _depth; CGSize _size; GLint _interval; NSOpenGLPixelFormat *_format; }
+@implementation NSOpenGLContext { EAGLContext *_ctx; CAEAGLLayer *_layer; NSView *_view; GLuint _fbo, _color, _depth; CGSize _size; GLint _interval; NSOpenGLPixelFormat *_format;
+    GLuint _surface[3]; GLint _surfaceSize[2], _backing[2]; BOOL _backingOn; }
 SHACK_SAFETY_NET
 static __thread __unsafe_unretained NSOpenGLContext *tCurrent;
 + (NSOpenGLContext *)currentContext { return tCurrent; }
@@ -73,15 +76,30 @@ static __thread __unsafe_unretained NSOpenGLContext *tCurrent;
     glBindFramebuffer(GL_FRAMEBUFFER, fb ? (GLuint)fb : _fbo);   // the guest's 0 was "no FBO yet": now it is the layer
     glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)rb);
 }
+// The guest's framebuffer 0: the layer's, or with a surface backing size the offscreen one (ShackGLLegacy.m) that each
+// present stretches onto it. A guest bound to the old one is moved to the new.
+GLuint ShackGLSurfaceFit(GLuint names[3], GLint size[2], GLint w, GLint h);
+void ShackGLSurfaceBlit(const GLuint names[3], const GLint size[2], GLuint dst, GLint dw, GLint dh);
+- (void)useDefaultFramebuffer {
+    GLuint d = _fbo && _backingOn && _backing[0] > 0 && _backing[1] > 0 ? ShackGLSurfaceFit(_surface, _surfaceSize, _backing[0], _backing[1]) : _fbo;
+    GLint cur = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &cur);
+    if (d != tLayerFBO && ((GLuint)cur == tLayerFBO || (GLuint)cur == _fbo || (GLuint)cur == _surface[0])) glBindFramebuffer(GL_FRAMEBUFFER, d);
+    tLayerFBO = d;
+}
+- (void)shack_setBackingSize:(const GLint *)wh { _backing[0] = wh[0]; _backing[1] = wh[1]; if (tCurrent == self) [self useDefaultFramebuffer]; }
+- (void)shack_enableBacking:(BOOL)on { _backingOn = on; if (tCurrent == self) [self useDefaultFramebuffer]; }
 - (void)makeCurrentContext {
     [EAGLContext setCurrentContext:_ctx]; tCurrent = self; tLayerFBO = _fbo;
     if (_layer) [self fitLayer];
+    [self useDefaultFramebuffer];
 }
 static _Atomic unsigned gGLFrames;
 unsigned ShackGLTakeFrameCount(void) { return atomic_exchange(&gGLFrames, 0); }   // presents since the last call (ShackWatch)
 - (void)flushBuffer {
     atomic_fetch_add(&gGLFrames, 1);
+    traceFrame();
     if (_size.width) {
+        if (tLayerFBO == _surface[0] && _surface[0]) ShackGLSurfaceBlit(_surface, _surfaceSize, _fbo, (GLint)_size.width, (GLint)_size.height);
         GLint rb; glGetIntegerv(GL_RENDERBUFFER_BINDING, &rb);
         glBindRenderbuffer(GL_RENDERBUFFER, _color);
         [_ctx presentRenderbuffer:GL_RENDERBUFFER];
@@ -92,12 +110,20 @@ unsigned ShackGLTakeFrameCount(void) { return atomic_exchange(&gGLFrames, 0); } 
         });
     }
     [self fitLayer];
+    [self useDefaultFramebuffer];
 }
 - (void)update {}   // GLFW calls it on resize from the app thread; fitLayer notices the new size at the next flush
-enum { NSOpenGLContextParameterSwapInterval = 222 };
+enum { NSOpenGLContextParameterSwapInterval = 222, NSOpenGLContextParameterSurfaceBackingSize = 304 };
 // ponytail: the swap interval is stored, not applied; Core Animation composites every present without tearing.
-- (void)setValues:(const GLint *)vals forParameter:(NSInteger)param { if (param == NSOpenGLContextParameterSwapInterval && vals) _interval = *vals; }
-- (void)getValues:(GLint *)vals forParameter:(NSInteger)param { if (vals) *vals = param == NSOpenGLContextParameterSwapInterval ? _interval : 0; }
+- (void)setValues:(const GLint *)vals forParameter:(NSInteger)param {
+    if (param == NSOpenGLContextParameterSwapInterval && vals) _interval = *vals;
+    if (param == NSOpenGLContextParameterSurfaceBackingSize && vals) [self shack_setBackingSize:vals];
+}
+- (void)getValues:(GLint *)vals forParameter:(NSInteger)param {
+    if (!vals) return;
+    if (param == NSOpenGLContextParameterSurfaceBackingSize) { vals[0] = _backing[0]; vals[1] = _backing[1]; return; }
+    *vals = param == NSOpenGLContextParameterSwapInterval ? _interval : 0;
+}
 @end
 
 // Godot 3's content view subclasses it and hands it its own context; one made on demand if asked.
@@ -123,7 +149,7 @@ enum { NSOpenGLContextParameterSwapInterval = 222 };
 
 // ShackGLLegacy.m: fixed-function client arrays, ARB shader objects and GLSL 1.x for older GL games.
 const GLubyte *ShackGLLegacyExtensions(void);
-NSString *ShackGLLegacySource(NSString *src, GLenum type);
+NSString *ShackGLESSource(NSString *src, GLenum type);   // any desktop GLSL as GLSL ES 3.00
 void *ShackGLLegacyProc(const char *name);
 
 // Desktop entry points ES lacks or spells differently.
@@ -135,46 +161,14 @@ static const GLubyte *shack_glGetString(GLenum name) {
     return glGetString(name);
 }
 static void shack_glShaderSource(GLuint shader, GLsizei count, const GLchar *const *strings, const GLint *lengths) {
-    size_t total = 0;
-    for (GLsizei i = 0; i < count; i++) total += lengths && lengths[i] >= 0 ? (size_t)lengths[i] : strlen(strings[i]);
-    // GLSL ES has no default precision for these samplers; desktop GLSL needs none (Godot 3 declares sampler2DArray).
-    static const char es[] = "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n"
-        "precision highp sampler3D;\nprecision highp samplerCube;\nprecision highp sampler2DArray;\nprecision highp sampler2DShadow;\n"
-        "precision highp samplerCubeShadow;\nprecision highp sampler2DArrayShadow;\nprecision highp isampler2D;\n"
-        "precision highp usampler2D;\nprecision highp isampler3D;\nprecision highp usampler3D;\nprecision highp isampler2DArray;\n"
-        "precision highp usampler2DArray;\nprecision highp isamplerCube;\nprecision highp usamplerCube;\n";
-    char *src = malloc(total + sizeof es), *p = src;
-    for (GLsizei i = 0; i < count; i++) {
-        size_t n = lengths && lengths[i] >= 0 ? (size_t)lengths[i] : strlen(strings[i]);
-        memcpy(p, strings[i], n); p += n;
-    }
-    *p = 0;
+    NSMutableData *all = [NSMutableData data];
+    for (GLsizei i = 0; i < count; i++)
+        [all appendBytes:strings[i] length:lengths && lengths[i] >= 0 ? (size_t)lengths[i] : strlen(strings[i])];
     GLint type = 0; glGetShaderiv(shader, GL_SHADER_TYPE, &type);
-    NSString *legacy = ShackGLLegacySource(@(src), (GLenum)type);   // GLSL 1.x (no #version, or below 130)
-    if (legacy) {
-        const GLchar *l = legacy.UTF8String;
-        glShaderSource(shader, 1, &l, NULL);
-        free(src);
-        return;
-    }
-    // GLSL 3.30 and GLSL ES 3.00 share what raylib's shaders use; ES needs its own version line and precisions.
-    char *v = strstr(src, "#version"), *eol = v ? strchr(v, '\n') : NULL;
-    if (v && eol && !memmem(v, (size_t)(eol - v), " es", 3)) {
-        memmove(v + sizeof es - 1, eol + 1, strlen(eol + 1) + 1);
-        memcpy(v, es, sizeof es - 1);
-        // Desktop extension lines (Unity's GLSL 150: GL_ARB_explicit_attrib_location : require) are errors in ES,
-        // whose 3.00 core already has what they enable; blank them in place.
-        for (char *x = strstr(src, "#extension GL_ARB_"); x; x = strstr(x, "#extension GL_ARB_"))
-            for (; *x && *x != '\n'; x++) *x = ' ';
-    }
-    // Godot 3's desktop prelude defines GLES_OVER_GL, and its shaders branch on it; without it they take the path
-    // Godot itself runs on mobile GLES3.
-    static const char godot[] = "#define GLES_OVER_GL\n";
-    char *g = strstr(src, godot);
-    if (g) memmove(g, g + sizeof godot - 1, strlen(g + sizeof godot - 1) + 1);
-    const GLchar *s = src;
+    NSString *src = [[NSString alloc] initWithData:all encoding:NSUTF8StringEncoding];
+    [all appendBytes:"" length:1];
+    const GLchar *s = src ? ShackGLESSource(src, (GLenum)type).UTF8String : all.bytes;   // not UTF-8: as it came
     glShaderSource(shader, 1, &s, NULL);
-    free(src);
 }
 // CGL for Unity's desktop GL renderer (Subnautica and Aragami ship only GLSL 150/410 shaders), over the same
 // NSOpenGLContext: a CGLContextObj is a retained NSOpenGLContext, a CGLPixelFormatObj a retained NSOpenGLPixelFormat.
@@ -206,7 +200,16 @@ int ShackCGLFlushDrawable(void *ctx) {
 }
 int ShackCGLSetParameter(void *ctx, int pname, const GLint *params) {
     if (!ctx) return kShackCGLBadContext;
-    if (pname == 222 && params) [(__bridge NSOpenGLContext *)ctx setValues:params forParameter:NSOpenGLContextParameterSwapInterval];   // kCGLCPSwapInterval
+    if ((pname == 222 || pname == 304) && params)   // kCGLCPSwapInterval, kCGLCPSurfaceBackingSize: as the NSOpenGL parameters
+        [(__bridge NSOpenGLContext *)ctx setValues:params forParameter:pname];
+    else { static atomic_int said; if (atomic_fetch_add(&said, 1) < 8) NSLog(@"[ShackGL] CGLSetParameter %d: ignored", pname); }
+    return kShackCGLNoError;
+}
+// CGLEnable/CGLDisable: the surface backing size (kCGLCESurfaceBackingSize, 305); the rest have nothing to do on ES.
+int ShackCGLSetEnabled(void *ctx, int pname, int on) {
+    if (!ctx) return kShackCGLBadContext;
+    if (pname == 305) [(__bridge NSOpenGLContext *)ctx shack_enableBacking:on != 0];
+    else { static atomic_int said; if (atomic_fetch_add(&said, 1) < 8) NSLog(@"[ShackGL] CGL%sable %d: ignored", on ? "En" : "Dis", pname); }
     return kShackCGLNoError;
 }
 // CGLDescribeRenderer: kCGLRP properties of one accelerated, online renderer with GL 4.x-class memory figures.
@@ -254,7 +257,11 @@ static void noteTex(GLenum target, GLenum f) {
 }
 // iOS renders to 16-bit floats only (EXT_color_buffer_half_float): single/dual-channel 32-bit float targets (Godot 3's
 // exposure and luminance buffers) become 16-bit. RGBA32F stays: it holds data (skeletons) and is not rendered to.
-static GLint renderable(GLint f) { return f == GL_R32F ? GL_R16F : f == GL_RG32F ? GL_RG16F : f; }
+void ShackGLTexAlloc(GLint *internal, GLenum *fmt, GLenum *type, const void *data);   // ShackGLLegacy.m
+static GLint renderable(GLint f) {   // 16-bit normalized formats ES lacks become 16-bit float there
+    GLenum fmt = 0, type = 0; ShackGLTexAlloc(&f, &fmt, &type, (const void *)1);
+    return f == GL_R32F ? GL_R16F : f == GL_RG32F ? GL_RG16F : f;
+}
 // SHACK_GL_TEXLOG=1: each 2D upload and the unpack state, written before the call (a bad guest buffer faults inside it).
 static void texLog(const char *what, GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLenum fmt, GLenum type, const void *d) {
     static int on = -1;
@@ -309,54 +316,23 @@ static void *guardedSource(GLsizei w, GLsizei h, GLenum fmt, GLenum type, const 
     *d = copy;
     return copy;
 }
-// macOS games upload BGRA (CoronaCards: GL_BGRA with GL_UNSIGNED_INT_8_8_8_8, Apple's fast path). ES 3.0 has neither GL_BGRA as
-// an upload format nor the packed 8_8_8_8 types, so those uploads (and RGBA in the non-REV packed type) are repacked as tight
-// RGBA (or RGB) bytes; the caller frees the result. Unpack row length, skips and unpack buffers are not handled: passed on as is.
-static void *repackPixels(GLsizei w, GLsizei h, GLenum *fmt, GLenum *type, const void **d) {
-    if (!*d || w <= 0 || h <= 0) return NULL;
-    BOOL bgra = *fmt == 0x80E1, bgr = *fmt == 0x80E0, rgba = *fmt == GL_RGBA;
-    if (rgba && *type == 0x8367) { *type = GL_UNSIGNED_BYTE; return NULL; }   // 8_8_8_8_REV: memory is R,G,B,A already
-    BOOL packed = *type == 0x8035, ok = ((bgra || rgba) && packed) || (bgra && (*type == 0x8367 || *type == GL_UNSIGNED_BYTE)) || (bgr && *type == GL_UNSIGNED_BYTE);
-    if (!ok) return NULL;
-    GLint align = 4, row = 0, skipP = 0, skipR = 0, pbo = 0;
-    glGetIntegerv(GL_UNPACK_ALIGNMENT, &align); glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row);
-    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skipP); glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skipR);
-    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &pbo);
-    if (row || skipP || skipR || pbo || align < 1) return NULL;
-    size_t bpp = bgr ? 3 : 4, stride = ((size_t)w * bpp + (size_t)align - 1) / (size_t)align * (size_t)align;
-    uint8_t *out = malloc((size_t)w * (size_t)h * bpp);
-    if (!out) return NULL;
-    for (GLsizei y = 0; y < h; y++) {
-        const uint8_t *src = (const uint8_t *)*d + (size_t)y * stride;
-        uint8_t *dst = out + (size_t)y * (size_t)w * bpp;
-        for (GLsizei x = 0; x < w; x++, src += bpp, dst += bpp) {
-            if (bgr || (bgra && !packed)) { dst[0] = src[2]; dst[1] = src[1]; dst[2] = src[0]; if (!bgr) dst[3] = src[3]; continue; }
-            uint32_t v; memcpy(&v, src, 4);
-            if (bgra) { dst[0] = (uint8_t)(v >> 8); dst[1] = (uint8_t)(v >> 16); dst[2] = (uint8_t)(v >> 24); dst[3] = (uint8_t)v; }
-            else { dst[0] = (uint8_t)(v >> 24); dst[1] = (uint8_t)(v >> 16); dst[2] = (uint8_t)(v >> 8); dst[3] = (uint8_t)v; }
-        }
-    }
-    *fmt = bgr ? GL_RGB : GL_RGBA; *type = GL_UNSIGNED_BYTE; *d = out;
-    return out;
-}
-// Runs `send` with a 1-byte unpack alignment when the repacked rows are not 4-byte multiples (RGB).
-static void withTightRows(BOOL tight, void (^send)(void)) {
-    GLint align = 4; if (tight) { glGetIntegerv(GL_UNPACK_ALIGNMENT, &align); glPixelStorei(GL_UNPACK_ALIGNMENT, 1); }
-    send();
-    if (tight) glPixelStorei(GL_UNPACK_ALIGNMENT, align);
-}
+void *ShackGLRepack(GLsizei w, GLsizei h, GLenum *fmt, GLenum *type, const void **d);   // ShackGLLegacy.m
+void ShackGLUnpackTight(BOOL repacked, GLenum fmt, void (^send)(void));
 static void shack_glTexSubImage2D(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum fmt, GLenum type, const void *d) {
     void *pad = guardedSource(w, h, fmt, type, &d);
-    void *conv = repackPixels(w, h, &fmt, &type, &d);
-    withTightRows(conv && fmt == GL_RGB, ^{ glTexSubImage2D(t, l, x, y, w, h, fmt, type, d); });
+    void *conv = ShackGLRepack(w, h, &fmt, &type, &d);
+    ShackGLUnpackTight(conv != NULL, fmt, ^{ glTexSubImage2D(t, l, x, y, w, h, fmt, type, d); });
     free(conv); free(pad);
 }
 static void shack_glTexImage2D(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLint b, GLenum fmt, GLenum type, const void *d) {
     texLog("TexImage2D", t, l, f, w, h, fmt, type, d);
     void *pad = guardedSource(w, h, fmt, type, &d);
-    void *conv = repackPixels(w, h, &fmt, &type, &d);
+    void *conv = ShackGLRepack(w, h, &fmt, &type, &d);
+    const void *data = d;   // an empty allocation (no pixels, no unpack buffer) gets ES's format and type for f
+    if (!data) { GLint pbo = 0; glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &pbo); if (pbo) data = (const void *)1; }
+    ShackGLTexAlloc(&f, &fmt, &type, data);
     f = renderable(f); if (!l) noteTex(t, (GLenum)f);
-    withTightRows(conv && fmt == GL_RGB, ^{ glTexImage2D(t, l, f, w, h, b, fmt, type, d); });
+    ShackGLUnpackTight(conv != NULL, fmt, ^{ glTexImage2D(t, l, f, w, h, b, fmt, type, d); });
     free(conv); free(pad);
 }
 static void shack_glTexImage3D(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLsizei dp, GLint b, GLenum fmt, GLenum type, const void *d) {
@@ -436,11 +412,146 @@ static void BaseVertexDraw(GLint baseVertex, void (^draw)(void)) {
         if (!pass) draw();
     }
 }
+// SHACK_GL_DRAWTRACE=<seconds>: one frame, the first presented that many seconds after the first: after each draw,
+// clear and blit, the draw framebuffer's first color attachment and its format, the viewport, the program, depth test,
+// blend, write mask and the pixel at the viewport's centre; with SHACK_GL_DRAWTRACE_DIR=<dir>, a 320-wide PNG of the
+// target after each call (trace-NNN.png, NNN as in the log). ponytail: slow (read-backs per call), one frame.
+extern void (*ShackGLTraceHook)(const char *what);   // ShackGLLegacy.m's draws call it too
+static double gTraceAt; static atomic_int gTraceState;   // 0 waiting, 1 tracing, 2 done
+static GLint tTraceVertex;   // the first vertex the traced draw reads (start + base vertex), set by the draw wrappers
+static void traceCall(const char *what) {
+    if (atomic_load(&gTraceState) != 1) return;
+    GLint fb = 0, rf = 0, vp[4] = {0}, prog = 0, type = 0, name = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fb); glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rf);
+    glGetIntegerv(GL_VIEWPORT, vp); glGetIntegerv(GL_CURRENT_PROGRAM, &prog);
+    glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+    if (type != GL_NONE) glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &name);
+    GLenum f = name > 0 && name < 8192 ? (type == GL_TEXTURE ? gTexFormat[name] : gRBFormat[name]) : 0;
+    BOOL fl = f == GL_RGBA16F || f == GL_RGB16F || f == GL_RG16F || f == GL_R16F || f == GL_RGBA32F || f == GL_RG32F || f == GL_R32F || f == GL_R11F_G11F_B10F;
+    float c[4] = {-1, -1, -1, -1};
+    GLint cx = vp[0] + vp[2] / 2, cy = vp[1] + vp[3] / 2;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)fb);
+    if (type == GL_NONE) {}
+    else if (fl) glReadPixels(cx, cy, 1, 1, GL_RGBA, GL_FLOAT, c);
+    else { uint8_t b[4] = {0}; glReadPixels(cx, cy, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, b); for (int i = 0; i < 4; i++) c[i] = b[i] / 255.0f; }
+    GLenum err = glGetError();
+    static int nthumb; const char *dir = getenv("SHACK_GL_DRAWTRACE_DIR");   // a 320-wide PNG of the target after each call
+    if (dir && type != GL_NONE && vp[2] > 0 && vp[3] > 0 && vp[2] <= 4096 && vp[3] <= 4096) {
+        size_t w = (size_t)vp[2], h = (size_t)vp[3], tw = w < 320 ? w : 320, th = h * tw / w ? h * tw / w : 1;
+        void *px = malloc(w * h * (fl ? 16 : 4)); uint8_t *out = malloc(tw * th * 4);
+        if (px && out) {
+            glReadPixels(vp[0], vp[1], (GLsizei)w, (GLsizei)h, GL_RGBA, fl ? GL_FLOAT : GL_UNSIGNED_BYTE, px);
+            for (size_t y = 0; y < th; y++) for (size_t x = 0; x < tw; x++) {
+                size_t sx = x * w / tw, sy = (th - 1 - y) * h / th, o = (y * tw + x) * 4;   // GL rows are bottom-up
+                for (int k = 0; k < 3; k++) {
+                    float v = fl ? ((float *)px)[(sy * w + sx) * 4 + k] : ((uint8_t *)px)[(sy * w + sx) * 4 + k] / 255.0f;
+                    out[o + k] = (uint8_t)(255.0f * sqrtf(v < 0 ? 0 : v > 1 ? 1 : v));   // sqrt: dark HDR values become visible
+                }
+                out[o + 3] = 255;
+            }
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+            CGContextRef bc = CGBitmapContextCreate(out, tw, th, 8, tw * 4, cs, kCGImageAlphaNoneSkipLast);
+            CGImageRef img = bc ? CGBitmapContextCreateImage(bc) : NULL;
+            NSString *path = [NSString stringWithFormat:@"%s/trace-%03d.png", dir, nthumb];
+            CGImageDestinationRef dst = img ? CGImageDestinationCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], CFSTR("public.png"), 1, NULL) : NULL;
+            if (dst) { CGImageDestinationAddImage(dst, img, NULL); CGImageDestinationFinalize(dst); CFRelease(dst); }
+            if (img) CGImageRelease(img); if (bc) CGContextRelease(bc); CGColorSpaceRelease(cs);
+        }
+        free(px); free(out); glGetError();
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)rf);
+    GLboolean m[4] = {0}; glGetBooleanv(GL_COLOR_WRITEMASK, m);
+    GLint dfunc = 0; glGetIntegerv(GL_DEPTH_FUNC, &dfunc);
+    char units[200] = "", *u = units;   // what units 0-3 sample: 2D texture, its format, the sampler object and its min filter
+    GLint active = 0; glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
+    for (GLuint i = 0; i < 4; i++) {
+        glActiveTexture(GL_TEXTURE0 + i);
+        GLint t = 0, smp = 0, minf = 0; glGetIntegerv(GL_TEXTURE_BINDING_2D, &t); glGetIntegerv(GL_SAMPLER_BINDING, &smp);
+        if (smp) glGetSamplerParameteriv((GLuint)smp, GL_TEXTURE_MIN_FILTER, &minf); else if (t) glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minf);
+        if (t || smp) u += snprintf(u, (size_t)(units + sizeof units - u), " u%u=%d/%#x/s%d/%#x", i, t, t > 0 && t < 8192 ? gTexFormat[t] : 0, smp, minf);
+    }
+    glActiveTexture((GLenum)active);
+    char attrs[600] = "", *a = attrs;   // enabled vertex attributes: buffer, size x type, stride, offset
+    for (GLuint i = 0; i < 8; i++) {
+        GLint on = 0, b = 0, sz = 0, ty = 0, st = 0; void *off = NULL;
+        glGetVertexAttribiv(i, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &on); if (!on) continue;
+        glGetVertexAttribiv(i, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &b); glGetVertexAttribiv(i, GL_VERTEX_ATTRIB_ARRAY_SIZE, &sz);
+        glGetVertexAttribiv(i, GL_VERTEX_ATTRIB_ARRAY_TYPE, &ty); glGetVertexAttribiv(i, GL_VERTEX_ATTRIB_ARRAY_STRIDE, &st);
+        glGetVertexAttribPointerv(i, GL_VERTEX_ATTRIB_ARRAY_POINTER, &off);
+        a += snprintf(a, (size_t)(attrs + sizeof attrs - a), " a%u=b%d/%dx%#x/%d/%p", i, b, sz, ty, st, off);
+        if (i == 0 && b && ty == GL_FLOAT) {   // attribute 0's first vertex as stored in its buffer
+            GLint was = 0, bsize = 0; glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &was);
+            glBindBuffer(GL_ARRAY_BUFFER, (GLuint)b); glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &bsize);
+            intptr_t at = (intptr_t)off + (intptr_t)tTraceVertex * (st ? st : sz * 4);
+            const float *v = at >= 0 && at + 16 <= bsize ? glMapBufferRange(GL_ARRAY_BUFFER, (GLintptr)at, 16, GL_MAP_READ_BIT) : NULL;
+            if (v) { a += snprintf(a, (size_t)(attrs + sizeof attrs - a), "{v%d: %g %g %g %g of %d}", tTraceVertex, v[0], v[1], v[2], v[3], bsize); glUnmapBuffer(GL_ARRAY_BUFFER); }
+            glBindBuffer(GL_ARRAY_BUFFER, (GLuint)was); glGetError();
+        }
+    }
+    static uint8_t named[8192];   // each program's shaders, by the class name in their first "// X" comment line, once
+    if (prog > 0 && prog < 8192 && !named[prog]) {
+        named[prog] = 1;
+        GLuint sh[4]; GLsizei n = 0; glGetAttachedShaders((GLuint)prog, 4, &n, sh);
+        NSMutableString *names = [NSMutableString string];
+        for (GLsizei i = 0; i < n; i++) {
+            GLint len = 0; glGetShaderiv(sh[i], GL_SHADER_SOURCE_LENGTH, &len);
+            char *src = calloc((size_t)len + 1, 1); glGetShaderSource(sh[i], len + 1, NULL, src);
+            for (char *l = src; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
+                if (!strncmp(l, "// ", 3) && l[3] >= 'A' && l[3] <= 'Z' && strncmp(l, "// Parameters", 13)) {
+                    char *e = strchr(l, '\n'); [names appendFormat:@" %.*s", (int)(e ? e - l - 3 : (long)strlen(l + 3)), l + 3]; break;
+                }
+            free(src);
+        }
+        fprintf(stderr, "[ShackGL] trace program %d:%s\n", prog, names.UTF8String);
+    }
+    if (prog > 0 && prog < 8192 && named[prog] < 2) {   // its vec4 uniforms' values, the first time it draws
+        named[prog] = 2;
+        GLint nu = 0; glGetProgramiv((GLuint)prog, GL_ACTIVE_UNIFORMS, &nu);
+        for (GLint u = 0; u < nu && u < 32; u++) {
+            char nm[64] = ""; GLint size = 0; GLenum ty = 0;
+            glGetActiveUniform((GLuint)prog, (GLuint)u, sizeof nm, NULL, &size, &ty, nm);
+            if (ty != GL_FLOAT_VEC4) continue;
+            char *br = strchr(nm, '['); if (br) *br = 0;
+            NSMutableString *v = [NSMutableString string];
+            for (GLint e = 0; e < size && e < 12; e++) {
+                char en[80]; snprintf(en, sizeof en, size > 1 ? "%s[%d]" : "%s", nm, e);
+                GLint loc = glGetUniformLocation((GLuint)prog, en); GLfloat f[4] = {0};
+                if (loc >= 0) glGetUniformfv((GLuint)prog, loc, f);
+                [v appendFormat:@" [%d]@%d=(%g %g %g %g)", e, loc, f[0], f[1], f[2], f[3]];
+            }
+            fprintf(stderr, "[ShackGL] trace program %d uniform %s[%d]:%s\n", prog, nm, size, v.UTF8String);
+        }
+    }
+    fprintf(stderr, "[ShackGL] trace %03d %s fb %d color0 %s %d fmt %#x vp %d,%d %dx%d prog %d depth %d/%#x blend %d mask %d%d%d%d centre %.3f %.3f %.3f %.3f%s%s%s\n",
+            nthumb++, what, fb, type == GL_TEXTURE ? "tex" : type == GL_RENDERBUFFER ? "rb" : "none", name, f, vp[0], vp[1], vp[2], vp[3], prog,
+            glIsEnabled(GL_DEPTH_TEST), dfunc, glIsEnabled(GL_BLEND), m[0], m[1], m[2], m[3], c[0], c[1], c[2], c[3], err ? " (read failed)" : "", units, attrs);
+}
+static void traceFrame(void) {   // at each present
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const char *e = getenv("SHACK_GL_DRAWTRACE");
+        if (e) { gTraceAt = CACurrentMediaTime() + atof(e); ShackGLTraceHook = traceCall; }
+    });
+    if (!gTraceAt) return;
+    int st = atomic_load(&gTraceState);
+    if (st == 1) { atomic_store(&gTraceState, 2); fprintf(stderr, "[ShackGL] drawtrace end\n"); }
+    else if (st == 0 && CACurrentMediaTime() >= gTraceAt) { atomic_store(&gTraceState, 1); fprintf(stderr, "[ShackGL] drawtrace begin\n"); }
+}
+static void shack_glBlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
+    glBlitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter);
+    if (ShackGLTraceHook) {
+        GLint rf = 0; glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rf);
+        char what[96]; snprintf(what, sizeof what, "glBlitFramebuffer from fb %d %d,%d-%d,%d to %d,%d-%d,%d", rf, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1);
+        ShackGLTraceHook(what);
+    }
+}
 static void shack_glDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void *indices, GLint baseVertex) {
     BaseVertexDraw(baseVertex, ^{ glDrawElements(mode, count, type, indices); });
+    if (ShackGLTraceHook) { tTraceVertex = baseVertex; ShackGLTraceHook("glDrawElementsBaseVertex"); }
 }
 static void shack_glDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices, GLint baseVertex) {
     BaseVertexDraw(baseVertex, ^{ glDrawRangeElements(mode, start, end, count, type, indices); });
+    if (ShackGLTraceHook) { tTraceVertex = (GLint)start + baseVertex; ShackGLTraceHook("glDrawRangeElementsBaseVertex"); }
 }
 static void shack_glDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instances, GLint baseVertex) {
     BaseVertexDraw(baseVertex, ^{ glDrawElementsInstanced(mode, count, type, indices, instances); });
@@ -462,6 +573,15 @@ static GLenum shack_glCheckFramebufferStatus(GLenum target) {
         NSLog(@"%@", m);
     }
     return st;
+}
+
+// A clear into an incomplete framebuffer (GL_INVALID_FRAMEBUFFER_OPERATION, nothing drawn) logs why, as
+// glCheckFramebufferStatus does; the first 2000 clears are checked.
+static void shack_glClear(GLbitfield mask) {
+    static atomic_int checks;
+    if (atomic_fetch_add(&checks, 1) < 2000) shack_glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+    glClear(mask);
+    if (ShackGLTraceHook) { char what[32]; snprintf(what, sizeof what, "glClear %#x", mask); ShackGLTraceHook(what); }
 }
 
 // Desktop entry points ES does not have resolve to a stub that returns 0 and logs its name when first called, not
@@ -498,7 +618,7 @@ void *ShackGLGetProcAddress(const char *name) {
         {"glTexStorage2D", shack_glTexStorage2D}, {"glTexStorage3D", shack_glTexStorage3D}, {"glRenderbufferStorage", shack_glRenderbufferStorage},
         {"glCompressedTexImage2D", shack_glCompressedTexImage2D}, {"glCompressedTexSubImage2D", shack_glCompressedTexSubImage2D},
         {"glCompressedTexImage3D", shack_glCompressedTexImage3D}, {"glCompressedTexSubImage3D", shack_glCompressedTexSubImage3D},
-        {"glCheckFramebufferStatus", shack_glCheckFramebufferStatus}, {"glGetBufferSubData", shack_glGetBufferSubData},
+        {"glCheckFramebufferStatus", shack_glCheckFramebufferStatus}, {"glClear", shack_glClear}, {"glBlitFramebuffer", shack_glBlitFramebuffer}, {"glGetBufferSubData", shack_glGetBufferSubData},
         {"glDrawElementsBaseVertex", shack_glDrawElementsBaseVertex}, {"glDrawRangeElementsBaseVertex", shack_glDrawRangeElementsBaseVertex},
         {"glDrawElementsInstancedBaseVertex", shack_glDrawElementsInstancedBaseVertex},
     };

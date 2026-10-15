@@ -1,4 +1,4 @@
-// GLSL 1.x shaders through ShackGLLegacySource (shims/AppKit/ShackGLLegacy.m), compiled by the iOS Simulator's OpenGL ES 3.
+// Desktop GLSL shaders through ShackGLESSource (shims/AppKit/ShackGLLegacy.m), compiled by the iOS Simulator's OpenGL ES 3.
 // A directory of sources (OCERZ_M32_SHADERDUMP=<dir> on the Mac writes Batman's) is the corpus; a shader is a vertex
 // shader when it writes gl_Position.
 //   xcrun --sdk iphonesimulator clang -fobjc-arc -target arm64-apple-ios26.0-simulator shims/AppKit/ShackGLLegacy.m \
@@ -9,7 +9,7 @@
 #import <OpenGLES/EAGL.h>
 #import <OpenGLES/ES3/gl.h>
 
-NSString *ShackGLLegacySource(NSString *src, GLenum type);
+NSString *ShackGLESSource(NSString *src, GLenum type);
 void ShackGLShaderSource(GLuint shader, GLsizei count, const GLchar *const *strings, const GLint *lengths) {}   // ShackGL.m's; unused here
 
 int main(int argc, char **argv) {
@@ -24,8 +24,7 @@ int main(int argc, char **argv) {
             NSString *src = [NSString stringWithContentsOfFile:[dir stringByAppendingPathComponent:name] encoding:NSUTF8StringEncoding error:nil];
             if (!src) continue;
             GLenum type = [src containsString:@"gl_Position"] ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER;
-            NSString *es = ShackGLLegacySource(src, type);
-            if (!es) { printf("SKIP %s (not GLSL 1.x)\n", name.UTF8String); continue; }
+            NSString *es = ShackGLESSource(src, type);
             const char *s = es.UTF8String;
             GLuint sh = glCreateShader(type);
             glShaderSource(sh, 1, &s, NULL);

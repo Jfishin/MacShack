@@ -69,7 +69,10 @@ CGLPixelFormatObj CGLGetPixelFormat(CGLContextObj ctx) {
     CGL_FN(CGLPixelFormatObj, CGLGetPixelFormat);
     return f ? f(ctx) : NULL;
 }
-CGLError CGLEnable(CGLContextObj ctx, int pname) { return ctx && cgl("ShackCGLCreateContext") ? kCGLNoError : kCGLBadContext; }
+CGLError CGLEnable(CGLContextObj ctx, int pname) {   // the surface backing size; nothing else to enable on ES
+    CGLError (*f)(CGLContextObj, int, int) = (CGLError (*)(CGLContextObj, int, int))cgl("ShackCGLSetEnabled");
+    return f ? f(ctx, pname, 1) : kCGLBadContext;
+}
 CGLError CGLSetParameter(CGLContextObj ctx, int pname, const GLint *params) {
     CGL_FN(CGLError, CGLSetParameter);
     return f ? f(ctx, pname, params) : kCGLBadContext;
@@ -78,11 +81,15 @@ CGLError CGLFlushDrawable(CGLContextObj ctx) {
     CGL_FN(CGLError, CGLFlushDrawable);
     return f ? f(ctx) : kCGLBadContext;
 }
-// Calls Feral's renderer makes around its context (weak imports on a Mac too). The context is ES: nothing to disable or
-// clear, no share group to hand out, and its "multithreaded engine" toggle is ours to ignore. CGLLockContext is a real lock
-// (one recursive mutex for every context): the game locks around GL work it shares between threads.
+// Calls Feral's renderer makes around its context (weak imports on a Mac too). The context is ES: CGLDisable only turns
+// the surface backing size off (its "multithreaded engine" toggle is ours to ignore), nothing to clear, no share group to
+// hand out. CGLLockContext is a real lock (one recursive mutex for every context): the game locks around GL work it
+// shares between threads.
 #include <pthread.h>
-CGLError CGLDisable(CGLContextObj ctx, int pname) { return ctx && cgl("ShackCGLCreateContext") ? kCGLNoError : kCGLBadContext; }
+CGLError CGLDisable(CGLContextObj ctx, int pname) {
+    CGLError (*f)(CGLContextObj, int, int) = (CGLError (*)(CGLContextObj, int, int))cgl("ShackCGLSetEnabled");
+    return f ? f(ctx, pname, 0) : kCGLBadContext;
+}
 CGLError CGLClearDrawable(CGLContextObj ctx) { return ctx && cgl("ShackCGLCreateContext") ? kCGLNoError : kCGLBadContext; }
 void *CGLGetShareGroup(CGLContextObj ctx) { return NULL; }
 static pthread_mutex_t gCGLLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
