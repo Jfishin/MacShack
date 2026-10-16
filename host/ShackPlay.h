@@ -69,11 +69,16 @@ static inline NSString *ShackPlayUsage(void) {
 void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query, void (^_Nullable ended)(int status));
 // Steam's Stop: the program's next ping tells MacShack Play to quit.
 void ShackPlayRequestQuit(void);
-// MacShack only (host/ShackPlayMac.m), `--play-mac`: Documents/Games/<name>.app runs in MacShack Play. Its data is
-// copied into the App Group's Games (a clone on the same volume), its code prepared and signed for Play into the App
-// Group's Guests, its settings written as Play's launch note (ShackGameLaunch.h). seconds > 0: Play asks the game to
-// quit after that long; runs: that many times in a row. Any queue but main.
-void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs);
+// MacShack only: a game did not start, in plain words. Logged, and posted on the main queue as ShackGameNotStarted
+// (object: the words) for Local Games and for the MacShack menu over Big Picture.
+void ShackGameNotStarted(NSString *why);
+extern NSString *const ShackPlayMissing;   // the words when MacShack Play is not installed
+// MacShack only (host/ShackPlayMac.m), Local Games and `--play-mac`: Documents/Games/<name>.app runs in MacShack Play.
+// Its data is copied into the App Group's Games (a clone on the same volume), its code prepared and signed for Play into
+// the App Group's Guests, its settings written as Play's launch note (ShackGameLaunch.h). seconds > 0: Play asks the
+// game to quit after that long; runs: that many times in a row. Returns once Play is asked to open, or the game did not
+// start (ShackGameNotStarted); `ended` (optional, on the bridge's queue) gets the last run's exit status. Any queue but main.
+void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs, void (^_Nullable ended)(int status));
 // MacShack's bundle id, read at load (once a guest runs, mainBundle answers for the guest). Play's is this + ".play".
 NSString *ShackPlayHostBundleID(void);
 // Windows games are set up: Windows/setup.json in the App Group (host/WindowsSetup.swift writes it last). Any thread.

@@ -9,12 +9,10 @@ struct SettingsView: View {
     let setUpSteam: (SteamSetup.Mode) -> Void   // update or repair: LauncherView runs SteamSetupView
     let windowsGames: () -> Void   // LauncherView shows WindowsGamesView
     @AppStorage("metalHUD") private var metalHUD = false
-    @AppStorage("playMacGames") private var playMacGames = false
     // How hard Big Picture and the games it starts may work the phone. Low Power Mode runs the UI at 60 Hz and stays
     // cool; uncapped, Chromium drew Big Picture at the panel's 120 Hz and full 3x resolution.
     @AppStorage("steamUI.fpsCap") private var uiCap = 60   // ShackSteamUIFrameCap's default
     @AppStorage("steamUI.renderScale") private var uiScale = 2.0   // ShackSteamUIRenderScale's default
-    @AppStorage("steamSleep") private var sleep = true
     @AppStorage("steamClient.lockTested") private var lockTested = true   // SteamSetup.lockTested
 
     var body: some View {
@@ -28,11 +26,6 @@ struct SettingsView: View {
                     }
                 } header: { Text("Steam Big Picture") } footer: {
                     Text("Lower draws fewer frames and pixels: less power, less heat. The frame rate also changes from the MacShack menu; resolution when Steam starts. Hold \(DeviceInfo.menuSpot) in Steam or in a game for the MacShack menu.")
-                }
-                Section {
-                    Toggle("Sleep Steam during games", isOn: $sleep)
-                } footer: {
-                    Text("Big Picture stops drawing while a game has the screen. Steam itself keeps running, so achievements, cloud saves and friends still work.")
                 }
                 Section {
                     LabeledContent("Installed", value: SteamSetup.installedLabel)
@@ -56,9 +49,6 @@ struct SettingsView: View {
                 }
                 Section("Advanced") {
                     Toggle("Metal performance HUD", isOn: $metalHUD)
-                    Toggle("Run Mac games in MacShack Play", isOn: $playMacGames)
-                    Text("Testing: Steam's Mac games (native, Unity and Intel) start in MacShack Play, so another game can follow without restarting MacShack.")
-                        .font(.footnote).foregroundStyle(.secondary)
                     NavigationLink("JIT & signing") { JITSigningView() }
                     NavigationLink("Logs") { LogBrowser() }
                     NavigationLink("Self-test") { ProbeView() }

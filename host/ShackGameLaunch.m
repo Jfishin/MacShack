@@ -11,7 +11,7 @@
 #import <unistd.h>
 #import <crt_externs.h>
 
-// How MacShack starts a Mac game in its own process, shared with MacShack Play (which runs Mac games too).
+// How a Mac game starts in MacShack Play; MacShack starts the Steam client with ShackStartGuest.
 
 typedef int (*guest_main_t)(int, char **, char **, char **);
 extern char **environ;
@@ -207,6 +207,20 @@ NSDictionary *ShackGamePrepareProcess(NSDictionary *launch, NSError **error) {
         if (traceSec > 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)traceSec * NSEC_PER_SEC), dispatch_get_global_queue(0, 0), ^{ ShackMetalCaptureTrace(trace); });
     }
     if (translate) args = ShackTranslatedArgs(appPath, args);   // before ShackHooksInstall, which reads SHACK_OPENGL
+    // Read by Metal when the game creates its device (Settings > Advanced > Metal performance HUD).
+    if ([launch[@"metalHUD"] boolValue]) setenv("MTL_HUD_ENABLED", "1", 1);
+    // A game Steam did not start (Local Games): its app ID from its steam_appid.txt, beside the executable, where
+    // SteamAPI_RestartAppIfNecessary looks (else it asks Steam to relaunch the game, and the game quits: Akane), and as
+    // Steam's launch variables (Unity changes the working folder).
+    for (NSString *file in getenv("SteamAppId") ? @[] : @[@"Contents/MacOS/steam_appid.txt", @"Contents/Resources/steam_appid.txt"]) {
+        NSInteger appID = [NSString stringWithContentsOfFile:[appPath stringByAppendingPathComponent:file] encoding:NSUTF8StringEncoding error:nil].integerValue;
+        if (appID <= 0) continue;
+        NSString *text = [NSString stringWithFormat:@"%ld", (long)appID];
+        [text writeToFile:[appPath stringByAppendingPathComponent:@"Contents/MacOS/steam_appid.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        setenv("SteamAppId", text.UTF8String, 1);
+        setenv("SteamGameId", text.UTF8String, 1);
+        break;
+    }
     // GameMaker's Mac runner (its data is game.ios) draws only with OpenGL; it has no Metal path to fall back to.
     if ([NSFileManager.defaultManager fileExistsAtPath:[appPath stringByAppendingPathComponent:@"Contents/Resources/game.ios"]])
         setenv("SHACK_OPENGL", "1", 0);

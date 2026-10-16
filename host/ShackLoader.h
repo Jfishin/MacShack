@@ -12,19 +12,12 @@ double ShackSteamUIRenderScale(void);
 void ShackMetalSetFrameCap(int fps);   // 0 = uncapped; takes effect at the next frame
 int ShackMetalFrameCap(void);
 void ShackAppKitSetRenderScale(double scale);   // for windows and views from now on; 0 = the panel's own
-NSString *ShackSteamClientGameName(void);   // the game the Steam client runs now, nil if none
 // Intel games (AArchX): engine default arguments and JIT pool size (the game's start: ShackTranslated.h).
 NSArray<NSString *> *ShackTranslatedArgs(NSString *appPath, NSArray<NSString *> *args);
 int ShackTranslatedJITMB(NSString *appPath);
 const char *ShackPadIdentity(NSString *appPath);   // the virtual pad's identity for this game (SHACK_HID_PAD), NULL: default
 
 @interface ShackLoader : NSObject
-/// Validate prepared/embedded code before installing process-wide guest hooks.
-+ (BOOL)validateAppAtPath:(NSString *)appPath error:(NSError **)error;
-/// Launch Documents/Games/<Name>.app from its prepared code (Library/Guests/<Name>/<generation>) or legacy embedded code
-/// (Frameworks/Guests, for developers); the game sees the Documents path. On success the guest owns the process and this never returns
-/// meaningfully; on failure returns NO with dlerror()/reason in error.
-+ (BOOL)launchAppAtPath:(NSString *)appPath error:(NSError **)error;
 /// The macOS Steam client (prep/steam-onehost/README.md): its data is Steam's own folder, Library/Application Support/Steam,
 /// its code the copy SteamSetup prepared in Library/Guests/SteamClient. Started like a game; extra arguments go
 /// to steam_osx after Steam's own switches.

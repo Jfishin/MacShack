@@ -6,13 +6,10 @@
 #import "ShackHome.h"
 #import "ShackSteamClient.h"
 #import "ShackLoader.h"
-#import "ShackTranslated.h"
 #import <IOSurface/IOSurfaceRef.h>
 #import <UIKit/UIKit.h>
 #import "ShackHooks.h"
 #import "ShackInstaller.h"
-#import "ShackJIT.h"
-#import "ShackJITHelper.h"
 #import <objc/message.h>
 #import <pthread.h>
 #import <spawn.h>
@@ -31,19 +28,13 @@
 #import <sys/wait.h>
 
 typedef int (*guest_main_t)(int, char **, char **, char **);
-enum { kHelperPid = 1000001, kGamePid = 1000002, kWindowsPid = ShackPlaySteamPid, kToolPid = 1000004 };
-void ShackCVSleepLinksOf(const char *image);   // libShackCV
-void ShackAppKitRestoreAppLoop(void);   // libShackAppKit
-void ShackHIDForgetSecondGuest(void);   // libShackIOKit
-void ShackHIDSetPad(const char *pad);
-void ShackHIDSetSecondGuestTest(BOOL (*isSecond)(const void *pc));   // macOS and iOS pids stay below 100000: never a real process
+enum { kHelperPid = 1000001, kGamePid = 1000002, kWindowsPid = ShackPlaySteamPid, kToolPid = 1000004 };   // macOS and iOS pids stay below 100000: never a real process
 static NSString *gBundle, *gCode;
 static volatile int gHelperState;   // 0 not started, 1 running, 2 ended
 static int gHelperArgc, gHelperStatus;
 static char **gHelperArgv;
-// A game Steam started, running in this process (below): its stand-in process.
-static struct { volatile int state; int status, argc, kq; char **argv, **envp; pthread_t thread; id delegate; NSString *app; char code[PATH_MAX]; int jitMB; BOOL translated, inPlay, ranInProcess; } gGame = { .kq = -1 };
-NSString *ShackSteamClientGameName(void) { return gGame.state == 1 && !gGame.inPlay ? gGame.app.lastPathComponent.stringByDeletingPathExtension : nil; }   // the island menu's game (one in MacShack Play has Play's)
+// A Mac game Steam started, running in MacShack Play (below): its stand-in process.
+static struct { volatile int state; int status, kq; NSString *app; } gGame = { .kq = -1 };
 // A Windows program Steam started through the Steam Play tool (ShackSteamPlay.m): it runs in MacShack Play (ShackPlay.m),
 // this is its stand-in process. The tool's other verbs (install scripts, getcompatpath) end at once as kToolPid.
 static struct { volatile int state; int status; } gWindows;   // 0 none yet, 1 running, 2 ended
@@ -64,17 +55,6 @@ static void say(NSString *line) {
     NSLog(@"[SteamClient] %@", line);
 }
 
-// The launch splash (GameOverlay.swift) over Big Picture while a game Steam started that needs JIT (Intel, Unity Mono)
-// gets going: Steam stops waiting for its window after ~15 s and shows the game's page with Resume, while JIT set-up
-// and translation can take 30 (Celeste, 10-07). Up with the game's bundle path; down after the splash's usual
-// first-frame wait once the game's window has the screen or the game ends (ShackMetal's own first-frame notice went to
-// Steam's UI long ago; ShackGL's comes from the game).
-static void splash(NSString *gameApp) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [NSNotificationCenter.defaultCenter postNotificationName:gameApp ? @"ShackSteamGameStarting" : @"ShackGameFirstFrame" object:gameApp];
-    });
-}
-
 // The images that make up the helper "process": itself, Chromium, its private tier0/vstdlib/SDL3.
 static BOOL callerIsHelper(const void *ra) {
     Dl_info info;
@@ -83,14 +63,8 @@ static BOOL callerIsHelper(const void *ra) {
     return [name isEqualToString:@"Steam Helper.helper"] || [name isEqualToString:@"Chromium Embedded Framework"] ||
            [name isEqualToString:@"libtier0_h.dylib"] || [name isEqualToString:@"libvstdlib_h.dylib"] || [name isEqualToString:@"libSDLh.dylib"];
 }
-static int *steamGetArgc(void) {
-    const void *ra = __builtin_return_address(0);
-    return callerIsHelper(ra) ? &gHelperArgc : gGame.state && ShackHooksIsSecondCaller(ra) ? &gGame.argc : origGetArgc();
-}
-static char ***steamGetArgv(void) {
-    const void *ra = __builtin_return_address(0);
-    return callerIsHelper(ra) ? &gHelperArgv : gGame.state && ShackHooksIsSecondCaller(ra) ? &gGame.argv : origGetArgv();
-}
+static int *steamGetArgc(void) { return callerIsHelper(__builtin_return_address(0)) ? &gHelperArgc : origGetArgc(); }
+static char ***steamGetArgv(void) { return callerIsHelper(__builtin_return_address(0)) ? &gHelperArgv : origGetArgv(); }
 
 static int steamKill(pid_t pid, int sig) {
     int state, status;
@@ -103,10 +77,10 @@ static int steamKill(pid_t pid, int sig) {
         return 0;
     }
     if (pid == kGamePid) {
-        if (sig && gGame.inPlay && gGame.state == 1) {   // a game in MacShack Play: it is asked to quit
+        if (sig && gGame.state == 1) {   // Steam's Stop: the game in MacShack Play is asked to quit
             say([NSString stringWithFormat:@"kill(game, %d): MacShack Play asks it to quit", sig]);
             ShackPlayRequestQuit();
-        } else if (sig) say([NSString stringWithFormat:@"kill(game, %d): ignored, a game in this process quits from its own menu", sig]);
+        }
         if (gGame.state != 1) { errno = ESRCH; return -1; }
         return 0;
     }
@@ -449,108 +423,12 @@ static pid_t steamCreateSimpleProcess(void *argvOrCommand, uint32_t flags, char 
 
 // --- games Steam starts ---
 // steamclient starts a Mac game with posix_spawn of its executable (TetherGeist) or an app bundle with NSWorkspace
-// (Mina). A game in Steam's steamapps/common runs in this process instead: prepared and signed where Steam keeps it
-// (ShackInstaller), its main on a thread of its own under a stand-in pid, its code seeing its own bundle, executable and
-// argv (ShackHooksAddGuest) and environment (below). Steam watches the pid (kevent EVFILT_PROC, waitpid, kill) and hears
-// it exit when the game quits; the game's windows then leave the screen.
-// ponytail: one game per MacShack run (images cannot be unloaded).
-void ShackAppKitOrderOutWindowsOfThread(pthread_t thread);   // libShackAppKit
+// (Mina). A game in Steam's steamapps/common runs in MacShack Play, a fresh process per game: native and Unity games'
+// code prepared and signed for Play into the App Group (an Intel game runs from its own folder under AArchX, nothing
+// prepared), Steam's arguments and launch environment in the launch note (container paths spelled through the shared
+// home: Play cannot read MacShack's container), Play opened. Steam watches the stand-in pid (kevent EVFILT_PROC,
+// waitpid, kill) until Play reports the end; nothing of the game loads here, so another game may follow.
 static int (*origKevent)(int, const struct kevent *, int, struct kevent *, int, const struct timespec *);
-
-static void gameEnded(int status) {
-    if (gGame.state != 1) return;
-    gGame.status = status; gGame.state = 2;
-    say([NSString stringWithFormat:@"game ended (%d): back to Steam", status]);
-    splash(nil);
-    dispatch_async(dispatch_get_main_queue(), ^{   // the island panel's "Saving and quitting…" closes (GameOverlay.swift)
-        [NSNotificationCenter.defaultCenter postNotificationName:@"ShackSteamGameEnded" object:nil];
-    });
-    void (*stopAudio)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "ShackAudioStopAll");   // its sounds would play on
-    if (stopAudio) stopAudio();
-    // Steam's again: its app thread (events, its own pump), the pads without the game's callbacks (its code stays loaded
-    // but is torn down), its frame cap and render scale, its display links awake before its window has the screen.
-    ShackAppKitRestoreAppLoop();
-    ShackHIDForgetSecondGuest();
-    ShackHIDSetPad(NULL);   // Steam's own identity again
-    ShackMetalSetFrameCap(ShackSteamUIFrameCap());
-    ShackAppKitSetRenderScale(ShackSteamUIRenderScale());
-    ShackCVSleepLinksOf(NULL);
-    ShackAppKitOrderOutWindowsOfThread(gGame.thread);
-    id app = [NSClassFromString(@"NSApplication") valueForKey:@"sharedApplication"];
-    if (gGame.delegate) [app setValue:gGame.delegate forKey:@"delegate"];   // Steam's, which the game's nib replaced
-    if (gGame.kq >= 0) {
-        struct kevent ev;
-        EV_SET(&ev, kGamePid, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
-        origKevent(gGame.kq, &ev, 1, NULL, 0, NULL);
-    }
-    // After Steam heard the end, and off this thread (it may be a crashed game's): the game's settings for MacShack
-    // Play, its logs where devicectl reads them.
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        ShackHomePrefsSync();
-        ShackHomeMirrorLogs();
-    });
-}
-
-static char **cStrings(NSArray<NSString *> *list) {
-    char **out = calloc(list.count + 1, sizeof *out);   // lives for the process
-    for (NSUInteger i = 0; i < list.count; i++) out[i] = strdup(list[i].UTF8String);
-    return out;
-}
-static char **copyStrings(char *const list[], int *count) {
-    int n = 0;
-    while (list && list[n]) n++;
-    char **out = calloc((size_t)n + 1, sizeof *out);   // lives for the process
-    for (int i = 0; i < n; i++) out[i] = strdup(list[i]);
-    if (count) *count = n;
-    return out;
-}
-
-static void *gameThread(void *arg) {
-    NSString *exe = CFBridgingRelease(arg);
-    pthread_setname_np("game-main");
-    ShackHooksAdoptGuestThread();
-    {   // diagnostic: pthread keys left for the game (iOS allows 512 per process; Steam's own come from SteamTSD.c)
-        pthread_key_t keys[600]; int n = 0;
-        while (n < 600 && pthread_key_create(&keys[n], NULL) == 0) n++;
-        for (int i = 0; i < n; i++) pthread_key_delete(keys[i]);
-        say([NSString stringWithFormat:@"pthread keys free for the game: %d", n]);
-    }
-    // A Unity Mono game (its install record says requiresJIT) runs its compiled code from a pool the JIT helper
-    // prepares, as when MacShack's own list launches it (ShackLoader, AppModel.startJITHelper); without it iOS kills
-    // the process at Mono's first method (Okko, 10-03). Waited for on this thread only: Steam and its UI run on.
-    if (gGame.jitMB) {
-        // The helper's debugger stops this whole process for ~15 s: Big Picture's sound would stutter (ShackAudioToolbox.m).
-        void (*pauseAudio)(BOOL) = (void (*)(BOOL))dlsym(RTLD_DEFAULT, "ShackAudioPauseAll");   // libShackAudioToolbox
-        if (pauseAudio) pauseAudio(YES);
-        NSString *logs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0] stringByAppendingPathComponent:@"Logs"];
-        if ([NSFileManager.defaultManager fileExistsAtPath:ShackJITPairingFileURL().path]) {
-            say(@"the game needs JIT: starting the JIT helper (keep LocalDevVPN on and the phone unlocked)");
-            dispatch_async(dispatch_get_main_queue(), ^{
-                ShackJITHelperStart(^(BOOL ok, NSString *log) {
-                    [log writeToFile:[logs stringByAppendingPathComponent:@"jit-helper.log"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
-                    if (!ok) say([@"JIT helper failed: " stringByAppendingString:[log componentsSeparatedByString:@"\n"].lastObject ?: @"?"]);
-                });
-            });
-        } else say(@"the game needs JIT and there is no pairing file: run the MacShack script in StikDebug (Enable Script)");
-        BOOL pool = ShackJITPoolSetup((size_t)gGame.jitMB << 20);
-        if (pauseAudio) pauseAudio(NO);
-        if (!pool) { say(@"JIT setup failed: the game does not start (see jit-helper.log)"); gameEnded(126); return NULL; }
-        say(@"JIT pool ready");
-    }
-    if (gGame.translated) {   // an Intel game: AArchX translates its executable, here Steam's own file
-        say(@"calling the game's main under AArchX");
-        NSMutableArray<NSString *> *args = [NSMutableArray array];
-        for (int i = 1; i < gGame.argc; i++) [args addObject:@(gGame.argv[i])];
-        gameEnded(ShackRunTranslated(exe, args));
-        return NULL;
-    }
-    NSString *error = nil;
-    guest_main_t entry = loadMain(exe, &error, NULL);
-    if (!entry) { say([@"the game did not load: " stringByAppendingString:error]); gameEnded(127); return NULL; }
-    say(@"calling the game's main");
-    gameEnded(entry(gGame.argc, gGame.argv, gGame.envp, NULL));   // main returned (exit ends it in the hooks)
-    return NULL;
-}
 
 // The bundle that holds path, when path is a game's executable in Steam's library; else nil. Some Mac depots are the
 // bundle itself (steamapps/common/<Game>/Contents/MacOS/..., no .app: Super Money Ring), which macOS runs as well.
@@ -562,90 +440,6 @@ static NSString *steamGameApp(const char *path) {
         ? [p substringToIndex:bundle.location] : nil;
 }
 
-// The game's own Steam client API. Valve's libsteam_api in the game finds Steam through ipcserver's Mach service (here
-// libShackSteamClient's bootstrap_look_up, which Steam's images bind to and a game's do not), reads SteamAppId and its
-// friends from the environment (Steam passes them to the game alone) and loads steamclient: a private copy, as the
-// helper's, steamclient_g with the game's pid and environment (the Mac prototype's steamclient_g: Mina's SteamAPI_Init OK).
-static pid_t gamePid(void) { return kGamePid; }
-static char *(*realGetenv)(const char *);
-// ponytail: Steam's variables are read from the launch's copy, so a game's own setenv of one of them goes unseen.
-static char *gameGetenv(const char *name) {
-    size_t n = strlen(name);
-    char *value = NULL;
-    for (char **e = gGame.envp; e && *e && !value; e++) if (!strncmp(*e, name, n) && (*e)[n] == '=') value = *e + n + 1;
-    static _Atomic int traced;   // diagnostic: the first Steam names asked (no values: some are tokens)
-    if (!strncmp(name, "Steam", 5) && traced++ < 40) fprintf(stderr, "[SteamClient] the game's getenv %s: %s\n", name, value ? "Steam's launch" : "process");
-    return value ?: realGetenv(name);
-}
-static void *(*gameOrigDlopen)(const char *, int);   // ShackHooks' (each game image's dlopen as it loaded)
-static void *gameDlopen(const char *path, int mode) {
-    if (!isSteamclientPath(path)) return gameOrigDlopen(path, mode);
-    void *handle = loadPrivateSteamclient(gameOrigDlopen, mode, 'g', NULL, 0);   // its answers: gameImageAdded
-    say(handle ? @"the game's Steam API: its own steamclient_g" : [@"the game's Steam API: steamclient_g did not load: " stringByAppendingString:@(dlerror() ?: "not prepared")]);
-    return handle;
-}
-// The game's SteamAPI_Init outcome and Valve's message for it, in the log (ESteamAPIInitResult: 0 OK, 1 failed
-// generic, 2 no Steam client, 3 version mismatch).
-static int (*realSteamInit)(const char *, char *);
-static int gameSteamInit(const char *versions, char *message) {
-    char mine[1024] = "";
-    int result = realSteamInit(versions, message ?: mine);
-    say([NSString stringWithFormat:@"the game's SteamAPI_Init: %d %s", result, message ?: mine]);
-    return result;
-}
-// Diagnostic: the type and origin of the first C++ exceptions the game's code throws (Okko's libGalaxy threw
-// boost::system::system_error "tss" in a static initializer: dyld's "c++ exception thrown in static initializer").
-// No what(): through multiple inheritance (boost::wrapexcept) the guessed vtable slot is another function.
-static void (*realCxaThrow)(void *, void *, void (*)(void *));
-static void gameCxaThrow(void *exception, void *type, void (*destructor)(void *)) {
-    static _Atomic int thrown;
-    if (thrown++ < 20) {
-        const char *name = type ? ((const char *const *)type)[1] : "?";   // std::type_info: vtable, then its name
-        Dl_info info; const void *ra = __builtin_return_address(0);
-        BOOL found = dladdr(ra, &info) && info.dli_fname;
-        fprintf(stderr, "[SteamClient] the game throws %s from %s+%#lx (%s)\n", name, found ? strrchr(info.dli_fname, '/') + 1 : "?",
-                found ? (unsigned long)((const char *)ra - (const char *)info.dli_fbase) : 0UL, found && info.dli_sname ? info.dli_sname : "?");
-    }
-    realCxaThrow(exception, type, destructor);
-}
-static kern_return_t (*steamLookUp)(mach_port_t, const char *, mach_port_t *);
-// Each image of the game's code as it loads, before its initializers: the answers above; libsteam_api also sees the
-// game's pid. Its private steamclient set too: steamclient reads SteamAppId while it loads.
-static void gameImageAdded(const struct mach_header *h, intptr_t slide) {
-    Dl_info info; char real[PATH_MAX]; size_t n = strlen(gGame.code);
-    if (gGame.state != 1 || !n || !dladdr(h, &info) || !info.dli_fname || !realpath(info.dli_fname, real)) return;
-    const char *base = strrchr(real, '/') + 1;
-    if (!strcmp(base, "steamclient_g.dylib") || !strcmp(base, "libtier0_g.dylib") || !strcmp(base, "libvstdlib_g.dylib") || !strcmp(base, "libaudig.dylib")) {
-        rebind_symbols_image((void *)h, slide, (struct rebinding[]){{"getpid", gamePid, NULL}, {"ThreadGetCurrentProcessId", gamePid, NULL},
-                                                                    {"getenv", gameGetenv, NULL}}, 3);
-        return;
-    }
-    if (strncmp(real, gGame.code, n) || real[n] != '/') return;
-    struct rebinding r[] = {{"dlopen", gameDlopen, (void **)&gameOrigDlopen}, {"getenv", gameGetenv, NULL},
-                            {"bootstrap_look_up", steamLookUp, NULL}, {"SteamInternal_SteamAPI_Init", gameSteamInit, (void **)&realSteamInit},
-                            {"__cxa_throw", gameCxaThrow, (void **)&realCxaThrow}, {"getpid", gamePid, NULL}};
-    rebind_symbols_image((void *)h, slide, r, strcmp(strrchr(real, '/'), "/libsteam_api.dylib") ? 5 : 6);
-}
-
-// An Intel game's Steam API (AArchX). Its own x86 libsteam_api loads the x86_64 slice of Valve's universal steamclient
-// (and tier0, vstdlib, audio) from Steam's folder, translated like the game, which connects to steam_osx's as from a
-// separate game process: what a Rosetta game does on a Mac (prep/aarchx/check_steam_api.c). Translated code reaches the
-// host through AArchX's symbol lookup, which fishhook never changes, so its answers come from translatedGameSymbol
-// (below), the same ones steamclient_g gets: the game's pid and environment, the stand-in pids, and libShackSteamClient's
-// in-process IPC. For all of the game's translated code: to Steam it is one process. AArchX's own handlers of a few
-// calls (variadic, or taking a command line) call libOcerz's imports instead: rebound here.
-static void *gSteamShim;   // libShackSteamClient
-static void answerTranslatedGame(void) {
-    say(ShackTranslatedSteamUse(gSteamShim) ? @"the Intel game's Steam API: Valve's x86 steamclient, answered in-process"
-                                            : @"the Intel game's Steam API: libShackSteamClient is not loaded");
-}
-
-// A Mac game in MacShack Play (Settings > Advanced, "Run Mac games in MacShack Play"; `-playMacGames YES`): native and
-// Unity games' code prepared and signed for Play into the App Group (an Intel game runs from its own folder under
-// AArchX, nothing prepared), Steam's arguments and launch environment in the launch note
-// (container paths spelled through the shared home: Play cannot read MacShack's container), Play opened. Steam keeps
-// the stand-in pid until Play reports the end; nothing of the game loads here, so another game may follow.
-// Returns 0, or -1 to run it in-process instead (not prepared for Play).
 static NSString *viaSharedHome(NSString *value) {
     NSString *group = ShackHomeGroup();
     if (!group) return value;
@@ -655,18 +449,24 @@ static NSString *viaSharedHome(NSString *value) {
                                                      withString:[group stringByAppendingFormat:@"/Home%@", folder]];
     return value;
 }
-static void playGameEnded(int status, NSString *exe) {   // the bridge's queue: Play reported the end, or its process went
+static NSDictionary<NSString *, NSString *> *environmentOf(char *const envp[]) {
+    NSMutableDictionary<NSString *, NSString *> *env = [NSMutableDictionary dictionary];
+    for (char *const *e = envp; e && *e; e++) {
+        const char *eq = strchr(*e, '=');
+        NSString *key = eq ? [[NSString alloc] initWithBytes:*e length:(NSUInteger)(eq - *e) encoding:NSUTF8StringEncoding] : nil;
+        if (key) env[key] = @(eq + 1) ?: @"";
+    }
+    return env;
+}
+static void gameEnded(int status, NSString *exe) {   // the bridge's queue: Play reported the end, or its process went
     if (gGame.state != 1) return;
-    gGame.status = status; gGame.state = 2; gGame.inPlay = NO;
+    gGame.status = status; gGame.state = 2;
     say([NSString stringWithFormat:@"the game in MacShack Play ended (%d): back to Steam", status]);
     if (gGame.kq >= 0) {
         struct kevent ev;
         EV_SET(&ev, kGamePid, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
         origKevent(gGame.kq, &ev, 1, NULL, 0, NULL);
     }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [NSNotificationCenter.defaultCenter postNotificationName:@"ShackSteamGameEnded" object:nil];
-    });
     NSString *group = ShackHomeGroup(), *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     if (group && exe) {   // the game's log where devicectl and AutoConfig read it
         NSString *mine = [docs stringByAppendingFormat:@"/Logs/%@.log", exe];
@@ -676,112 +476,48 @@ static void playGameEnded(int status, NSString *exe) {   // the bridge's queue: 
     ShackHomePrefsSync();
     ShackHomeMirrorLogs();
 }
-static int startSteamGameInPlay(NSString *app, char **argv, char **envp) {
-    NSString *group = ShackHomeGroup();
-    if (!group) return -1;
-    NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
+
+// Runs the game in app (a bundle in Steam's library) in MacShack Play with Steam's arguments (after argv[0]) and
+// environment. 0, or the errno Steam reports: a game that cannot be prepared for Play does not run, and MacShack says why.
+static int startSteamGame(NSString *app, NSArray<NSString *> *arguments, NSDictionary<NSString *, NSString *> *environment) {
+    if (gGame.state == 1) { say(@"a game is running; Steam starts another only after it ends"); return EAGAIN; }
+    // One spelling for the game's paths: Steam's library sits behind Application Support's link into the shared home,
+    // and checks that compare the bundle with listings inside it (GameMaker's) need the resolved one.
+    app = app.stringByResolvingSymlinksInPath;
+    NSString *group = ShackHomeGroup(), *name = app.lastPathComponent.stringByDeletingPathExtension;
+    say([NSString stringWithFormat:@"Steam starts %@: preparing it for MacShack Play", name]);
     NSString *arch = [ShackInstaller translationForAppPath:app];   // an Intel game: AArchX in Play, nothing prepared
     NSError *failure = nil;
     NSString *play = [ShackPlayHostBundleID() stringByAppendingString:@".play"];
-    NSString *code = [ShackInstaller playCodeRootForAppPath:app guests:[group stringByAppendingPathComponent:@"Guests"] identifier:play steam:YES
-                                                translated:arch != nil error:&failure];
+    NSString *code = group ? [ShackInstaller playCodeRootForAppPath:app guests:[group stringByAppendingPathComponent:@"Guests"] identifier:play
+                                                              steam:YES translated:arch != nil error:&failure] : nil;
     if (!code) {
-        say([NSString stringWithFormat:@"%@ stays in MacShack: %@", name, failure.localizedDescription]);
-        return -1;
+        ShackGameNotStarted([NSString stringWithFormat:@"%@ could not be prepared for MacShack Play: %@", name,
+                             group ? failure.localizedDescription : @"MacShack has no App Group container."]);
+        return ENOEXEC;
     }
     NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[group stringByAppendingFormat:@"/Guests/Play.Steam.%@/current.plist", name]];
     BOOL jit = [manifest[@"requiresJIT"] boolValue];
     NSMutableArray<NSString *> *args = [NSMutableArray array];
-    for (int i = 1; argv[i]; i++) [args addObject:viaSharedHome(@(argv[i]))];
+    for (NSString *a in arguments) [args addObject:viaSharedHome(a)];
     NSMutableDictionary<NSString *, NSString *> *env = [NSMutableDictionary dictionary];
-    for (char **e = envp; e && *e; e++) {
-        NSString *pair = @(*e);
-        NSRange eq = [pair rangeOfString:@"="];
-        NSString *key = eq.location == NSNotFound ? nil : [pair substringToIndex:eq.location];
-        if ([key hasPrefix:@"Steam"] || [key hasPrefix:@"STEAM"]) env[key] = viaSharedHome([pair substringFromIndex:NSMaxRange(eq)]);
-    }
+    for (NSString *key in environment)
+        if ([key hasPrefix:@"Steam"] || [key hasPrefix:@"STEAM"]) env[key] = viaSharedHome(environment[key]);
     NSDictionary *launch = @{@"app": app, @"code": code, @"logs": [group stringByAppendingPathComponent:@"Logs"], @"args": args,
         @"translate": @(arch != nil), @"requiresJIT": @(jit || arch), @"fpsCap": @(ShackGameFrameCap(name, arch != nil)),
-        @"renderScale": @(ShackGameRenderScale(name, arch != nil)),
+        @"renderScale": @(ShackGameRenderScale(name, arch != nil)), @"metalHUD": @([NSUserDefaults.standardUserDefaults boolForKey:@"metalHUD"]),
         @"swapMB": @0, @"steam": @YES, @"steamPid": @(kGamePid), @"env": env};
     say([@"Steam for the game in Play: " stringByAppendingString:ShackSteamPreparePlayFiles([NSURL fileURLWithPath:group], play)]);   // after a Steam update too
     NSString *notes = [group stringByAppendingPathComponent:@"Launch"];
     [NSFileManager.defaultManager createDirectoryAtPath:notes withIntermediateDirectories:YES attributes:nil error:NULL];
-    if (![launch writeToFile:[notes stringByAppendingPathComponent:@"current.plist"] atomically:YES]) { say(@"launch note not written"); return -1; }
+    if (![launch writeToFile:[notes stringByAppendingPathComponent:@"current.plist"] atomically:YES]) { say(@"launch note not written"); return EIO; }
     NSString *exe = [NSDictionary dictionaryWithContentsOfFile:[app stringByAppendingPathComponent:@"Contents/Info.plist"]][@"CFBundleExecutable"];
     gGame.app = app;
-    gGame.inPlay = YES;
     gGame.state = 1;
     ShackHomePrefsSync();   // the game's settings for Play
     say([NSString stringWithFormat:@"%@ runs in MacShack Play as pid %d (%lu arguments, %lu Steam variables%@)", name, kGamePid,
          (unsigned long)args.count, (unsigned long)env.count, arch ? @", Intel" : jit ? @", JIT" : @""]);
-    ShackPlayStart(@"mac", @{@"name": name, @"steam": @"1"}, ^(int status) { playGameEnded(status, exe); });
-    return 0;
-}
-
-// Runs the game whose executable is path (in app, a bundle in Steam's library) with argv and envp (taken, they live for
-// the process). 0, or the errno Steam reports.
-static int startSteamGame(NSString *app, NSString *path, char **argv, char **envp) {
-    if (gGame.state == 1) { say(@"a game is running; Steam starts another only after it ends"); return EAGAIN; }
-    if (gGame.ranInProcess) { say(@"a game already ran in this MacShack run; restart MacShack for another"); return EAGAIN; }   // its code stays loaded
-    // One spelling for the game's paths: Steam's library sits behind Application Support's link into the shared home,
-    // and checks that compare the bundle with listings inside it (GameMaker's) need the resolved one. The bundle is
-    // resolved once and the executable's place inside it kept as Steam gave it (a link inside the bundle stays a link).
-    if (![path hasPrefix:[app stringByAppendingString:@"/"]]) { say([@"the executable is not inside the game's bundle: " stringByAppendingString:path]); return ENOEXEC; }
-    NSString *inside = [path substringFromIndex:app.length];
-    app = app.stringByResolvingSymlinksInPath;
-    path = [app stringByAppendingString:inside];
-    say([NSString stringWithFormat:@"Steam starts %@: preparing it", app.lastPathComponent]);
-    if ([NSUserDefaults.standardUserDefaults boolForKey:@"playMacGames"]) {
-        int routed = startSteamGameInPlay(app, argv, envp);
-        if (routed >= 0) return routed;
-    }
-    NSError *failure = nil;
-    NSString *code = [ShackInstaller steamGameCodeRootForAppPath:app error:&failure];
-    if (!code) { say([@"the game could not be prepared: " stringByAppendingString:failure.localizedDescription]); return ENOEXEC; }
-    NSString *codeExe = [code stringByAppendingPathComponent:[path substringFromIndex:app.length]];
-    gGame.app = app;
-    gGame.argv = argv;
-    for (gGame.argc = 0; argv[gGame.argc]; gGame.argc++) {}
-    gGame.envp = envp;
-    gGame.delegate = [[NSClassFromString(@"NSApplication") valueForKey:@"sharedApplication"] valueForKey:@"delegate"];
-    if (!realpath(code.fileSystemRepresentation, gGame.code)) return ENOENT;
-    NSDictionary *manifest = [ShackInstaller steamGameManifestForAppPath:app];
-    gGame.translated = manifest[@"translate"] != nil;
-    gGame.jitMB = ![manifest[@"requiresJIT"] boolValue] ? 0 : gGame.translated ? ShackTranslatedJITMB(app) : 128;
-    if (!steamLookUp) {
-        gSteamShim = dlopen("@rpath/libShackSteamClient.dylib", RTLD_LAZY | RTLD_NOLOAD);
-        steamLookUp = (gSteamShim ? dlsym(gSteamShim, "bootstrap_look_up") : NULL) ?: dlsym(RTLD_DEFAULT, "bootstrap_look_up");
-    }
-    // GameMaker's Mac runner (data in game.ios) draws only with OpenGL.
-    if ([NSFileManager.defaultManager fileExistsAtPath:[app stringByAppendingPathComponent:@"Contents/Resources/game.ios"]]) {
-        setenv("SHACK_OPENGL", "1", 1);
-        ShackHooksEnableGL();
-    }
-    if (gGame.translated) {
-        NSMutableArray<NSString *> *args = [NSMutableArray array];
-        for (int i = 1; i < gGame.argc; i++) [args addObject:@(argv[i])];
-        args = [[@[@(argv[0])] arrayByAddingObjectsFromArray:ShackTranslatedArgs(app, args)] mutableCopy];
-        gGame.argv = cStrings(args);   // also what NSProcessInfo shows the game (-force-metal)
-        gGame.argc = (int)args.count;
-        ShackHooksEnableGL();
-        answerTranslatedGame();
-    }
-    ShackHomePrefsSync();   // the game's settings as MacShack Play last left them
-    ShackHooksAddGuest(app, path, code, gGame.translated, ^(int status) { gameEnded(status); });
-    ShackHIDSetSecondGuestTest(ShackHooksIsSecondCaller);   // the game's pad callbacks apart from Steam's
-    ShackHIDSetPad(ShackPadIdentity(app));
-    // The game's own frame cap and render scale (the same settings as in MacShack's Local Games; the island menu sets them).
-    NSString *name = app.lastPathComponent.stringByDeletingPathExtension;
-    ShackMetalSetFrameCap(ShackGameFrameCap(name, gGame.translated));
-    ShackAppKitSetRenderScale(ShackGameRenderScale(name, gGame.translated));
-    gGame.state = 1;
-    pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, 64 << 20);
-    gGame.ranInProcess = YES;
-    int e = pthread_create(&gGame.thread, &at, gameThread, (void *)CFBridgingRetain(codeExe));
-    if (e) { gGame.state = 0; say([NSString stringWithFormat:@"pthread_create: %d", e]); return e; }
-    say([NSString stringWithFormat:@"%@ runs in-process as pid %d (%d arguments)", app.lastPathComponent, kGamePid, gGame.argc]);
-    if (gGame.jitMB) splash(app);   // the slow starts; others show their window within a second or two
+    ShackPlayStart(@"mac", @{@"name": name, @"steam": @"1"}, ^(int status) { gameEnded(status, exe); });
     return 0;
 }
 
@@ -802,12 +538,7 @@ static int startWindowsProgram(pid_t *pid, char *const argv[], char *const envp[
         say(@"Steam Play: Windows games were removed (Settings > Windows games); not started");
         return ENOENT;
     }
-    NSMutableDictionary<NSString *, NSString *> *env = [NSMutableDictionary dictionary];
-    for (char *const *e = envp; e && *e; e++) {
-        const char *eq = strchr(*e, '=');
-        NSString *key = eq ? [[NSString alloc] initWithBytes:*e length:(NSUInteger)(eq - *e) encoding:NSUTF8StringEncoding] : nil;
-        if (key) env[key] = @(eq + 1) ?: @"";
-    }
+    NSDictionary<NSString *, NSString *> *env = environmentOf(envp);
     NSMutableArray<NSString *> *args = [NSMutableArray array];
     NSRegularExpression *option = [NSRegularExpression regularExpressionWithPattern:@"^[A-Za-z_][A-Za-z0-9_]*=" options:0 error:nil];
     for (int i = 3; i < argc; i++) {
@@ -866,7 +597,9 @@ static int steamPosixSpawn(pid_t *pid, const char *path, const posix_spawn_file_
         if (shim) refuse = dlsym(shim, "posix_spawn");
         return refuse ? refuse(pid, path, actions, attr, argv, envp) : EPERM;
     }
-    int e = startSteamGame(app, @(path), copyStrings(argv, NULL), copyStrings(envp, NULL));
+    NSMutableArray<NSString *> *args = [NSMutableArray array];
+    for (int i = 1; argv && argv[0] && argv[i]; i++) [args addObject:@(argv[i]) ?: @""];
+    int e = startSteamGame(app, args, environmentOf(envp));
     if (!e && pid) *pid = kGamePid;
     return e;
 }
@@ -879,44 +612,29 @@ static id steamLaunchApplication(id self, SEL _cmd, NSURL *url, NSUInteger optio
     NSString *path = exe.length ? [url.path stringByAppendingFormat:@"/Contents/MacOS/%@", exe] : nil;
     NSString *app = path ? steamGameApp(path.fileSystemRepresentation) : nil;
     int e = ENOTSUP;
-    if (app) {
-        NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObject:path], *env = [NSMutableArray array];
-        [args addObjectsFromArray:config[@"NSWorkspaceLaunchConfigurationArguments"] ?: @[]];
-        NSDictionary<NSString *, NSString *> *vars = config[@"NSWorkspaceLaunchConfigurationEnvironment"];
-        for (NSString *k in vars) [env addObject:[NSString stringWithFormat:@"%@=%@", k, vars[k]]];
-        e = startSteamGame(app, path, cStrings(args), cStrings(env));
-    } else say([@"Steam launches an app outside its library: refused: " stringByAppendingString:url.path]);
+    if (app) e = startSteamGame(app, config[@"NSWorkspaceLaunchConfigurationArguments"] ?: @[], config[@"NSWorkspaceLaunchConfigurationEnvironment"] ?: @{});
+    else say([@"Steam launches an app outside its library: refused: " stringByAppendingString:url.path]);
     if (e) { if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:e userInfo:nil]; return nil; }
     return [gGameAppClass new];
 }
 
 // Steam finds the focused window's process with CGWindowListCopyWindowInfo (the front window first, its owner pid) and
 // sends a pad's input to Big Picture only while that is its web helper. The windows on screen, front first, each owned by
-// the stand-in process that made it: Steam Helper's (made on the main thread) 1000001, the game's 1000002, else Steam.
+// the stand-in process that made it: Steam Helper's (made on the main thread) 1000001, else Steam.
 NSArray *ShackAppKitFrontWindows(void);   // libShackAppKit, NSWindow objects
-static BOOL isGameObject(id o) {   // its class comes from the game's code
-    const char *image = o ? class_getImageName(object_getClass(o)) : NULL;
-    char real[PATH_MAX]; size_t n = strlen(gGame.code);
-    return image && n && realpath(image, real) && !strncmp(real, gGame.code, n) && real[n] == '/';
-}
-// SDL makes its windows on the main thread (Mina's SDLWindow), so the game's are also told by their own classes.
-static int windowOwner(id w) {   // the AppKit shim's NSWindow: its own methods, typed
-    pthread_t creator = ((pthread_t (*)(id, SEL))objc_msgSend)(w, sel_registerName("shack_creator"));
-    if (gGame.state == 1 && (pthread_equal(creator, gGame.thread) || isGameObject(w) ||
-                             isGameObject(((id (*)(id, SEL))objc_msgSend)(w, sel_registerName("contentView"))))) return kGamePid;
+static int windowOwner(id w) {   // the AppKit shim's NSWindow: its own method, typed
     return ((BOOL (*)(id, SEL))objc_msgSend)(w, sel_registerName("shack_mainThreadWindow")) ? kHelperPid : getpid();
 }
 static CFArrayRef steamWindowList(uint32_t option, uint32_t relativeToWindow) {
     NSMutableArray *list = [NSMutableArray array];
     for (id w in ShackAppKitFrontWindows()) {
         int pid = windowOwner(w);
-        BOOL game = pid == kGamePid, helper = pid == kHelperPid;
         CGRect frame = ((CGRect (*)(id, SEL))objc_msgSend)(w, sel_registerName("frame"));
         NSInteger number = ((NSInteger (*)(id, SEL))objc_msgSend)(w, sel_registerName("windowNumber"));
         NSString *title = ((NSString *(*)(id, SEL))objc_msgSend)(w, sel_registerName("title"));
         NSDictionary *bounds = CFBridgingRelease(CGRectCreateDictionaryRepresentation(frame));
         [list addObject:@{@"kCGWindowNumber": @(number), @"kCGWindowOwnerPID": @(pid),
-                          @"kCGWindowOwnerName": game ? @"Game" : helper ? @"Steam Helper" : @"steam_osx",
+                          @"kCGWindowOwnerName": pid == kHelperPid ? @"Steam Helper" : @"steam_osx",
                           @"kCGWindowName": title ?: @"", @"kCGWindowLayer": @0, @"kCGWindowBounds": bounds,
                           @"kCGWindowIsOnscreen": @YES, @"kCGWindowAlpha": @1.0, @"kCGWindowSharingState": @1,
                           @"kCGWindowStoreType": @2, @"kCGWindowMemoryUsage": @0}];
@@ -969,29 +687,11 @@ static int steamKevent(int kq, const struct kevent *changes, int nchanges, struc
     return n;
 }
 
-// What a translated game Steam started gets for a host symbol (answerTranslatedGame above), or NULL for the usual one.
-// The calls Valve's x86 steamclient made in a session on the Mac (OCERZ_BRIDGELOG_MATCH): Mach look-ups, SysV and
-// POSIX semaphores, the game's own pid and environment, pid watches. libShackSteamClient's stubs (what iOS lacks) only
-// when nothing else in the process defines the name: MacShack's own shims (GL, CGL) come first.
-static void *translatedGameSymbol(const char *name) {
-    if (gGame.state != 1 || !gGame.translated) return NULL;
-    static const struct { const char *name; void *fn; } stand_ins[] = {
-        {"getpid", (void *)gamePid}, {"getenv", (void *)gameGetenv}, {"kill", (void *)steamKill},
-        {"waitid", (void *)steamWaitid}, {"waitpid", (void *)steamWaitpid}, {"kevent", (void *)steamKevent}};
-    void *answer = NULL;
-    for (size_t i = 0; i < sizeof stand_ins / sizeof *stand_ins && !answer; i++)
-        if (!strcmp(name, stand_ins[i].name)) answer = stand_ins[i].fn;
-    if (answer) { fprintf(stderr, "[SteamClient] the Intel game's %s: Steam's answer\n", name); return answer; }   // once: AArchX asks once
-    return ShackTranslatedSteamSymbol(gSteamShim, name);
-}
-
 void ShackSteamClientInstall(NSString *bundle, NSString *code) {
     gBundle = bundle; gCode = code;
-    // The private images (the helper's, a game's Steam API) report Steam's originals: tier0 finds steamui and steam.cfg
-    // beside its own image.
+    // The helper's private images report Steam's originals: tier0 finds steamui and steam.cfg beside its own image.
     NSMutableDictionary<NSString *, NSString *> *aliases = [NSMutableDictionary dictionary];
-    for (NSDictionary<NSString *, NSString *> *files in @[ShackSteamHelperFiles(), ShackSteamGameFiles()])
-        for (NSString *original in files) aliases[files[original]] = original;
+    for (NSString *original in ShackSteamHelperFiles()) aliases[ShackSteamHelperFiles()[original]] = original;
     ShackHooksSetImageAliases(aliases);
     struct rebinding r[] = {
         {"CreateSimpleProcess", steamCreateSimpleProcess, (void **)&origCreateSimpleProcess},
@@ -1009,10 +709,8 @@ void ShackSteamClientInstall(NSString *bundle, NSString *code) {
     Method front = class_getInstanceMethod(NSClassFromString(@"NSWorkspace"), sel_registerName("frontmostApplication"));
     if (front) method_setImplementation(front, (IMP)steamFrontmostApplication);
     // steamui reads frontmostApplication again only after NSWorkspace says the active app changed (its observers set a
-    // flag, any thread will do): said here when the front window's owner changes (a game's window comes up, the game
-    // quits), so Steam Input moves the pad between Big Picture and the game.
-    // While a game's window has the screen, Steam's display links sleep (`steamSleep`, default on): Chromium then draws
-    // nothing behind the game. Its threads keep running, so the game's Steam API calls are answered as before.
+    // flag, any thread will do): said here when the front window's owner changes (Steam's bootstrapper window, then
+    // Big Picture's), so Steam Input gives the pad to Big Picture.
     // ponytail: polled twice a second; a hook where the shim orders windows if the half-second lag ever matters.
     static dispatch_source_t focus;
     static pid_t announced;
@@ -1023,19 +721,9 @@ void ShackSteamClientInstall(NSString *bundle, NSString *code) {
         pid_t owner = window ? windowOwner(window) : getpid();
         if (owner == announced) return;
         announced = owner;
-        if (owner == kGamePid) splash(nil);   // the game's window is up
-        id sleep = [NSUserDefaults.standardUserDefaults objectForKey:@"steamSleep"];
-        BOOL asleep = owner == kGamePid && (!sleep || [sleep boolValue]);
-        ShackCVSleepLinksOf(asleep ? "/Guests/SteamClient/" : NULL);
-        say(asleep ? @"a game has the screen: Steam's display links sleep" : @"Steam's display links awake");
         [NSNotificationCenter.defaultCenter postNotificationName:@"NSWorkspaceDidActivateApplicationNotification" object:nil];
     });
     dispatch_resume(focus);
-    // A game's code: its own environment, Steam API and ipcserver (gameImageAdded); after ShackHooks' own rebinding of
-    // each new image, whose dlopen it keeps as the original. Called back for the images loaded now too (none a game's).
-    realGetenv = dlsym(RTLD_DEFAULT, "getenv");
-    _dyld_register_func_for_add_image(gameImageAdded);
-    ShackHooksSetGuestSymbolAnswer(translatedGameSymbol);   // an Intel game's (AArchX): never images fishhook reaches
     // Games Steam starts as app bundles, and the NSRunningApplication it gets back: the game's pid, bundle and end.
     // Added here, not in libShackSteamClient, which loads with steam_osx: after this, and a category there would win.
     Class running = NSClassFromString(@"NSRunningApplication"), workspace = NSClassFromString(@"NSWorkspace");
@@ -1047,8 +735,10 @@ void ShackSteamClientInstall(NSString *bundle, NSString *code) {
             return [NSDictionary dictionaryWithContentsOfFile:[gGame.app stringByAppendingPathComponent:@"Contents/Info.plist"]][@"CFBundleIdentifier"];
         }), "@@:");
         class_addMethod(gGameAppClass, sel_registerName("terminate"), imp_implementationWithBlock(^BOOL(id s) {
-            if (gGame.inPlay && gGame.state == 1) { say(@"Steam asked the game to quit: MacShack Play asks it"); ShackPlayRequestQuit(); return YES; }
-            say(@"Steam asked the game to quit: ignored, a game in this process quits from its own menu"); return NO;
+            if (gGame.state != 1) return NO;
+            say(@"Steam asked the game to quit: MacShack Play asks it");
+            ShackPlayRequestQuit();
+            return YES;
         }), "B@:");
         class_addMethod(gGameAppClass, sel_registerName("forceTerminate"), class_getMethodImplementation(gGameAppClass, sel_registerName("terminate")), "B@:");
         objc_registerClassPair(gGameAppClass);

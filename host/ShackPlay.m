@@ -192,6 +192,14 @@ static void observe(void) {   // main queue
 
 NSString *ShackPlayHostBundleID(void) { return g_bundleID; }
 
+NSString *const ShackPlayMissing = @"MacShack Play is not installed. Every game runs in MacShack Play: install it, then start the game again.";
+void ShackGameNotStarted(NSString *why) {
+    NSLog(@"[MacShack] game not started: %@", why);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:@"ShackGameNotStarted" object:why];
+    });
+}
+
 void ShackPlayRequestQuit(void) {
     atomic_store(&g_quit, true);
 }
@@ -214,7 +222,7 @@ static void openPlay(NSURL *play, int stepsLeft, unsigned start) {   // g_queue
         [UIApplication.sharedApplication openURL:play options:@{} completionHandler:^(BOOL ok) {
             dispatch_async(g_queue, ^{
                 note(@"open %@: %@", play, ok ? @"ok" : @"FAILED (MacShack Play not installed?)");
-                if (!ok) { finish(ENOENT); return; }
+                if (!ok) { ShackGameNotStarted(ShackPlayMissing); finish(ENOENT); return; }
                 // A Play that never says hello (it did not start, or its signature expired): the program ends, so later
                 // ones are not refused until MacShack restarts.
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), g_queue, ^{
@@ -254,7 +262,7 @@ void ShackPlayStart(NSString *mode, NSDictionary<NSString *, NSString *> *query,
     });
     dispatch_async(g_queue, ^{
         if (g_running) {
-            NSLog(@"[MacShack] MacShack Play: %@ not started, a program is out already", query[@"exe"]);
+            ShackGameNotStarted(@"A game is still running in MacShack Play. Quit it there first.");
             if (ended) ended(EAGAIN);
             return;
         }

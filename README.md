@@ -55,9 +55,9 @@ your device.
 ## How it works
 
 ```
-Mac game ──► prepare ─────────────► loader ──► the game ──► shims ──────────────► iOS
-             adapt + sign on                   (Intel:      macOS frameworks
-             the device                         AArchX)     rebuilt on iOS ones
+Mac game ──► prepare ─────────────► MacShack Play ──► the game ──► shims ──────────────► iOS
+             adapt + sign on                          (Intel:      macOS frameworks
+             the device                                AArchX)     rebuilt on iOS ones
 
 Windows game ──► Steam Play ──► MacShack Play ──► Madeira (Wine + x86 translation) ──► iOS
 ```
@@ -70,15 +70,17 @@ Windows game ──► Steam Play ──► MacShack Play ──► Madeira (Win
 - **JIT.** Games that compile code while they run (Unity's Mono, Intel and Windows games) need executable memory, which
   iOS grants only through a debugger. MacShack's built-in helper (StikJIT) attaches at launch and prepares that memory.
   Unity Mono details: [prep/unity-mono/README.md](prep/unity-mono/README.md).
-- **Intel games.** AArchX translates x86-64 code to ARM inside MacShack and routes the game's system calls to the same
-  shims. Details: [prep/aarchx/README.md](prep/aarchx/README.md).
-- **Steam.** iOS allows an app no child processes, so Valve's Steam client, its Chromium interface and the game it starts
-  all run inside MacShack's one process. Details: [docs/compat-playbook.md](docs/compat-playbook.md#steam-inside-the-game)
-  and the Mac prototype it grew from, [prep/steam-onehost/README.md](prep/steam-onehost/README.md).
-- **MacShack Play.** Windows games run in a second app that takes the foreground with Game Mode (more memory, CPU and GPU
-  priority), while Steam keeps running in MacShack behind it. Steam Play starts the game there, and the game talks to
-  that same Steam through NotProton's Steam bridge. The Windows parts are downloaded by your device when you set them
-  up (see [Windows games](#windows-games-optional)); the parts MacShack builds itself are in [windows-kit/](windows-kit/).
+- **Intel games.** AArchX translates x86-64 code to ARM inside MacShack Play and routes the game's system calls to the
+  same shims. Details: [prep/aarchx/README.md](prep/aarchx/README.md).
+- **Steam.** iOS allows an app no child processes, so Valve's Steam client and its Chromium interface run inside
+  MacShack's one process, and the games it starts run in MacShack Play. Details:
+  [docs/compat-playbook.md](docs/compat-playbook.md#steam-inside-the-game) and the Mac prototype it grew from,
+  [prep/steam-onehost/README.md](prep/steam-onehost/README.md).
+- **MacShack Play.** Every game runs in a second app that takes the foreground with Game Mode (more memory, CPU and GPU
+  priority), a fresh process each time, while Steam keeps running in MacShack behind it, so one game can follow another
+  without restarting MacShack. Windows games get there through Steam Play, and talk to that same Steam through
+  NotProton's Steam bridge. The Windows parts are downloaded by your device when you set them up (see
+  [Windows games](#windows-games-optional)); the parts MacShack builds itself are in [windows-kit/](windows-kit/).
 
 ## Building
 
@@ -93,7 +95,7 @@ MacShack is source only for now: you build it on a Mac and install it with your 
   build the OpenGL driver, metalgldrv; without them the apps build without it).
 - An Apple developer account. A free one works, with limits: apps stop opening after 7 days until you install them
   again, at most 3 apps can be installed through it at once, and it can register 10 new App IDs a week. MacShack uses
-  two App IDs (the app and its JIT extension); MacShack Play, for Windows games, is a third, and a second installed app.
+  two App IDs (the app and its JIT extension); MacShack Play, where games run, is a third, and a second installed app.
 
 **On your iPhone or iPad**
 
@@ -146,9 +148,9 @@ xcodebuild -project MacShack.xcodeproj -scheme MacShack -configuration Release \
 xcrun devicectl device install app --device <device-id> build/Build/Products/Release-iphoneos/MacShack.app
 ```
 
-For Windows games, build and install **MacShack Play** the same way, now or later, with `-scheme MacShackPlay` and
-`build/Build/Products/Release-iphoneos/MacShackPlay.app`. You can also open `MacShack.xcodeproj` in Xcode and run
-either scheme on your device.
+Then build and install **MacShack Play** the same way, with `-scheme MacShackPlay` and
+`build/Build/Products/Release-iphoneos/MacShackPlay.app`: every game runs in it. You can also open
+`MacShack.xcodeproj` in Xcode and run either scheme on your device.
 
 ## Using MacShack
 

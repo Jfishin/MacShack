@@ -3,10 +3,9 @@
 #import "ShackPlay.h"
 #import "ShackHome.h"
 
-// MacShack Play runs Mac games too: a game started from MacShack runs in a fresh Play process each time, so games can
-// follow one another without restarting MacShack. This is the first path in: `--play-mac <Name>` for an installed
-// Local Games game. ponytail: the data is copied into the App Group per game; the one-time move to a shared home
-// replaces the copy, and Steam and Local Games' own Play buttons replace the flag.
+// Local Games' games run in MacShack Play, a fresh Play process each time, so games can follow one another without
+// restarting MacShack (a tap in Local Games, or `--play-mac <Name>`). ponytail: the data is copied into the App Group
+// per game; the one-time move to a shared home replaces the copy.
 
 static void say(NSString *line) {   // Documents/Logs/play-mac-runs.txt, appended, one line per event
     NSLog(@"[MacShack] play-mac: %@", line);
@@ -20,13 +19,15 @@ static void say(NSString *line) {   // Documents/Logs/play-mac-runs.txt, appende
     [file closeFile];
 }
 
-void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs) {
+static void refuse(NSString *why, NSString *line) { say(line); ShackGameNotStarted(why); }
+
+void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs, void (^ended)(int status)) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *group = [fm containerURLForSecurityApplicationGroupIdentifier:ShackPlayGroup(ShackPlayHostBundleID())].path;
     NSString *app = [docs stringByAppendingFormat:@"/Games/%@.app", name];
-    if (!group) { say(@"no App Group container"); return; }
-    if (![fm fileExistsAtPath:app]) { say([@"no installed game at " stringByAppendingString:app]); return; }
+    if (!group) { refuse(@"MacShack has no App Group container: reinstall MacShack and MacShack Play.", @"no App Group container"); return; }
+    if (![fm fileExistsAtPath:app]) { refuse([name stringByAppendingString:@" is not in Local Games."], [@"no installed game at " stringByAppendingString:app]); return; }
     // The last run's report (MacShack's lines, then Play's) stays as play-mac-prev.txt.
     NSString *report = [docs stringByAppendingPathComponent:@"Logs/play-mac.txt"], *previous = [docs stringByAppendingPathComponent:@"Logs/play-mac-prev.txt"];
     [fm removeItemAtPath:previous error:NULL];
@@ -38,22 +39,37 @@ void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs) {
     [fm createDirectoryAtPath:games withIntermediateDirectories:YES attributes:nil error:NULL];
     NSString *dataReport = ShackShareGameData([docs stringByAppendingPathComponent:@"Games"], games);   // BMAAData beside Batman
     if (dataReport.length) say(dataReport);
-    if (![fm fileExistsAtPath:shared] && ![fm copyItemAtPath:app toPath:shared error:&error]) { say([@"copy into the App Group failed: " stringByAppendingString:error.localizedDescription]); return; }
+    if (![fm fileExistsAtPath:shared] && ![fm copyItemAtPath:app toPath:shared error:&error]) {
+        refuse([NSString stringWithFormat:@"%@ could not be copied for MacShack Play: %@", name, error.localizedDescription],
+               [@"copy into the App Group failed: " stringByAppendingString:error.localizedDescription]);
+        return;
+    }
     if ([fm fileExistsAtPath:args]) { [fm removeItemAtPath:sharedArgs error:NULL]; [fm copyItemAtPath:args toPath:sharedArgs error:NULL]; }
     NSString *arch = [ShackInstaller translationForAppPath:shared];   // x86_64 or i386: AArchX in Play, nothing prepared
     NSString *code = [ShackInstaller playCodeRootForAppPath:shared guests:[group stringByAppendingPathComponent:@"Guests"]
                                                 identifier:[ShackPlayHostBundleID() stringByAppendingString:@".play"] steam:NO
                                                 translated:arch != nil error:&error];
-    if (!code) { say([@"not prepared for Play: " stringByAppendingString:error.localizedDescription]); return; }
+    if (!code) {
+        refuse([NSString stringWithFormat:@"%@ could not be prepared for MacShack Play: %@", name, error.localizedDescription],
+               [@"not prepared for Play: " stringByAppendingString:error.localizedDescription]);
+        return;
+    }
     NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[group stringByAppendingFormat:@"/Guests/Play.%@/current.plist", name]];
+    // Memory tier: `swapMB.<Name>` (the tile's Memory swap), else `swapMB`, else off (launch arguments arrive as strings).
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    id ownSwap = [defaults objectForKey:[@"swapMB." stringByAppendingString:name]], anySwap = [defaults objectForKey:@"swapMB"];
     NSMutableDictionary *launch = [@{@"app": shared, @"code": code, @"logs": [group stringByAppendingPathComponent:@"Logs"], @"argsFile": sharedArgs,
         @"translate": @(arch != nil), @"requiresJIT": @([manifest[@"requiresJIT"] boolValue] || arch),
-        @"fpsCap": @(ShackGameFrameCap(name, arch != nil)), @"renderScale": @(ShackGameRenderScale(name, arch != nil)), @"swapMB": @0} mutableCopy];
-    NSString *displaySize = [NSUserDefaults.standardUserDefaults stringForKey:[@"displaySize." stringByAppendingString:name]];
+        @"fpsCap": @(ShackGameFrameCap(name, arch != nil)), @"renderScale": @(ShackGameRenderScale(name, arch != nil)),
+        @"swapMB": @(ownSwap ? [ownSwap integerValue] : anySwap ? [anySwap integerValue] : 0), @"metalHUD": @([defaults boolForKey:@"metalHUD"])} mutableCopy];
+    NSString *displaySize = [defaults stringForKey:[@"displaySize." stringByAppendingString:name]];
     if (displaySize.length) launch[@"displaySize"] = displaySize;
     NSString *notes = [group stringByAppendingPathComponent:@"Launch"];
     [fm createDirectoryAtPath:notes withIntermediateDirectories:YES attributes:nil error:NULL];
-    if (![launch writeToFile:[notes stringByAppendingPathComponent:@"current.plist"] atomically:YES]) { say(@"launch note not written"); return; }
+    if (![launch writeToFile:[notes stringByAppendingPathComponent:@"current.plist"] atomically:YES]) {
+        refuse([name stringByAppendingString:@" could not be handed to MacShack Play (its launch note was not written)."], @"launch note not written");
+        return;
+    }
     NSString *exe = [NSDictionary dictionaryWithContentsOfFile:[shared stringByAppendingPathComponent:@"Contents/Info.plist"]][@"CFBundleExecutable"];
     say([NSString stringWithFormat:@"%@: code %@, starting MacShack Play (%lu run%@ left)", name, code, (unsigned long)runs, runs == 1 ? @"" : @"s"]);
     NSDictionary *query = seconds ? @{@"name": name, @"seconds": [NSString stringWithFormat:@"%lu", (unsigned long)seconds]} : @{@"name": name};
@@ -64,11 +80,11 @@ void ShackPlayMacRun(NSString *name, NSUInteger seconds, NSUInteger runs) {
         [fm copyItemAtPath:log toPath:mine error:NULL];
         ShackHomeMirrorLogs();
         say([NSString stringWithFormat:@"%@ ended (%d)", name, status]);
-        if (runs <= 1) return;
+        if (runs <= 1) { if (ended) ended(status); return; }
         // ponytail: 5 s for MacShack to be in front again and merge Play's report; ShackPlayStart then waits for the
         // last Play process itself.
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            ShackPlayMacRun(name, seconds, runs - 1);
+            ShackPlayMacRun(name, seconds, runs - 1, ended);
         });
     });
 }

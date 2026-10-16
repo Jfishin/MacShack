@@ -8,9 +8,8 @@ struct MacShackApp: App {
     @State private var pad = PadNav()
     @State private var look = Appearance()
     @State private var password = ""
-    // The first screen, unless MacShack starts with arguments or relaunches itself into a game: then Local Games.
-    private static let onHome = ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("--") } ||
-        UserDefaults.standard.string(forKey: "pendingLaunch") != nil
+    // The first screen, unless MacShack starts with arguments: then Local Games.
+    private static let onHome = ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("--") }
     // First run: onboarding until a valid signing identity and a pairing file are in, or the pairing page was skipped
     // (never for test launches). Once shown it stays until its last page is left.
     @State private var onboarding = !MacShackApp.onHome && (!AppModel.identityValid ||
@@ -25,7 +24,7 @@ struct MacShackApp: App {
                         if bigPicture { DispatchQueue.main.async { app.openBigPicture() } }   // after the launcher is in
                     }
                 } else {
-                    // Launching a game replaces this whole view: the AppKit shim installs the game's own root view controller.
+                    // Starting Steam replaces this whole view: the AppKit shim installs Steam's own root view controller.
                     LauncherView(start: app.showProbe ? .settings : Self.onHome ? .games : nil)
                 }
             }
@@ -35,10 +34,10 @@ struct MacShackApp: App {
             .tint(look.accent)
             // Also runs again when onboarding hands over to the launcher (the Group's content changes): keep it idempotent.
             .onAppear {
-                pad.suspended = { [app] in app.launched && app.ended == nil }
+                pad.suspended = { [app] in app.launched && !app.ended }
                 pad.start()
-                _ = DeviceInfo.chip   // read the chip name now: a game's Metal hooks come later
-                _ = GCController.controllers()   // start controller discovery long before a game's first HID scan
+                _ = DeviceInfo.chip   // read the chip name now: Steam's Metal hooks come later
+                _ = GCController.controllers()   // start controller discovery long before Steam's first HID scan
                 app.handleLaunchArguments()
             }
             .onChange(of: scenePhase) { _, phase in if phase == .active { app.scan() } }

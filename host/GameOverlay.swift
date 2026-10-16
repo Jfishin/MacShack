@@ -1,16 +1,15 @@
 import SwiftUI
 import UIKit
 
-// MacShack's button over the Dynamic Island while a game runs. The island itself cannot be a button for the app in
-// front (iOS hides an app's own Live Activity), so a transparent window above the game claims a small area over the
-// island's spot and passes every other touch through to the game. A tap or short hold opens a Liquid Glass panel to quit, bring up the
-// keyboard or show the on-screen controller (whose controls are the only other areas the window claims).
+// MacShack's button over the Dynamic Island while Steam runs (games run in MacShack Play, which has its own). The island
+// itself cannot be a button for the app in front (iOS hides an app's own Live Activity), so a transparent window above
+// Steam claims a small area over the island's spot and passes every other touch through. A tap or short hold opens a
+// Liquid Glass panel to quit, bring up the keyboard or show the on-screen controller (whose controls are the only other
+// areas the window claims). A game that did not start says why at the top for a few seconds.
 @Observable
 @MainActor
 final class GameOverlayModel {
-    var gameName = ""
-    var splashGame: URL?   // the launch splash stays over the game until it has drawn for a moment
-    @ObservationIgnored var splashShownAt = Date.now
+    var notice: String?
     var showPanel = false
     var quitting = false
     var showForceQuit = false
@@ -26,37 +25,26 @@ final class GameOverlayModel {
         return CGRect(x: islandLeft ? 0 : size.width - width, y: (size.height - height) / 2, width: width, height: height)
     }
 
-    // Frame rate and resolution from the panel: the running game's own settings (the keys of Local Games' tiles), or Big
-    // Picture's while the Steam client runs no game. The frame rate changes at once; resolution at the next start.
-    @ObservationIgnored var steam = false
-    @ObservationIgnored var gameKey: String?   // MacShack's game: Documents/Games/<Name>.app
-    @ObservationIgnored var translate = false
+    // Big Picture's frame rate and resolution from the panel. The frame rate changes at once; resolution at the next start.
     var cap = 0
     var scale = 0.0
-    var settingsName: String? { steam ? ShackSteamClientGameName() : gameKey }   // nil: Big Picture
-    var panelTitle: String { steam ? ShackSteamClientGameName() ?? "Steam" : gameName }
 
     func openPanel() {
-        if let name = settingsName {
-            cap = Int(ShackGameFrameCap(name, translate))
-            scale = ShackGameRenderScale(name, translate)
-        } else {
-            cap = Int(ShackSteamUIFrameCap())
-            scale = ShackSteamUIRenderScale()
-        }
+        cap = Int(ShackSteamUIFrameCap())
+        scale = ShackSteamUIRenderScale()
         if scale <= 0 || scale > UIScreen.main.scale { scale = UIScreen.main.scale }
         showPanel = true
     }
     func nextCap() {
         let choices = [displayHz / 2, displayHz / 3, displayHz / 4, 0]   // 120 Hz: 60, 40, 30, uncapped
         cap = choices[((choices.firstIndex(of: cap) ?? -1) + 1) % choices.count]
-        UserDefaults.standard.set(cap, forKey: settingsName.map { "fpsCap.\($0)" } ?? "steamUI.fpsCap")
+        UserDefaults.standard.set(cap, forKey: "steamUI.fpsCap")
         ShackMetalSetFrameCap(Int32(cap))
     }
     func nextScale() {
         let choices = renderScales.filter { $0 <= UIScreen.main.scale }
         scale = choices[((choices.firstIndex(of: scale) ?? -1) + 1) % choices.count]
-        UserDefaults.standard.set(scale, forKey: settingsName.map { "renderScale.\($0)" } ?? "steamUI.renderScale")
+        UserDefaults.standard.set(scale, forKey: "steamUI.renderScale")
     }
 
     func quit() {
@@ -64,16 +52,10 @@ final class GameOverlayModel {
         ShackAppKitRequestQuit()
         Task {
             try? await Task.sleep(for: .seconds(10))
-            if quitting { showForceQuit = true }   // the game did not end: offer the old way out
+            if quitting { showForceQuit = true }   // Steam did not end: offer the old way out
         }
     }
     func forceQuit() { ShackExitProcess(0) }
-    // A game Steam started ended (ShackSteamClient.m): Big Picture has the screen again, the panel goes.
-    func gameEnded() {
-        quitting = false
-        showForceQuit = false
-        showPanel = false
-    }
 
     func toggleTouchControls() {
         touchControls.toggle()
@@ -82,12 +64,11 @@ final class GameOverlayModel {
         showPanel = false
     }
 
-    // The game drew its first frame: keep the splash at least 6 s in all, and 2.5 s past this, then fade it out.
-    func firstFrame() {
-        let wait = max(2.5, 6 - Date.now.timeIntervalSince(splashShownAt))
+    func say(_ why: String) {
+        notice = why
         Task {
-            try? await Task.sleep(for: .seconds(wait))
-            splashGame = nil
+            try? await Task.sleep(for: .seconds(8))
+            if notice == why { notice = nil }
         }
     }
 }
@@ -101,21 +82,21 @@ private final class PassthroughWindow: UIWindow {
         guard let model else { return nil }
         if !pad.isHidden, !model.islandRect.contains(point), pad.point(inside: convert(point, to: pad), with: event) { return pad }
         guard let hit = super.hitTest(point, with: event) else { return nil }
-        return model.splashGame != nil || model.showPanel || model.islandRect.contains(point) ? hit : nil
+        return model.showPanel || model.islandRect.contains(point) ? hit : nil
     }
-    // Shown while wanted and neither the launch splash nor the panel is up.
+    // Shown while wanted and the panel is not up.
     func trackPad() {
         guard let model else { return }
-        withObservationTracking { pad.isHidden = !(model.touchControls && model.splashGame == nil && !model.showPanel) }
+        withObservationTracking { pad.isHidden = !(model.touchControls && !model.showPanel) }
             onChange: { Task { @MainActor [weak self] in self?.trackPad() } }
     }
 }
 
 private final class OverlayController: UIHostingController<AnyView> {
     let model: GameOverlayModel
-    init(model: GameOverlayModel, app: AppModel) {
+    init(model: GameOverlayModel) {
         self.model = model
-        super.init(rootView: AnyView(GameOverlayView(model: model).environment(app)))   // SplashView reads launch status
+        super.init(rootView: AnyView(GameOverlayView(model: model)))
         view.backgroundColor = .clear
     }
     @MainActor required dynamic init?(coder: NSCoder) { fatalError() }
@@ -143,11 +124,17 @@ struct GameOverlayView: View {
                 .onTapGesture { model.openPanel() }   // a tap or a hold: the island's area is the screen edge's middle,
                 .onLongPressGesture(minimumDuration: 0.3) { model.openPanel() }   // where a game rarely wants touches
             if model.showPanel { panel }
-            if let game = model.splashGame { AppSplash(game: game).transition(.opacity) }
+            if let notice = model.notice {
+                Text(notice).font(.callout).multilineTextAlignment(.center).padding(16)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                    .padding(.top, 24).padding(.horizontal, 80)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .transition(.opacity)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: 0.5), value: model.splashGame)
+        .animation(.easeInOut(duration: 0.5), value: model.notice)
     }
 
     private var panel: some View {
@@ -155,11 +142,11 @@ struct GameOverlayView: View {
             Color.black.opacity(0.3).ignoresSafeArea()
                 .onTapGesture { if !model.quitting { model.showPanel = false } }
             VStack(spacing: 16) {
-                Text(model.quitting ? "Saving and quitting…" : model.panelTitle).font(.title3.bold())
+                Text(model.quitting ? "Saving and quitting…" : "Steam").font(.title3.bold())
                 if model.quitting {
                     ProgressView()
                     if model.showForceQuit {
-                        Text("The game has not closed.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Steam has not closed.").font(.footnote).foregroundStyle(.secondary)
                         Button("Force Quit", role: .destructive) { model.forceQuit() }.buttonStyle(.glassProminent)
                     }
                 } else {
@@ -182,7 +169,7 @@ struct GameOverlayView: View {
                             Label(scaleName(model.scale), systemImage: "aspectratio")
                         }.buttonStyle(.glass)
                     }
-                    Text(model.settingsName == nil ? "Resolution changes when Steam starts again." : "Resolution changes at the game's next launch.")
+                    Text("Resolution changes when Steam starts again.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Back to game") { model.showPanel = false }.buttonStyle(.glass)
                 }
@@ -193,63 +180,37 @@ struct GameOverlayView: View {
     }
 }
 
-// MacShack's splash: the game's name as its lists show it, and the JIT helper's status.
-private struct AppSplash: View {
-    @Environment(AppModel.self) private var app
-    let game: URL
-    var body: some View { SplashView(game: game, name: app.displayName(game), status: app.jitStatus) }
-}
-
 @MainActor
 enum GameOverlay {
     private static var window: UIWindow?
-    private static var firstFrameObserver: NSObjectProtocol?
-    private static var steamGameObserver: NSObjectProtocol?
-    private static var steamGameEndedObserver: NSObjectProtocol?
+    private static var noticeObserver: NSObjectProtocol?
 
-    // Shown at launch with the splash on top (a game; the Steam client draws its own, and the splash comes up for a game
-    // Steam starts: ShackSteamClient.m); the island button stays for the whole run.
-    static func show(game: URL?, name: String? = nil, app: AppModel) {
+    // Shown when Steam starts; the island button stays for its whole run.
+    static func show() {
         guard window == nil, let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
         let model = GameOverlayModel()
-        model.gameName = name ?? game.map(app.displayName) ?? ""
-        model.steam = game == nil
-        model.gameKey = game?.deletingPathExtension().lastPathComponent
-        model.translate = game.map { ShackInstaller.translates(atAppPath: $0.path) } ?? false
-        model.splashGame = game
-        firstFrameObserver = NotificationCenter.default.addObserver(forName: Notification.Name("ShackGameFirstFrame"), object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { model.firstFrame() }
-        }
-        steamGameObserver = NotificationCenter.default.addObserver(forName: Notification.Name("ShackSteamGameStarting"), object: nil, queue: .main) { note in
-            let path = note.object as? String
-            MainActor.assumeIsolated {
-                model.splashShownAt = .now
-                model.splashGame = path.map { URL(fileURLWithPath: $0) }
-            }
-        }
-        steamGameEndedObserver = NotificationCenter.default.addObserver(forName: Notification.Name("ShackSteamGameEnded"), object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { model.gameEnded() }
+        noticeObserver = NotificationCenter.default.addObserver(forName: Notification.Name("ShackGameNotStarted"), object: nil, queue: .main) { note in
+            let why = note.object as? String
+            MainActor.assumeIsolated { if let why { model.say(why) } }
         }
         let w = PassthroughWindow(windowScene: scene)
         w.model = model
-        w.windowLevel = .normal + 1   // above the game's window, which the AppKit shim fills
+        w.windowLevel = .normal + 1   // above Steam's window, which the AppKit shim fills
         w.backgroundColor = .clear
-        w.rootViewController = OverlayController(model: model, app: app)
-        w.isHidden = false            // shown, never key: the game keeps keyboard and controller focus
+        w.rootViewController = OverlayController(model: model)
+        w.isHidden = false            // shown, never key: Steam keeps keyboard and controller focus
         w.pad.frame = w.bounds
         w.pad.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         w.addSubview(w.pad)           // above the SwiftUI root view
         w.trackPad()
         window = w
-        if model.touchControls { ShackTouchPadSetConnected(true) }   // before the game looks for pads, like a paired one
+        if model.touchControls { ShackTouchPadSetConnected(true) }   // before Steam looks for pads, like a paired one
     }
 
     static func hide() {
         ShackTouchPadSetConnected(false)
-        for observer in [firstFrameObserver, steamGameObserver, steamGameEndedObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(observer) }
-        firstFrameObserver = nil
-        steamGameObserver = nil
-        steamGameEndedObserver = nil
+        if let noticeObserver { NotificationCenter.default.removeObserver(noticeObserver) }
+        noticeObserver = nil
         window?.isHidden = true
         window = nil
     }

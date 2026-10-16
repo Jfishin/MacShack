@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 
 // Local state behind the launcher, Local Games and Settings: what is in Documents/Staging and Documents/Games, the
-// on-device prepare, launching (one attempt per process: the loader's hooks are process-wide), and the signing identity.
+// on-device prepare, starting games in MacShack Play, the Steam client (once per process: its hooks are process-wide),
+// and the signing identity.
 @Observable
 @MainActor
 final class AppModel {
@@ -13,10 +14,8 @@ final class AppModel {
     var preparing = false
     var preparationStatus = ""
     var jitStatus = ""
-    @ObservationIgnored private var current: (url: URL, exe: String)?
-    @ObservationIgnored private var jitFailure: String?   // the helper's reason, kept past the loader's generic timeout
     var error: String?
-    var launched = false
+    var launched = false   // the Steam client runs in this process
     var signingBusy = false
     var signingStatus = ""
     let steamSetup = SteamSetup()   // Valve's Steam client onto this device (SteamSetup.swift)
@@ -28,13 +27,11 @@ final class AppModel {
     var pairingReady = AppModel.hasPairingFile
     var showProbe = ProcessInfo.processInfo.arguments.contains("--probe")
     @ObservationIgnored private var autoLaunched = false
-    var currentGame: String?
-    var ended: String?   // the game that quit: MacShack is back, and another game needs a fresh process
+    var ended = false   // Steam quit: MacShack is back, and Big Picture needs a fresh process
     var configOffer: (game: URL, rules: [AutoConfig.Rule])?   // Local Games asks to set up auto-config (AutoConfig.swift)
-    var stalePrepare: (url: URL, reason: String)?   // Local Games asks to prepare it again: the loader refused its prepared code
     @ObservationIgnored private var hostRoot: UIViewController?
 
-    var busy: Bool { (launched && ended == nil) || preparing || signingBusy }
+    var busy: Bool { (launched && !ended) || preparing || signingBusy }
 
     static var documents: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     static var logs: URL {
@@ -53,41 +50,34 @@ final class AppModel {
         _ = ShackHomeEnsure()
         _ = ShackHomePrefsSync()
         ShackHomeMirrorLogs()
-        NotificationCenter.default.addObserver(forName: Notification.Name("ShackGuestLaunchFailed"), object: nil, queue: .main) { [weak self] note in
-            let message = note.userInfo?["message"] as? String
-            MainActor.assumeIsolated {
-                GameOverlay.hide()
-                self?.error = [self?.jitFailure, message].compactMap { $0 }.joined(separator: "\n")
-                self?.jitStatus = "Launch stopped. Close and reopen MacShack before retrying."
+        NotificationCenter.default.addObserver(forName: Notification.Name("ShackGameNotStarted"), object: nil, queue: .main) { [weak self] note in
+            let why = note.object as? String
+            MainActor.assumeIsolated {   // over Big Picture the island overlay says it (GameOverlay.swift)
+                guard let self, !self.launched || self.ended else { return }
+                self.error = why
             }
-        }
-        NotificationCenter.default.addObserver(forName: Notification.Name("ShackJITReady"), object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.jitStatus = "JIT is ready. Starting the game…" }
         }
         NotificationCenter.default.addObserver(forName: Notification.Name("ShackGuestExited"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.gameEnded() }
         }
     }
 
-    // The game quit (or its main returned): MacShack's own screen comes back. Another game needs a fresh process.
+    // Steam quit (its main returned): MacShack's own screen comes back. Big Picture needs a fresh process.
     private func gameEnded() {
-        guard launched, ended == nil else { return }
+        guard launched, !ended else { return }
         GameOverlay.hide()
-        _ = ShackHomePrefsSync()   // the game's settings for MacShack Play
+        _ = ShackHomePrefsSync()   // Steam's settings for MacShack Play
         ShackHomeMirrorLogs()
         if let root = hostRoot, let window = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first {
             window.rootViewController = root
             root.setNeedsUpdateOfSupportedInterfaceOrientations()
         }
-        ended = currentGame ?? "The game"
-        jitStatus = ""
+        ended = true
         scan()
-        UserDefaults.standard.removeObject(forKey: "lastLaunch")
-        if let current { checkConfig(current.url) }
     }
 
     func scan() {
-        guard !preparing && (!launched || ended != nil) else { return }
+        guard !preparing && (!launched || ended) else { return }
         pairingReady = Self.hasPairingFile   // a pairing file can also arrive by Files or devicectl
         do { try ShackInstaller.recoverInterruptedInstalls() } catch { self.error = error.localizedDescription }
         games = apps(in: "Games")
@@ -108,102 +98,48 @@ final class AppModel {
         return found.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 
-    // `then` gets (success, message); the stale-prepare alert uses it to launch after a successful prepare.
-    func prepare(_ url: URL, then done: ((Bool, String) -> Void)? = nil) {
-        guard !busy else { done?(false, "MacShack is busy."); return }
+    func prepare(_ url: URL) {
+        guard !busy else { return }
         preparing = true
         error = nil
         preparationStatus = "Preparing \(url.deletingPathExtension().lastPathComponent)…"
         UIApplication.shared.isIdleTimerDisabled = true
         let path = url.path, log = Self.logs.appendingPathComponent("preparation.log")
         DispatchQueue.global(qos: .userInitiated).async {
-            let result: String, ok: Bool
-            do { result = try ShackInstaller.installApp(atPath: StagedFolder.unpack(URL(fileURLWithPath: path), staging: Self.documents.appendingPathComponent("Staging"), games: Self.documents.appendingPathComponent("Games")).path); ok = true }
-            catch { result = error.localizedDescription; ok = false }
+            let result: String
+            do {
+                let app = try StagedFolder.unpack(URL(fileURLWithPath: path), staging: Self.documents.appendingPathComponent("Staging"), games: Self.documents.appendingPathComponent("Games"))
+                result = try ShackInstaller.installApp(atPath: app.path)
+                Self.forgetPlayCopy(app.deletingPathExtension().lastPathComponent, code: false)
+            } catch { result = error.localizedDescription }
             try? result.write(to: log, atomically: true, encoding: .utf8)
             DispatchQueue.main.async {
                 self.preparing = false
                 UIApplication.shared.isIdleTimerDisabled = false
                 self.preparationStatus = result
                 self.scan()
-                done?(ok, result)
             }
         }
     }
 
+    // A tap in Local Games: the game runs in MacShack Play (host/ShackPlayMac.m), prepared for Play first when needed.
+    // When it ends, its log may name a fix (auto-config).
     func launch(_ url: URL) {
-        guard !ProcessInfo.processInfo.arguments.contains("--metal4-fx-probe") else {
-            error = "MetalFX probe process: close and reopen MacShack before launching a game."
-            return
-        }
-        if ended != nil {   // one game per process: remember the pick, and MacShack reopens straight into it
-            UserDefaults.standard.set(url.deletingPathExtension().lastPathComponent, forKey: "pendingLaunch")
-            ShackExitProcess(0)
-            return
-        }
-        guard !launched else { return }
-        AutoConfig.prepare(game: url)   // remembered/known launch arguments, before the loader reads the .args
-        UserDefaults.standard.set(url.deletingPathExtension().lastPathComponent, forKey: "lastLaunch")   // cleared when it ends
-        let needsJIT = ShackInstaller.requiresJIT(atAppPath: url.path)
-        let hostID = Bundle.main.bundleIdentifier ?? ""
-        do { try ShackLoader.validateApp(atPath: url.path) }   // before the loader installs process-wide hooks
-        catch { stalePrepare = (url, error.localizedDescription); return }   // Local Games offers Prepare again
-        launched = true
-        currentGame = displayName(url)
-        hostRoot = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first?.rootViewController
-        GameOverlay.show(game: url, app: self)
-        let exe = Self.executable(of: url)
-        current = (url, exe)
-        Task {
-            if let id = Self.appID(for: url) {
-                // Valve's own Steam library: with no steam_appid.txt in the working directory,
-                // SteamAPI_RestartAppIfNecessary asks Steam to relaunch the game and the game quits (Akane).
-                // It reads the file from the working directory, which Unity changes; Steam's own launch variables too.
-                try? "\(id)".write(to: url.appendingPathComponent("Contents/MacOS/steam_appid.txt"), atomically: true, encoding: .utf8)
-                setenv("SteamAppId", "\(id)", 1)
-                setenv("SteamGameId", "\(id)", 1)
-            }
-            startGame(url, needsJIT: needsJIT, hostID: hostID)
+        guard !busy else { return }
+        guard WindowsSetup.playInstalled else { error = ShackPlayMissing; return }
+        AutoConfig.prepare(game: url)   // remembered/known launch arguments, before Play reads the .args
+        let name = displayName(url)
+        error = nil
+        preparing = true
+        preparationStatus = "Starting \(name) in MacShack Play…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            ShackPlayMacRun(name, 0, 1) { _ in DispatchQueue.main.async { self.checkConfig(url) } }
+            DispatchQueue.main.async { self.preparing = false; self.preparationStatus = "" }
         }
     }
 
-    // A game's Steam app ID: steam_appid.txt in the bundle.
-    private static func appID(for game: URL) -> UInt32? {
-        for file in [game.appendingPathComponent("Contents/MacOS/steam_appid.txt"),
-                     game.appendingPathComponent("Contents/Resources/steam_appid.txt")] {
-            if let text = try? String(contentsOf: file, encoding: .utf8),
-               let id = UInt32(text.trimmingCharacters(in: .whitespacesAndNewlines)), id > 0 { return id }
-        }
-        return nil
-    }
-
-    private func startGame(_ url: URL, needsJIT: Bool, hostID: String) {
-        // Read by Metal when the game creates its device, which happens after this.
-        if UserDefaults.standard.bool(forKey: "metalHUD") { setenv("MTL_HUD_ENABLED", "1", 1) }
-        do {
-            try ShackLoader.launchApp(atPath: url.path)
-            guard needsJIT else { return }
-            if Self.hasPairingFile { startJITHelper(); return }
-            jitStatus = "In StikDebug, tap Enable Script. Keep the phone unlocked and its loopback VPN active. Return to MacShack after the script finishes."
-            var link = URLComponents()
-            link.scheme = "stikjit"; link.host = "enable-jit"
-            link.queryItems = [URLQueryItem(name: "bundle-id", value: hostID),
-                               URLQueryItem(name: "pid", value: String(ProcessInfo.processInfo.processIdentifier)),
-                               URLQueryItem(name: "script-name", value: "macshack-jit.js")]
-            if let stik = link.url {
-                UIApplication.shared.open(stik) { opened in
-                    if !opened { self.jitStatus = "Could not open StikDebug. Install it and add macshack-jit.js, then reopen MacShack to retry." }
-                }
-            }
-        } catch {
-            GameOverlay.hide()
-            self.error = "\(error)"
-            NSLog("[MacShack] launch failed: %@", "\(error)")   // stderr is the game log by now
-        }
-    }
-
-    // Built-in JIT: the MacShackJIT extension attaches to this process while ShackJITPoolSetup waits (loopback VPN
-    // on, pairing file imported). No fallback to StikDebug after a failure: the error says what to fix.
+    // Built-in JIT for this process (`--jit-spike`; games get it in MacShack Play): the MacShackJIT extension attaches
+    // while ShackJITPoolSetup waits (loopback VPN on, pairing file imported).
     static var hasPairingFile: Bool { FileManager.default.fileExists(atPath: ShackJITPairingFileURL().path) }
 
     func startJITHelper() {
@@ -211,8 +147,7 @@ final class AppModel {
         ShackJITHelperStart { ok, log in
             try? log.write(to: Self.logs.appendingPathComponent("jit-helper.log"), atomically: true, encoding: .utf8)
             guard !ok else { return }
-            self.jitFailure = "JIT failed: \(log.split(separator: "\n").last ?? "unknown error"). Full log: Settings > Advanced > Logs > jit-helper.log."
-            self.jitStatus = self.jitFailure ?? ""
+            self.jitStatus = "JIT failed: \(log.split(separator: "\n").last ?? "unknown error"). Full log: Settings > Advanced > Logs > jit-helper.log."
         }
     }
 
@@ -240,8 +175,8 @@ final class AppModel {
         scan()
     }
 
-    // For good: the .app (staged or installed), its .args and its prepared code in Library/Guests/<Name>.
-    // Saves (Library/Application Support, Preferences) stay, so preparing the game again continues.
+    // For good: the .app (staged or installed), its .args, its prepared code in Library/Guests/<Name> and MacShack
+    // Play's copy. Saves (Library/Application Support, Preferences) stay, so preparing the game again continues.
     func delete(_ url: URL) {
         let fm = FileManager.default
         let name = url.deletingPathExtension().lastPathComponent
@@ -251,7 +186,18 @@ final class AppModel {
             where fm.fileExists(atPath: item.path) {
             do { try fm.removeItem(at: item) } catch { NSLog("[MacShack] delete %@: %@", item.path, "\(error)") }
         }
+        Self.forgetPlayCopy(name, code: true)
         scan()
+    }
+
+    // MacShack Play's copy of a Local Games game in the App Group (host/ShackPlayMac.m): its data, cloned at its first
+    // start, and its code prepared for Play. A new import drops the data (the next start clones the new one); a delete
+    // drops both (once the original is gone, the clone holds all of its space).
+    nonisolated static func forgetPlayCopy(_ name: String, code: Bool) {
+        guard let group = ShackHomeGroup() else { return }
+        for item in ["Games/\(name).app", "Games/\(name).args"] + (code ? ["Guests/Play.\(name)"] : []) {
+            try? FileManager.default.removeItem(atPath: "\(group)/\(item)")
+        }
     }
 
     func checkConfig(_ url: URL) {
@@ -260,7 +206,7 @@ final class AppModel {
         if !rules.isEmpty { configOffer = (url, rules) }
     }
 
-    // Adds the fix and starts the game again (launch() reopens MacShack into it when this process already ran one).
+    // Adds the fix and starts the game again.
     func applyConfig() {
         guard let offer = configOffer else { return }
         configOffer = nil
@@ -344,15 +290,13 @@ final class AppModel {
     func launchSteamClient(arguments: [String]) {
         guard !launched else { return }
         launched = true
-        currentGame = "Steam"
         hostRoot = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first?.rootViewController
-        GameOverlay.show(game: nil, name: "Steam", app: self)
+        GameOverlay.show()
         do { try ShackLoader.launchSteamClient(withArguments: arguments) }
         catch let failure {
             NSLog("[MacShack] the Steam client did not start: %@", failure.localizedDescription)
             error = failure.localizedDescription
             launched = false
-            currentGame = nil
             GameOverlay.hide()
         }
     }
@@ -370,11 +314,6 @@ final class AppModel {
             return
         }
         scan()
-        // The last game never ended cleanly (it crashed MacShack): its log may name a fix.
-        if let last = UserDefaults.standard.string(forKey: "lastLaunch") {
-            UserDefaults.standard.removeObject(forKey: "lastLaunch")
-            if let url = games.first(where: { $0.deletingPathExtension().lastPathComponent == last }) { checkConfig(url) }
-        }
         // MacShack Play (host/ShackPlay.m): `--play-probe [minutes]` (the bridge checks), `--play-core [seconds]` (the checks for
         // Mac games in Play) or `--play-run <exe> [--play-jit MB]
         // [--play-seconds N] [--play-screen WxH] [--play-hud]` (a Windows program in Play); beside --steam-run they wait
@@ -388,7 +327,7 @@ final class AppModel {
         if let name = value("--play-mac") {
             let seconds = value("--play-mac-seconds").flatMap { UInt($0) } ?? 0, runs = value("--play-mac-runs").flatMap { UInt($0) } ?? 1
             AutoConfig.prepare(game: Self.documents.appendingPathComponent("Games/\(name).app"))   // known launch arguments, as for a launch here
-            DispatchQueue.global().async { ShackPlayMacRun(name, seconds, max(runs, 1)) }
+            DispatchQueue.global().async { ShackPlayMacRun(name, seconds, max(runs, 1), nil) }
         }
         if let exe = value("--play-run") {
             var query = ["exe": exe]
@@ -442,10 +381,6 @@ final class AppModel {
         if let i = args.firstIndex(of: "--prepare"), i + 1 < args.count,
            let url = (staged + games).first(where: { $0.deletingPathExtension().lastPathComponent == args[i + 1] }) {
             autoLaunched = true; prepare(url); return
-        }
-        if let pending = UserDefaults.standard.string(forKey: "pendingLaunch") {   // picked after the last game ended
-            UserDefaults.standard.removeObject(forKey: "pendingLaunch")
-            if let url = games.first(where: { $0.deletingPathExtension().lastPathComponent == pending }) { autoLaunched = true; launch(url); return }
         }
         if let i = args.firstIndex(of: "--launch"), i + 1 < args.count,
            let url = games.first(where: { $0.deletingPathExtension().lastPathComponent == args[i + 1] }) {

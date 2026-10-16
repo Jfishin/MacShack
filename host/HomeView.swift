@@ -41,12 +41,6 @@ struct HomeView: View {
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark", action: close) } }
             .refreshable { app.scan() }
             .sheet(isPresented: Binding { options != nil } set: { if !$0 { options = nil } }) { if let options { GameOptions(url: options) } }
-            .alert("Prepare \(app.stalePrepare.map { app.displayName($0.url) } ?? "") again?",
-                   isPresented: Binding { app.stalePrepare != nil } set: { if !$0 { app.stalePrepare = nil } },
-                   presenting: app.stalePrepare) { stale in
-                Button("Prepare again") { app.prepare(stale.url) { ok, _ in if ok { app.launch(stale.url) } } }   // then it plays, as tapped
-                Button("Cancel", role: .cancel) {}
-            } message: { stale in Text(stale.reason) }
         }
         .padHandler { press in   // A plays, Y opens the frame cap and memory swap, B closes
             if press == .b { close(); return true }
@@ -250,8 +244,8 @@ struct StatusBanner: View {
                     }
                 }.font(.footnote)
             }
-            if let name = app.ended {
-                Label("\(name) closed. Pick a game: MacShack reopens into it.", systemImage: "checkmark.circle").font(.footnote)
+            if app.ended {
+                Label("Steam closed. Close and reopen MacShack to open Big Picture again.", systemImage: "checkmark.circle").font(.footnote)
             }
             if app.preparing { ProgressView { Text(app.preparationStatus) } }
             else if !app.preparationStatus.isEmpty { Text(app.preparationStatus).font(.footnote).foregroundStyle(.secondary) }

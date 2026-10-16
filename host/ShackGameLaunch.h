@@ -1,11 +1,12 @@
 #import <Foundation/Foundation.h>
 
 NS_ASSUME_NONNULL_BEGIN
-// Starting a Mac game in this process: MacShack (ShackLoader.m, Local Games) and MacShack Play (a game it runs) alike.
+// Starting a Mac game in this process: MacShack Play (every game) and MacShack (the Steam client, ShackLoader.m).
 // The launch dictionary (MacShack Play reads it as written by MacShack: <App Group>/Launch/current.plist):
 //   app: the game's data bundle; code: its prepared code root; logs: the folder for <executable>.log; argsFile: its
 //   .args (made with defaults when missing); translate: an Intel game (AArchX); fpsCap, renderScale, swapMB: numbers;
-//   displaySize: "WxH" (optional); home: HOME (optional, else this app's container).
+//   displaySize: "WxH" (optional); metalHUD: Metal's performance HUD (optional); home: HOME (optional, else this app's
+//   container).
 // Everything before the game's main: HOME, working folder, log, arguments, environment, hooks, frame cap, render
 // scale, memory tier, forced resolution, engine conventions, pads. Main thread. Returns exePath, codePath, args, jitMB
 // and watch, or nil with *error.
