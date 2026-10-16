@@ -1,7 +1,8 @@
 // Mac check for the case-insensitive path fallback in host/ShackHooks.m (the block from "Case-insensitive fallback"
 // to "Unity dlopens Mono"), on a case-sensitive APFS image like the phone's volume:
 // awk '/^\/\/ Case-insensitive fallback for the guest/{on=1} /^\/\/ Unity dlopens Mono/{on=0} on' host/ShackHooks.m > /tmp/resolve.inc \
-//   && clang -fobjc-arc -I/tmp host/probe/test_case_paths.m -framework Foundation -o /tmp/t && /tmp/t
+//   && clang -O2 -fobjc-arc -I/tmp host/probe/test_case_paths.m -framework Foundation -o /tmp/t && /tmp/t
+// -O2 as the apps' Release builds: a root pointing into a dead block's array passed at -O0 and failed there.
 #import <Foundation/Foundation.h>
 #include <stdarg.h>
 // ShackHooks.m's second guest (a game Steam started); only its root is read by this block.

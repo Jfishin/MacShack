@@ -445,10 +445,12 @@ BOOL ShackResolveCase(const char *path, char *out, size_t n) {
         return YES;
     }
     const char *root = ""; size_t skip = 0;
+    // The folder holding the guest's .app is the game's too: its data sits beside it in a Steam layout (Batman's
+    // BMAAData in MacShack Play's App Group Games, outside the home). At function scope: root may point into it, and an
+    // optimized build gives an inner block's array space to the next one (buf), which overwrote the root.
+    char folder[PATH_MAX];
     if (path[0] == '/') {
-        // The folder holding the guest's .app is the game's too: its data sits beside it in a Steam layout (Batman's
-        // BMAAData in MacShack Play's App Group Games, outside the home).
-        char folder[PATH_MAX]; strlcpy(folder, gGuestRoot, sizeof folder);
+        strlcpy(folder, gGuestRoot, sizeof folder);
         char *slash = strrchr(folder, '/'); if (slash && slash != folder) *slash = 0;
         const char *roots[] = {folder, gHome, gHomeReal, gSecond.root};
         for (int i = 0; i < 4 && !skip; i++)
