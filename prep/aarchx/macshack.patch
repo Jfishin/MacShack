@@ -1,8 +1,18 @@
 diff --git a/docs/m32.md b/docs/m32.md
-index 5b12a34f..e1429e12 100644
+index 180dedc2..bd03f4f8 100644
 --- a/docs/m32.md
 +++ b/docs/m32.md
-@@ -118,6 +118,9 @@ without `make steam32`.
+@@ -46,7 +46,8 @@ Data`) by itself.
+   `m32_trap`. Each export's two notations come from `runtime/apis32`, which
+   `tools/sdkgen.sh --guest i386` writes by parsing the SDK headers as i386
+   macOS 10.14 beside arm64. Guest-only classes: `s` a C string, `P` one pointer
+-  written back, `W`/`V` one long written back, `Q` data whose layouts differ,
++  written back, `W`/`V` one long written back, `S` one 16-bit integer the host
++  writes as 32 bits (`FSIORefNum *`), `Q` data whose layouts differ,
+   `T` a `dispatch_time_t`, converted between the Intel and Apple silicon clocks.
+   The generic crossing is `src/m32_cross.c`; the calls no notation describes
+   have hand-written specials (`m32_libsystem.c`, `m32_stdio.c`, `m32_thread.c`,
+@@ -115,6 +116,9 @@ without `make steam32`.
  | `OCERZ_NO_M32_LEAF=1` | leaf exports cross like any other import |
  | `OCERZ_NO_HIGH8_ARITH=1` | instructions on ah, ch, dh and bh go to the interpreter again (64-bit code too; `docs/reference.md`) |
  | `OCERZ_NO_SHIFT_MEM_IMM=1` | shifts of memory by an immediate go to the interpreter again (64-bit code too) |
@@ -13,7 +23,7 @@ index 5b12a34f..e1429e12 100644
  ## Limits
  
 diff --git a/docs/reference.md b/docs/reference.md
-index 7464d4e9..04d6b71a 100644
+index 9d391d3a..c696562f 100644
 --- a/docs/reference.md
 +++ b/docs/reference.md
 @@ -104,6 +104,7 @@ bug is in what that switch controls.
@@ -50,10 +60,10 @@ index ef526689..58e22395 100644
  uint32_t *a64_label(A64Buf *b);
  
 diff --git a/include/ocerz/cpu.h b/include/ocerz/cpu.h
-index 07df074e..4508ee23 100644
+index 78c8cef3..ad268c46 100644
 --- a/include/ocerz/cpu.h
 +++ b/include/ocerz/cpu.h
-@@ -117,6 +117,8 @@ typedef struct OcerzCPU {
+@@ -119,6 +119,8 @@ typedef struct OcerzCPU {
      uint16_t fpr_xe[8];
      uint16_t jit_x87_top0;  /* TOP as the running translated x87 run found it (src/jit.c) */
      uint64_t jit_fcmp_mem;  /* the operand a translated comiss/ucomiss loaded from memory (src/jit.c) */
@@ -63,7 +73,7 @@ index 07df074e..4508ee23 100644
      int terminated;
      int interp_once;
 diff --git a/include/ocerz/jit.h b/include/ocerz/jit.h
-index 362d0ed3..1fea7e47 100644
+index a1436960..ce355134 100644
 --- a/include/ocerz/jit.h
 +++ b/include/ocerz/jit.h
 @@ -44,6 +44,7 @@ extern int ocerz_jit_time_xlat;
@@ -75,10 +85,10 @@ index 362d0ed3..1fea7e47 100644
  struct OcerzCPU *ocerz_jit_lock_owner_cpu(void);
  void ocerz_jit_prefork(void);
 diff --git a/include/ocerz/m32.h b/include/ocerz/m32.h
-index ad3138b7..f65ed214 100644
+index 0212391f..d08c95dc 100644
 --- a/include/ocerz/m32.h
 +++ b/include/ocerz/m32.h
-@@ -52,12 +52,21 @@ uint32_t m32_steam_dlsym(uint32_t handle, const char *sym);
+@@ -51,12 +51,21 @@ uint32_t m32_steam_dlsym(uint32_t handle, const char *sym);
  /* imports the JIT calls straight from a stub block (m32_leaf.c): nargs 4-byte cdecl arguments, the pointers among
   * them (bit k: argument k) passed as host addresses.  simd: the host code it calls may use SIMD registers, so the
   * JIT saves the guest's xmm around it.  tramp: called as m32_leaf_tramp(leaf, raw arguments...), which converts the
@@ -102,6 +112,23 @@ index ad3138b7..f65ed214 100644
  
  static inline void *m32_h(uint32_t g) { return (void *)(uintptr_t)(ocerz_guest_base + g); }
  static inline uint32_t m32_rd(uint32_t g) { uint32_t v; memcpy(&v, m32_h(g), 4); return v; }
+@@ -86,6 +95,7 @@ typedef struct M32Export {
+     uint32_t data;            /* data imports: the guest variable */
+     int gsize, hsize;
+     char *data_kind;
++    int file_ret;             /* returns a FILE *: the guest gets m32_file's twin */
+ } M32Export;
+ enum { M32_EX_UNRESOLVED, M32_EX_SPECIAL, M32_EX_FN, M32_EX_BAD, M32_EX_DATA };
+ 
+@@ -110,6 +120,8 @@ void m32_alias(uint32_t g, void *host);   /* guest-resident object g stands for
+ uint32_t m32_handle_count(void);
+ uint32_t m32_cstring(const char *host);   /* guest copy of a host C string (in-window strings stay put) */
+ uint32_t m32_handle_twin_lookup(void *host);   /* the guest object aliased to host, or 0 */
++uint32_t m32_file(void *host_file);   /* src/m32_stdio.c: the guest FILE standing for a host one */
++void m32_activate_soon(void);         /* src/m32.c: the game's app comes to the front */
+ uint32_t m32_export_hostfn(void *fn, const char *gnote, const char *hnote);   /* host function as guest address */
+ 
+ int m32_cross(struct OcerzVM *vm, OcerzCPU *cpu, M32Export *e);          /* src/m32_cross.c */
 diff --git a/include/ocerz/mach_vm_compat.h b/include/ocerz/mach_vm_compat.h
 new file mode 100644
 index 00000000..1d63814b
@@ -458,7 +485,7 @@ index 039958e3..b057a5c0 100644
  
      static OcerzCache cache;
 diff --git a/src/jit.c b/src/jit.c
-index 2b93f952..ed0f9a64 100644
+index d70ed8f9..21ef0293 100644
 --- a/src/jit.c
 +++ b/src/jit.c
 @@ -702,7 +702,7 @@
@@ -480,7 +507,7 @@ index 2b93f952..ed0f9a64 100644
  #define JIT_CODE_BYTES_DEFAULT (1024ull << 20)
  
  static size_t jit_code_bytes(void)
-@@ -1353,6 +1356,34 @@ int ocerz_jit_lock_held_self(void)
+@@ -1354,6 +1357,34 @@ int ocerz_jit_lock_held_self(void)
      return jl_held;
  }
  
@@ -515,7 +542,7 @@ index 2b93f952..ed0f9a64 100644
  const int *ocerz_jit_lock_depth_ptr(void)
  {
      return &ocerz_critical_depth;
-@@ -2843,6 +2874,9 @@ static int probe_wanted(uint64_t jcc_rip, uint64_t ft_rip)
+@@ -2844,6 +2875,9 @@ static int probe_wanted(uint64_t jcc_rip, uint64_t ft_rip)
  }
  
  static void emit_slowcall(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits);
@@ -525,7 +552,7 @@ index 2b93f952..ed0f9a64 100644
  static void emit_slowcall_keep_lanes(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits);
  static void yc_reload_all(A64Buf *b);
  
-@@ -6579,6 +6613,84 @@ static int emit_leave32(A64Buf *b, const X86Insn *insn)
+@@ -6580,6 +6614,84 @@ static int emit_leave32(A64Buf *b, const X86Insn *insn)
      return 1;
  }
  
@@ -610,7 +637,7 @@ index 2b93f952..ed0f9a64 100644
  static int emit_push_pop(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits)
  {
      const X86Operand *o = &insn->ops[0];
-@@ -11176,6 +11288,45 @@ static int emit_sse_blendp(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites
+@@ -11177,6 +11289,45 @@ static int emit_sse_blendp(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites
      return 1;
  }
  
@@ -656,7 +683,7 @@ index 2b93f952..ed0f9a64 100644
  static int emit_sse_movsdup(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits)
  {
      if (insn->nops != 2) return 0;
-@@ -12299,6 +12450,10 @@ static int emit_sse(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *
+@@ -12300,6 +12451,10 @@ static int emit_sse(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *
          return emit_sse_blendp(b, insn, exit_sites, n_exits);
      case OCERZ_OP_MOVSHDUP: case OCERZ_OP_MOVSLDUP:
          return emit_sse_movsdup(b, insn, exit_sites, n_exits);
@@ -667,7 +694,7 @@ index 2b93f952..ed0f9a64 100644
      case OCERZ_OP_MOVMSKPS: case OCERZ_OP_MOVMSKPD:
          return emit_sse_movmskp(b, insn);
      case OCERZ_OP_CMPPS: case OCERZ_OP_CMPPD:
-@@ -15279,6 +15434,7 @@ static int m32_inline_ok(const X86Insn *insn)
+@@ -15280,6 +15435,7 @@ static int m32_inline_ok(const X86Insn *insn)
      case OCERZ_OP_PMOVMSKB:
      case OCERZ_OP_XCHG: case OCERZ_OP_XADD: case OCERZ_OP_CMPXCHG: case OCERZ_OP_CMPXCHGXB:
      case OCERZ_OP_BT: case OCERZ_OP_BTS: case OCERZ_OP_BTR: case OCERZ_OP_BTC:
@@ -675,7 +702,7 @@ index 2b93f952..ed0f9a64 100644
          return 1;
      default:
          return insn->op >= OCERZ_OP_MOVUPS && insn->op <= OCERZ_OP_PBLENDVB;
-@@ -15408,13 +15564,157 @@ static int emit_sidt(A64Buf *b, const X86Insn *insn)
+@@ -15409,13 +15565,157 @@ static int emit_sidt(A64Buf *b, const X86Insn *insn)
      return 1;
  }
  
@@ -833,7 +860,7 @@ index 2b93f952..ed0f9a64 100644
      if (insn->op > OCERZ_OP_X87_FIRST && insn->op < OCERZ_OP_SSE_FIRST)
          return emit_x87(b, insn, need, exit_sites, n_exits);
      if (insn->op == OCERZ_OP_NOP || insn->op == OCERZ_OP_PAUSE ||
-@@ -15619,6 +15919,7 @@ static int try_inline(A64Buf *b, const X86Insn *insn, uint64_t need,
+@@ -15620,6 +15920,7 @@ static int try_inline(A64Buf *b, const X86Insn *insn, uint64_t need,
      case OCERZ_OP_PHADDW: case OCERZ_OP_PHADDD: case OCERZ_OP_PHSUBW: case OCERZ_OP_PHSUBD: case OCERZ_OP_PHADDSW: case OCERZ_OP_PHSUBSW:
      case OCERZ_OP_PSHUFLW: case OCERZ_OP_PSHUFHW: case OCERZ_OP_PSLLDQ: case OCERZ_OP_PSRLDQ:
      case OCERZ_OP_BLENDPS: case OCERZ_OP_BLENDPD: case OCERZ_OP_MOVSHDUP: case OCERZ_OP_MOVSLDUP:
@@ -841,7 +868,7 @@ index 2b93f952..ed0f9a64 100644
      case OCERZ_OP_MOVMSKPS: case OCERZ_OP_MOVMSKPD: case OCERZ_OP_CMPPS: case OCERZ_OP_CMPPD:
      case OCERZ_OP_CVTTPS2DQ: case OCERZ_OP_CVTPS2DQ: case OCERZ_OP_CVTDQ2PD:
      case OCERZ_OP_CVTPS2PD: case OCERZ_OP_CVTPD2PS:
-@@ -17296,7 +17597,7 @@ static void patch_local_adr(uint32_t *at, uint32_t *target, int rd)
+@@ -17297,7 +17598,7 @@ static void patch_local_adr(uint32_t *at, uint32_t *target, int rd)
      if (!(off >= -(1 << 20) && off < (1 << 20)))
          return;
      uint32_t imm = (uint32_t)((uint64_t)off & 0x1fffffu);
@@ -850,7 +877,7 @@ index 2b93f952..ed0f9a64 100644
            (((imm >> 2) & 0x7ffffu) << 5) | (uint32_t)(rd & 31);
  }
  
-@@ -17473,7 +17774,7 @@ static int emit_call_ret32(A64Buf *b, const X86Insn *insn,
+@@ -17474,7 +17775,7 @@ static int emit_call_ret32(A64Buf *b, const X86Insn *insn,
              patch_local_adr(adr_site, cont, JT0);
              uint32_t *pb_ret = emit_body_chain_tail(b, retaddr, 0, epi_sites, n_epi);
              uint32_t *callee_fb = a64_label(b);
@@ -859,7 +886,7 @@ index 2b93f952..ed0f9a64 100644
              a64_mov_imm64(b, JT0, target);
              a64_str(b, 8, JT0, 20, RIP_OFF);
              a64_mov_imm64(b, 0, OCERZ_STEP_OK);
-@@ -17637,7 +17938,7 @@ static int emit_call_ret(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites,
+@@ -17638,7 +17939,7 @@ static int emit_call_ret(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites,
              patch_local_adr(adr_site, cont, JT0);
              uint32_t *pb_ret = emit_body_chain_tail(b, retaddr, 0, epi_sites, n_epi);
              uint32_t *callee_fb = a64_label(b);
@@ -868,7 +895,7 @@ index 2b93f952..ed0f9a64 100644
              a64_mov_imm64(b, JT0, target);
              a64_str(b, 8, JT0, 20, RIP_OFF);
              a64_mov_imm64(b, 0, OCERZ_STEP_OK);
-@@ -18923,6 +19224,8 @@ static int emit_indirect_call(A64Buf *b, const X86Insn *insn, uint32_t **exit_si
+@@ -18931,6 +19232,8 @@ static int emit_indirect_call(A64Buf *b, const X86Insn *insn, uint32_t **exit_si
  
  static void emit_slowcall(A64Buf *b, const X86Insn *insn, uint32_t **exit_sites, int *n_exits)
  {
@@ -877,7 +904,7 @@ index 2b93f952..ed0f9a64 100644
      int32_t lazy_pend = g_lazy_end >= 0 ? g_rsp_pend : 0;
      int lazy_hs = pin_slot(OCERZ_RSP) >= 0 ? pin_hreg(pin_slot(OCERZ_RSP)) : -1;
      if (lazy_pend && lazy_hs >= 0)
-@@ -19149,12 +19452,12 @@ static void chain_cond_short(uint32_t *cond_site, void *dst)
+@@ -19157,12 +19460,12 @@ static void chain_cond_short(uint32_t *cond_site, void *dst)
          nw = (w & ~(0x3fffu << 5)) | (((uint32_t)off & 0x3fffu) << 5);
      } else return;
      if (g_chain_batching) {
@@ -892,7 +919,7 @@ index 2b93f952..ed0f9a64 100644
          pthread_jit_write_protect_np(1);
          sys_icache_invalidate(cond_site, 4);
      }
-@@ -19205,9 +19508,9 @@ static uint32_t *veneer_make(OcerzJit *jit, const uint32_t *site, const void *ds
+@@ -19213,9 +19516,9 @@ static uint32_t *veneer_make(OcerzJit *jit, const uint32_t *site, const void *ds
      uint32_t *v = (uint32_t *)((uint8_t *)jit->veneer_pool[best] + jit->veneer_used[best] * VENEER_BYTES);
      uint64_t target = (uint64_t)(uintptr_t)dst;
      if (!batching) pthread_jit_write_protect_np(0);
@@ -905,7 +932,7 @@ index 2b93f952..ed0f9a64 100644
      if (!batching) pthread_jit_write_protect_np(1);
      sys_icache_invalidate(v, VENEER_BYTES);
      jit->veneer_used[best]++;
-@@ -19379,7 +19682,7 @@ static void pending_drain(uint64_t key, JitBlock *target)
+@@ -19387,7 +19690,7 @@ static void pending_drain(uint64_t key, JitBlock *target)
          if (e->target_key == key) {
              if (e->ras_slot) {
                  chaincheck("ras_slot", ras_entry_for(target));
@@ -914,7 +941,7 @@ index 2b93f952..ed0f9a64 100644
              }
              else if (e->kind == EDGE_BODY) {
                  int compatible = e->pin_class
-@@ -19515,7 +19818,19 @@ static int insn_may_write_gpr(const X86Insn *in, unsigned reg)
+@@ -19523,7 +19826,19 @@ static int insn_may_write_gpr(const X86Insn *in, unsigned reg)
          if (reg == OCERZ_RSI || reg == OCERZ_RDI || reg == OCERZ_RCX || reg == OCERZ_RAX) return 1;
          break;
      case OCERZ_OP_SYSCALL: case OCERZ_OP_INT: case OCERZ_OP_INT3:
@@ -934,7 +961,7 @@ index 2b93f952..ed0f9a64 100644
      case OCERZ_OP_XCHG: case OCERZ_OP_XADD:
          for (int k = 0; k < in->nops; k++)
              if (in->ops[k].kind == OCERZ_OPK_REG && (in->ops[k].reg & 15) == reg) return 1;
-@@ -20162,7 +20477,7 @@ static int oolslow_add(const X86Insn *insn, uint32_t **sites, int nsites, uint32
+@@ -20170,7 +20485,7 @@ static int oolslow_add(const X86Insn *insn, uint32_t **sites, int nsites, uint32
      ea_cache_reset();
      for (int i = 0; i < nsites; i++) g_oolslow[g_n_oolslow].sites[i] = sites[i];
      g_oolslow[g_n_oolslow].nsites = nsites;
@@ -943,7 +970,7 @@ index 2b93f952..ed0f9a64 100644
      g_oolslow[g_n_oolslow].back = back;
      g_oolslow[g_n_oolslow].pre = g_oolslow_pre;
      for (int r = 0; r < 16; r++) { g_oolslow[g_n_oolslow].l0[r] = g_l0[r]; g_oolslow[g_n_oolslow].l0_dbl[r] = g_l0_dbl[r]; }
-@@ -20383,7 +20698,10 @@ static void emit_x87_arms(A64Buf *b, uint32_t **exit_sites, int *n_exits, uint32
+@@ -20391,7 +20706,10 @@ static void emit_x87_arms(A64Buf *b, uint32_t **exit_sites, int *n_exits, uint32
               * translated for: leave after the run with side_idx -3, and C
               * retranslates the block without the known TOP.
               */
@@ -955,7 +982,7 @@ index 2b93f952..ed0f9a64 100644
              a64_subs_imm(b, 0, A64_ZR, JT0, (uint32_t)run->top_end);
              uint32_t *same = a64_label(b);
              a64_bcond(b, A64_EQ, 0);
-@@ -21074,16 +21392,16 @@ static int tc_imm_shape(const uint32_t *w)
+@@ -21082,16 +21400,16 @@ static int tc_imm_shape(const uint32_t *w)
  static void tc_imm_write(uint32_t *w, uint64_t v)
  {
      for (int k = 0; k < 4; k++)
@@ -975,7 +1002,7 @@ index 2b93f952..ed0f9a64 100644
          pending_add_ras(jit_key(retaddr, mode32), cell);
      }
  }
-@@ -21125,7 +21443,7 @@ static int tc_bind(OcerzJit *jit, JitBlock *blk, uint32_t *code, const TcReloc *
+@@ -21133,7 +21451,7 @@ static int tc_bind(OcerzJit *jit, JitBlock *blk, uint32_t *code, const TcReloc *
          if (r->kind == TCR_RASSLOT)
              tc_ras_fill(jit, (void **)(uintptr_t)g_tc_val[i], r->arg, mode32);
          if (r->form == 1)
@@ -984,7 +1011,7 @@ index 2b93f952..ed0f9a64 100644
          else
              tc_imm_write(w, g_tc_val[i]);
      }
-@@ -21315,14 +21633,14 @@ static uint32_t *tc_roundtrip(OcerzJit *jit, JitBlock *blk, uint32_t *entry)
+@@ -21323,14 +21641,14 @@ static uint32_t *tc_roundtrip(OcerzJit *jit, JitBlock *blk, uint32_t *entry)
      }
      uint32_t *c = (uint32_t *)copy;
      pthread_jit_write_protect_np(0);
@@ -1001,7 +1028,7 @@ index 2b93f952..ed0f9a64 100644
      pthread_jit_write_protect_np(1);
      sys_icache_invalidate(entry, (size_t)words * 4);
      sys_icache_invalidate(c, (size_t)words * 4);
-@@ -21830,7 +22148,7 @@ static JitBlock *tc_load(OcerzJit *jit, const OcerzTcRecHead *h, uint64_t rip, i
+@@ -21853,7 +22171,7 @@ static JitBlock *tc_load(OcerzJit *jit, const OcerzTcRecHead *h, uint64_t rip, i
          tc_free_blk(blk);
          return NULL;
      }
@@ -1010,7 +1037,7 @@ index 2b93f952..ed0f9a64 100644
      if (!tc_bind(jit, blk, c, v.rel, (int)r->n_rel, 1)) {
          pthread_jit_write_protect_np(1);
          tc_free_blk(blk);
-@@ -22604,8 +22922,8 @@ static JitBlock *translate(OcerzJit *jit, uint64_t rip, int mode32)
+@@ -22630,8 +22948,8 @@ static JitBlock *translate(OcerzJit *jit, uint64_t rip, int mode32)
                size_t pad = ((uintptr_t)la - ((uintptr_t)b.p & (uintptr_t)(la - 1))) & (uintptr_t)(la - 1);
                pad /= 4;
                if (pad && b.p + pad < b.end) {
@@ -1021,7 +1048,7 @@ index 2b93f952..ed0f9a64 100644
                    g_body_entry += pad;
                    if (body_noreload) body_noreload += pad;
                    b.p += pad;
-@@ -22748,8 +23066,26 @@ static JitBlock *translate(OcerzJit *jit, uint64_t rip, int mode32)
+@@ -22774,8 +23092,26 @@ static JitBlock *translate(OcerzJit *jit, uint64_t rip, int mode32)
                  use = 0;
              fl_need[i] = def & live_seam;
              fl_live[i] = live_seam;
@@ -1050,7 +1077,7 @@ index 2b93f952..ed0f9a64 100644
  
              if (g_no_lazyflags) {
                  fl_need[i] = def;
-@@ -23758,27 +24094,27 @@ promo_push_fallthrough:
+@@ -23784,27 +24120,27 @@ promo_push_fallthrough:
              if (g_raslit[i].kind == 2) {
                  a64_emit32(&b, 0); a64_emit32(&b, 0);
                  if (b.overflow) break;
@@ -1085,9 +1112,9 @@ index 2b93f952..ed0f9a64 100644
              else
                  pending_add_ras(jit_key(g_raslit[i].retaddr, g_xlat_mode32), cell);
          }
-@@ -23799,9 +24135,9 @@ promo_push_fallthrough:
-             blk->stop_patch = g_stop_patch;
+@@ -23826,9 +24162,9 @@ promo_push_fallthrough:
              blk->stop_insn = stop_retarget(running_insn, g_stop_patch, g_stop_target);
+             blk->stop_run = running_insn;
              if (jit->stop_requested)
 -                *g_stop_patch = blk->stop_insn;
 +                *JW(g_stop_patch) = blk->stop_insn;
@@ -1097,7 +1124,7 @@ index 2b93f952..ed0f9a64 100644
          }
          blk->push_fix = NULL; blk->n_push_fix = 0;
          if (g_n_push_fix) {
-@@ -23819,7 +24155,7 @@ promo_push_fallthrough:
+@@ -23847,7 +24183,7 @@ promo_push_fallthrough:
                  stop_retarget(*site, site, g_stop_extra[i].target);
              blk->n_stop_extra++;
              if (jit->stop_requested)
@@ -1106,7 +1133,7 @@ index 2b93f952..ed0f9a64 100644
          }
      }
  
-@@ -24530,7 +24866,7 @@ int ocerz_jit_hotpatch_align(struct OcerzVM *vm, const void *host_pc)
+@@ -24558,7 +24894,7 @@ int ocerz_jit_hotpatch_align(struct OcerzVM *vm, const void *host_pc)
          int ok = !b.overflow && a64_try_patch_b(back1, back) && a64_try_patch_b(back2, back);
          if (ok) {
              uint32_t saved = *site;
@@ -1115,7 +1142,7 @@ index 2b93f952..ed0f9a64 100644
              if (a64_try_patch_b(site, arm)) {
                  if (pool >= 0)
                      jit->veneer_used[pool] += (unsigned)(((uint8_t *)b.p - (uint8_t *)arm +
-@@ -24541,7 +24877,7 @@ int ocerz_jit_hotpatch_align(struct OcerzVM *vm, const void *host_pc)
+@@ -24569,7 +24905,7 @@ int ocerz_jit_hotpatch_align(struct OcerzVM *vm, const void *host_pc)
                  sys_icache_invalidate(site, 4);
                  rc = 1;
              } else {
@@ -1124,7 +1151,7 @@ index 2b93f952..ed0f9a64 100644
              }
          }
          pthread_jit_write_protect_np(1);
-@@ -24624,6 +24960,47 @@ void ocerz_jit_forget(struct OcerzVM *vm)
+@@ -24652,6 +24988,47 @@ void ocerz_jit_forget(struct OcerzVM *vm)
          vm->jit = NULL;
  }
  
@@ -1172,7 +1199,7 @@ index 2b93f952..ed0f9a64 100644
  OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
  {
      OcerzJit *jit = (OcerzJit *)calloc(1, sizeof *jit);
-@@ -24633,8 +25010,10 @@ OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
+@@ -24661,8 +25038,10 @@ OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
      jit->plain_mem = !vm->jit_ordered_required &&
          (vm->jit_plain_mem || getenv("OCERZ_PLAIN_MEM") != NULL);
      size_t bytes = jit_code_bytes();
@@ -1185,7 +1212,7 @@ index 2b93f952..ed0f9a64 100644
      if (p == MAP_FAILED) {
          OCERZ_LOG("JIT unavailable (MAP_JIT failed); using interpreter\n");
          free(jit);
-@@ -24646,7 +25025,7 @@ OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
+@@ -24674,7 +25053,7 @@ OcerzJit *ocerz_jit_create(struct OcerzVM *vm)
      size_t leaf_bytes = (size_t)(ocerz_leaf_hi - ocerz_leaf_lo);
      if (leaf_bytes && leaf_bytes + 64 < bytes) {
          pthread_jit_write_protect_np(0);
@@ -1194,7 +1221,7 @@ index 2b93f952..ed0f9a64 100644
          pthread_jit_write_protect_np(1);
          sys_icache_invalidate(p, leaf_bytes);
          jit->leaf_near = (const char *)p;
-@@ -24797,12 +25176,12 @@ static int force_stop_sites_writable(OcerzJit *jit)
+@@ -24825,12 +25204,12 @@ static int force_stop_sites_writable(OcerzJit *jit)
                      (unsigned long long)blk_rip(b), (void *)b->stop_patch,
                      b->stop_patch ? *b->stop_patch : 0u, b->stop_insn);
          if (b->stop_patch && b->stop_insn && *b->stop_patch != b->stop_insn) {
@@ -1209,7 +1236,7 @@ index 2b93f952..ed0f9a64 100644
                  patched = 1;
              }
          for (int i = 0; i < b->n_edges; i++) {
-@@ -24811,7 +25190,7 @@ static int force_stop_sites_writable(OcerzJit *jit)
+@@ -24839,7 +25218,7 @@ static int force_stop_sites_writable(OcerzJit *jit)
              for (int k = 0; k < b->n_stop_extra && !is_stop; k++)
                  is_stop = b->edges[i].patch_b == b->stop_extra[k].site;
              if (cs && b->edges[i].cond_orig && *cs != b->edges[i].cond_orig && is_stop) {
@@ -1218,7 +1245,7 @@ index 2b93f952..ed0f9a64 100644
                  patched = 1;
              }
          }
-@@ -24830,19 +25209,19 @@ static void invalidate_all_locked(OcerzJit *jit)
+@@ -24858,19 +25237,19 @@ static void invalidate_all_locked(OcerzJit *jit)
      pthread_jit_write_protect_np(0);
      patched |= force_stop_sites_writable(jit);
      for (size_t i = 0; i < g_n_ras_cells; i++)
@@ -1241,7 +1268,7 @@ index 2b93f952..ed0f9a64 100644
                  patched = 1;
              }
          }
-@@ -25224,17 +25603,17 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
+@@ -25252,17 +25631,17 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
      for (size_t i = 0; i < g_n_ras_cells; i++) {
          void *e = __atomic_load_n(g_ras_cells[i], __ATOMIC_RELAXED);
          if (e && ras_entry_in_hits(e, &set))
@@ -1262,7 +1289,7 @@ index 2b93f952..ed0f9a64 100644
                  sys_icache_invalidate(b->stop_extra[i].site, 4);
              }
          for (int i = 0; i < b->n_edges; i++) {
-@@ -25243,7 +25622,7 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
+@@ -25271,7 +25650,7 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
              for (int q = 0; q < b->n_stop_extra && !is_stop; q++)
                  is_stop = b->edges[i].patch_b == b->stop_extra[q].site;
              if (cs && b->edges[i].cond_orig && *cs != b->edges[i].cond_orig && is_stop) {
@@ -1271,7 +1298,7 @@ index 2b93f952..ed0f9a64 100644
                  sys_icache_invalidate(cs, 4);
              }
          }
-@@ -25253,13 +25632,13 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
+@@ -25281,13 +25660,13 @@ static void retire_hit_blocks_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock
          uint32_t fallback = (sblk)->edges[i].fallback_insn; \
          if (at && fallback && *at != fallback && \
              ptr_in_hits(hits, n_hits, chain_target(jit, at, *at))) { \
@@ -1287,7 +1314,25 @@ index 2b93f952..ed0f9a64 100644
              sys_icache_invalidate(cs, 4); \
          } \
      } while (0)
-@@ -25689,12 +26068,12 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
+@@ -25493,7 +25872,7 @@ void ocerz_jit_request_stop(struct OcerzVM *vm)
+  */
+ static void sig_store(uint32_t *site, uint32_t w)
+ {
+-    __atomic_store_n(site, w, __ATOMIC_RELEASE);
++    __atomic_store_n(JW(site), w, __ATOMIC_RELEASE);
+     sys_icache_invalidate(site, 4);
+ }
+ 
+@@ -25600,7 +25979,7 @@ static void sig_unstop_site(OcerzJit *jit, JitBlock *b, uint32_t *site, uint32_t
+     if (!run || run == stop)
+         return;
+     pthread_jit_write_protect_np(0);
+-    __atomic_store_n(site, run, __ATOMIC_RELEASE);
++    __atomic_store_n(JW(site), run, __ATOMIC_RELEASE);
+     pthread_jit_write_protect_np(1);
+     sys_icache_invalidate(site, 4);
+ }
+@@ -25886,12 +26265,12 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
      if (idx == jit->n_live) return;
      pthread_jit_write_protect_np(0);
      if (blk->stop_patch && blk->stop_insn && *blk->stop_patch != blk->stop_insn) {
@@ -1302,7 +1347,7 @@ index 2b93f952..ed0f9a64 100644
              sys_icache_invalidate(blk->stop_extra[i].site, 4);
          }
      for (int i = 0; i < blk->n_edges; i++) {
-@@ -25703,7 +26082,7 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
+@@ -25900,7 +26279,7 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
          for (int q = 0; q < blk->n_stop_extra && !is_stop; q++)
              is_stop = blk->edges[i].patch_b == blk->stop_extra[q].site;
          if (cs && blk->edges[i].cond_orig && *cs != blk->edges[i].cond_orig && is_stop) {
@@ -1311,7 +1356,7 @@ index 2b93f952..ed0f9a64 100644
              sys_icache_invalidate(cs, 4);
          }
      }
-@@ -25716,14 +26095,14 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
+@@ -25913,14 +26292,14 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
              uint32_t fallback = sblk->edges[i].fallback_insn;
              int cut = 0;
              if (at && fallback && *at != fallback && IN_BLK(chain_target(jit, at, *at))) {
@@ -1328,7 +1373,7 @@ index 2b93f952..ed0f9a64 100644
                  sys_icache_invalidate(cs, 4);
                  cut = 1;
              }
-@@ -25736,7 +26115,7 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
+@@ -25933,7 +26312,7 @@ static void flip_retire_locked(struct OcerzVM *vm, OcerzJit *jit, JitBlock *blk)
      blk->n_preds = 0;
      for (size_t i = 0; i < g_n_ras_cells; i++)
          if (IN_BLK(*g_ras_cells[i]))
@@ -1337,7 +1382,7 @@ index 2b93f952..ed0f9a64 100644
      pthread_jit_write_protect_np(1);
      unsigned h = hash_key(blk->key);
      JitBlock **pp = &jit->buckets[h];
-@@ -25798,8 +26177,8 @@ static int flip_decide_locked(JitBlock *blk, int e, int tk, int ft, int logit)
+@@ -25995,8 +26374,8 @@ static int flip_decide_locked(JitBlock *blk, int e, int tk, int ft, int logit)
          uint32_t tk = watch ? (pf->tk_word & ~((1u << 31) | (0x1fu << 19))) | ((uint32_t)WATCH_BIT << 19) : A64_NOP;
          if (watch) { pf->taken = 0; blk->edges[e].probing = 2; }
          pthread_jit_write_protect_np(0);
@@ -1348,7 +1393,7 @@ index 2b93f952..ed0f9a64 100644
          pthread_jit_write_protect_np(1);
          sys_icache_invalidate(pf->ft_site, 4);
          sys_icache_invalidate(pf->tk_trip, 4);
-@@ -25851,8 +26230,8 @@ static void flip_side_hit(struct OcerzVM *vm, OcerzJit *jit, OcerzCPU *cpu)
+@@ -26048,8 +26427,8 @@ static void flip_side_hit(struct OcerzVM *vm, OcerzJit *jit, OcerzCPU *cpu)
          wp->windows = 0;
          wp->rearms++;
          pthread_jit_write_protect_np(0);
@@ -1359,7 +1404,7 @@ index 2b93f952..ed0f9a64 100644
          pthread_jit_write_protect_np(1);
          sys_icache_invalidate(wp->ft_site, 4);
          sys_icache_invalidate(wp->tk_trip, 4);
-@@ -26029,7 +26408,7 @@ static StopUndo *stop_sites_force_undoable(OcerzJit *jit, size_t *n_out)
+@@ -26226,7 +26605,7 @@ static StopUndo *stop_sites_force_undoable(OcerzJit *jit, size_t *n_out)
          if (s_ && w_ && *s_ != w_) { \
              if (n == cap) { cap = cap ? cap * 2 : 256; StopUndo *nu = (StopUndo *)realloc(u, cap * sizeof *u); if (!nu) abort(); u = nu; } \
              u[n++] = (StopUndo){ s_, *s_, w_ }; \
@@ -1368,7 +1413,7 @@ index 2b93f952..ed0f9a64 100644
          } \
      } while (0)
      pthread_jit_write_protect_np(0);
-@@ -26059,7 +26438,7 @@ static void stop_sites_undo(OcerzJit *jit, StopUndo *u, size_t n)
+@@ -26256,7 +26635,7 @@ static void stop_sites_undo(OcerzJit *jit, StopUndo *u, size_t n)
      pthread_jit_write_protect_np(0);
      for (size_t i = n; i-- > 0;)
          if (*u[i].site == u[i].now)
@@ -1488,23 +1533,533 @@ index 00000000..18840ca9
 +    (void)key;
 +    return 0;
 +}
+diff --git a/src/m32.c b/src/m32.c
+index a1b8937e..f04a753d 100644
+--- a/src/m32.c
++++ b/src/m32.c
+@@ -82,7 +82,8 @@ static uint32_t build_frame(uint32_t top, const char *path, int argc, char **arg
+ 
+ /* OCERZ_M32_ACTIVATE=1 (measurement runs): bring the game's app to the front 5 s after launch, as a Finder launch
+  * would.  Launched from a shell it stays behind the active app, and macOS then runs a background app on the
+- * efficiency cores (always in Low Power Mode, after a while otherwise), which makes frame rates meaningless. */
++ * efficiency cores (always in Low Power Mode, after a while otherwise), which makes frame rates meaningless.
++ * m32_activate_soon does the same at once for a game that asks to be in front (SetFrontProcess). */
+ static void activate_now(void *unused)
+ {
+     void *(*send)(void *, void *) = (void *(*)(void *, void *))dlsym(RTLD_DEFAULT, "objc_msgSend");
+@@ -96,6 +97,11 @@ static void activate_now(void *unused)
+         send_b(app, sel("activateIgnoringOtherApps:"), 1);
+ }
+ 
++void m32_activate_soon(void)
++{
++    dispatch_async_f(dispatch_get_main_queue(), NULL, activate_now);   /* runs once the game's run loop turns */
++}
++
+ int m32_active;
+ 
+ int m32_run(struct OcerzVM *vm, const char *path, int argc, char **argv, char **envp)
+diff --git a/src/m32_audio.c b/src/m32_audio.c
+index 7ff7da09..375a1e57 100644
+--- a/src/m32_audio.c
++++ b/src/m32_audio.c
+@@ -12,6 +12,7 @@
+  * never freed (an app sets a handful).
+  */
+ #include <mach/mach_time.h>
++#include <pthread.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -121,6 +122,132 @@ static int sp_AudioUnitSetProperty(struct OcerzVM *vm, OcerzCPU *cpu)
+     RET(f(unit, id, scope, element, m32_host(data), size));
+ }
+ 
++/* AudioQueue output (Bink's and Miles' CoreAudio drivers, MW3's movies and sound).  An AudioQueueBuffer is a
++ * structure the guest writes through: i386 {capacity, mAudioData, mAudioDataByteSize, mUserData,
++ * mPacketDescriptionCapacity, mPacketDescriptions, mPacketDescriptionCount}, 28 bytes (clang -arch i386), where the
++ * host's pointers are 8 bytes (mAudioData at 8, mAudioDataByteSize at 16).  Each host
++ * buffer gets a guest twin in that layout with its samples in guest memory; enqueueing copies the samples to the host
++ * buffer, and the output callback hands the guest its twin.  AudioStreamPacketDescription and
++ * AudioStreamBasicDescription are the same bytes to both sides.
++ * ponytail: a table of 512 buffers, searched linearly; AudioQueueNewInput and AudioQueueFreeBuffer are not covered
++ * (Bink and Miles free their buffers with the queue). */
++enum { AQB_CAP = 0, AQB_DATA = 4, AQB_SIZE = 8, AQB_SIZE32 = 28 };
++typedef struct { void *queue, *host; uint32_t guest; } QueueBuffer;
++static QueueBuffer g_qbufs[512];
++static pthread_mutex_t g_qlock = PTHREAD_MUTEX_INITIALIZER;
++typedef struct { void *proc; uint32_t user; } QueueOut;
++
++static void *at(const char *sym)
++{
++    return ocerz_bridge_host_symbol(AT_LIB, sym);
++}
++static uint32_t queue_guest(void *host)
++{
++    uint32_t g = 0;
++    pthread_mutex_lock(&g_qlock);
++    for (int i = 0; i < 512 && !g; i++)
++        if (g_qbufs[i].host == host)
++            g = g_qbufs[i].guest;
++    pthread_mutex_unlock(&g_qlock);
++    return g;
++}
++static void *queue_host(uint32_t guest)
++{
++    void *h = NULL;
++    pthread_mutex_lock(&g_qlock);
++    for (int i = 0; i < 512 && !h; i++)
++        if (g_qbufs[i].guest == guest)
++            h = g_qbufs[i].host;
++    pthread_mutex_unlock(&g_qlock);
++    return h;
++}
++static void queue_out(void *ctx, void *queue, void *host)
++{
++    QueueOut *q = ctx;
++    uint32_t g = queue_guest(host);
++    if (g)
++        ((void (*)(uint32_t, uint32_t, uint32_t))q->proc)(q->user, m32_handle(queue), g);
++}
++/* AudioQueueNewOutput(format, callback, userData, runLoop, runLoopMode, flags, outQueue*) */
++static int sp_AudioQueueNewOutput(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    int32_t (*f)(const void *, void *, void *, void *, void *, uint32_t, void **) = at("AudioQueueNewOutput");
++    uint32_t fmt = m32_arg(cpu, 0), cb = m32_arg(cpu, 1), out = m32_arg(cpu, 6);
++    QueueOut *q = calloc(1, sizeof *q);
++    if (!f || !q || !cb || !fmt || !out)
++        RET(-50);   /* kAudio_ParamError */
++    q->proc = m32_callback(cb, "v(uuu)", "v(uuu)");
++    q->user = m32_arg(cpu, 2);
++    void *queue = NULL;
++    int32_t r = f(m32_h(fmt), (void *)queue_out, q, m32_host(m32_arg(cpu, 3)), m32_host(m32_arg(cpu, 4)), m32_arg(cpu, 5),
++                  &queue);
++    m32_wr(out, r ? 0 : m32_handle(queue));
++    RET(r);
++}
++/* AudioQueueAllocateBuffer(queue, capacity, outBuffer*) */
++static int sp_AudioQueueAllocateBuffer(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    int32_t (*f)(void *, uint32_t, void **) = at("AudioQueueAllocateBuffer");
++    void *queue = m32_host(m32_arg(cpu, 0)), *host = NULL;
++    uint32_t cap = m32_arg(cpu, 1), out = m32_arg(cpu, 2);
++    int32_t r = f ? f(queue, cap, &host) : -4;
++    uint32_t g = r ? 0 : m32_malloc(AQB_SIZE32 + cap);
++    if (!r && !g)
++        r = -108;   /* memFullErr */
++    pthread_mutex_lock(&g_qlock);
++    int i = 0;
++    while (g && i < 512 && g_qbufs[i].host)
++        i++;
++    if (g && i < 512)
++        g_qbufs[i] = (QueueBuffer){ queue, host, g };
++    pthread_mutex_unlock(&g_qlock);
++    if (g && i == 512) {
++        m32_free(g);
++        g = 0;
++        r = -108;
++    }
++    if (g) {
++        memset(m32_h(g), 0, AQB_SIZE32);
++        m32_wr(g + AQB_CAP, cap);
++        m32_wr(g + AQB_DATA, g + AQB_SIZE32);
++    }
++    if (out)
++        m32_wr(out, g);
++    RET(r);
++}
++/* AudioQueueEnqueueBuffer(queue, buffer, numPacketDescs, packetDescs) */
++static int sp_AudioQueueEnqueueBuffer(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    int32_t (*f)(void *, void *, uint32_t, const void *) = at("AudioQueueEnqueueBuffer");
++    uint32_t g = m32_arg(cpu, 1), descs = m32_arg(cpu, 3);
++    uint8_t *host = queue_host(g);
++    if (!f || !host)
++        RET(-66687);   /* kAudioQueueErr_InvalidBuffer */
++    uint32_t size = m32_rd(g + AQB_SIZE), cap = m32_rd(g + AQB_CAP);
++    if (size > cap)
++        size = cap;
++    void *data;
++    memcpy(&data, host + 8, sizeof data);   /* the host's mAudioData */
++    memcpy(data, m32_h(m32_rd(g + AQB_DATA)), size);
++    memcpy(host + 16, &size, 4);            /* the host's mAudioDataByteSize */
++    RET(f(m32_host(m32_arg(cpu, 0)), host, m32_arg(cpu, 2), descs ? m32_h(descs) : NULL));
++}
++/* AudioQueueDispose(queue, immediate): its buffers go with it */
++static int sp_AudioQueueDispose(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    int32_t (*f)(void *, uint8_t) = at("AudioQueueDispose");
++    void *queue = m32_host(m32_arg(cpu, 0));
++    int32_t r = f ? f(queue, (uint8_t)m32_arg(cpu, 1)) : -4;
++    pthread_mutex_lock(&g_qlock);
++    for (int i = 0; i < 512; i++)
++        if (g_qbufs[i].host && g_qbufs[i].queue == queue) {
++            m32_free(g_qbufs[i].guest);
++            g_qbufs[i] = (QueueBuffer){ 0 };
++        }
++    pthread_mutex_unlock(&g_qlock);
++    RET(r);
++}
++
+ /* The classic Sound Manager is gone on arm64.  Unresolved, SndNewChannel answered 0 (noErr) without a channel, and
+  * Bink (Batman's movies) then waited on callbacks that never came: about half of the launches hung at the intro or
+  * skipped to a blank screen.  No channel and an honest error: Bink plays its movies without sound.
+@@ -138,9 +265,40 @@ static int sp_SndBadChannel(struct OcerzVM *vm, OcerzCPU *cpu)
+     RET((uint16_t)-205);   /* badChannel */
+ }
+ 
++/* QuickTime is gone from macOS too.  Unresolved, its calls answered 0 (noErr) without doing anything, and Left 4 Dead
++ * 2's valve_avi used the Movie NewMovieFromFile never wrote.  The Source engine needs EnterMovies to succeed (its
++ * IQuickTime system is required), so QuickTime starts, and no movie opens: unimpErr, with a null reference or Movie.
++ * The game shows no video materials.  ponytail: no QuickTime playback. */
++#define QT_UNIMP ((uint32_t)(int32_t)-4)   /* unimpErr, an OSErr in AX */
++static int sp_EnterMovies(struct OcerzVM *vm, OcerzCPU *cpu) { (void)vm; RET(0); }
++static int sp_GetMoviesError(struct OcerzVM *vm, OcerzCPU *cpu) { (void)vm; RET(QT_UNIMP); }
++static int sp_OpenMovieFile(struct OcerzVM *vm, OcerzCPU *cpu)   /* (const FSSpec *, short *resRefNum, SInt8) */
++{
++    (void)vm;
++    if (m32_arg(cpu, 1))
++        *(int16_t *)m32_h(m32_arg(cpu, 1)) = 0;
++    RET(QT_UNIMP);
++}
++static int sp_NewMovieFromFile(struct OcerzVM *vm, OcerzCPU *cpu)   /* (Movie *, short, short *, StringPtr, short, Boolean *) */
++{
++    (void)vm;
++    if (m32_arg(cpu, 0))
++        m32_wr(m32_arg(cpu, 0), 0);
++    RET(QT_UNIMP);
++}
++/* QuickDraw's offscreen worlds, gone with it: valve_avi looks them up with dlsym and calls SetGWorld(NULL, NULL) before
++ * opening any movie.  No GWorld ever exists here, so they do nothing and report nothing. */
++static int sp_qd_none(struct OcerzVM *vm, OcerzCPU *cpu) { (void)vm; RET(0); }
++
+ const M32SpecialEntry m32_audio_specials[] = {
+     { "_AudioUnitSetProperty", sp_AudioUnitSetProperty },
++    { "_AudioQueueNewOutput", sp_AudioQueueNewOutput }, { "_AudioQueueAllocateBuffer", sp_AudioQueueAllocateBuffer },
++    { "_AudioQueueEnqueueBuffer", sp_AudioQueueEnqueueBuffer }, { "_AudioQueueDispose", sp_AudioQueueDispose },
+     { "_SndNewChannel", sp_SndNewChannel },
++    { "_EnterMovies", sp_EnterMovies }, { "_GetMoviesError", sp_GetMoviesError }, { "_OpenMovieFile", sp_OpenMovieFile },
++    { "_NewMovieFromFile", sp_NewMovieFromFile },
++    { "_SetGWorld", sp_qd_none }, { "_DisposeGWorld", sp_qd_none }, { "_GetGWorldPixMap", sp_qd_none },
++    { "_LockPixels", sp_qd_none }, { "_UnlockPixels", sp_qd_none }, { "_GetPixRowBytes", sp_qd_none },
+     { "_SndDoCommand", sp_SndBadChannel }, { "_SndDoImmediate", sp_SndBadChannel },
+     { "_SndChannelStatus", sp_SndBadChannel }, { "_SndDisposeChannel", sp_SndBadChannel },
+     { NULL, NULL }
 diff --git a/src/m32_bridge.c b/src/m32_bridge.c
-index 323539b3..6b9ba178 100644
+index c005a57c..c0af005c 100644
 --- a/src/m32_bridge.c
 +++ b/src/m32_bridge.c
-@@ -248,7 +248,7 @@ uint32_t m32_export(const char *lib, const char *name)
+@@ -233,7 +233,10 @@ uint32_t m32_export(const char *lib, const char *name)
                  e->kind = M32_EX_BAD;
                  e->reason = "host-missing";
              }
 -            e->host_fn = hud_wrap(r.host_symbol, e->host_fn);
 +            e->host_fn = m32_gl_wrap(r.host_symbol, hud_wrap(r.host_symbol, e->host_fn));
-             char key[128];
-             snprintf(key, sizeof key, "|%s|", r.host_symbol);
-             e->file_ret = !!strstr("|fopen|fdopen|freopen|popen|tmpfile|funopen|fmemopen|open_memstream|", key);
++            char key[128];
++            snprintf(key, sizeof key, "|%s|", r.host_symbol);
++            e->file_ret = !!strstr("|fopen|fdopen|freopen|popen|tmpfile|funopen|fmemopen|open_memstream|", key);
+         } else if (r.kind == M32_DB_DATA) {
+             e->kind = M32_EX_DATA;
+             e->gsize = r.guest_size;
+diff --git a/src/m32_cf.c b/src/m32_cf.c
+index eb7a4883..a636238c 100644
+--- a/src/m32_cf.c
++++ b/src/m32_cf.c
+@@ -6,6 +6,8 @@
+  * long length}.  Each one gets an immortal host CFString, and the guest address is aliased to it, so passing the
+  * literal to any CF or Foundation function reaches a real string while the guest keeps its own pointer.
+  */
++#include <dispatch/dispatch.h>
++#include <stdarg.h>
+ #include <pthread.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -173,6 +175,87 @@ static int sp_CFRunLoopTimerCreate(struct OcerzVM *vm, OcerzCPU *cpu)
+     return OCERZ_STEP_OK;
+ }
+ 
++/* CFRunLoopObserverCreate(allocator, activities, repeats, order, callout, ctx): the context as a timer's.  Passed
++ * through, the i386 context crashed the host on Left 4 Dead 2's threads. */
++static int sp_CFRunLoopObserverCreate(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    void *(*f)(void *, unsigned long, unsigned char, long, void *, HostCtx *) = cf("CFRunLoopObserverCreate");
++    uint32_t callout = m32_arg(cpu, 4);
++    HostCtx ctx;
++    void *r = f ? f(m32_host(m32_arg(cpu, 0)), m32_arg(cpu, 1), (unsigned char)m32_arg(cpu, 2), (long)(int32_t)m32_arg(cpu, 3),
++                    callout ? m32_callback(callout, "v(pup)", "v(pLp)") : NULL, host_ctx(m32_arg(cpu, 5), &ctx))
++                : NULL;
++    m32_ret(cpu, m32_handle(r), 0, 0);
++    return OCERZ_STEP_OK;
++}
++
++/* CFRunLoopSourceCreate(allocator, order, ctx): a version 0 context is the timer's five fields and {equal, hash,
++ * schedule, cancel, perform}, ten 4-byte fields on i386.  ponytail: version 1 (Mach port sources) is refused. */
++typedef struct { HostCtx base; void *equal, *hash, *schedule, *cancel, *perform; } HostSourceCtx;
++static void *cb_or_null(uint32_t fn, const char *g, const char *h) { return fn ? m32_callback(fn, g, h) : NULL; }
++static int sp_CFRunLoopSourceCreate(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    void *(*f)(void *, long, HostSourceCtx *) = cf("CFRunLoopSourceCreate");
++    uint32_t c = m32_arg(cpu, 2);
++    if (!f || !c || m32_rd(c) != 0) {
++        m32_log_once("only version 0 run loop source contexts cross:", "CFRunLoopSourceCreate");
++        m32_ret(cpu, 0, 0, 0);
++        return OCERZ_STEP_OK;
++    }
++    HostSourceCtx h;
++    host_ctx(c, &h.base);
++    h.equal = cb_or_null(m32_rd(c + 20), "B(pp)", "B(pp)");
++    h.hash = cb_or_null(m32_rd(c + 24), "u(p)", "L(p)");
++    h.schedule = cb_or_null(m32_rd(c + 28), "v(ppp)", "v(ppp)");
++    h.cancel = cb_or_null(m32_rd(c + 32), "v(ppp)", "v(ppp)");
++    h.perform = cb_or_null(m32_rd(c + 36), "v(p)", "v(p)");
++    void *r = f(m32_host(m32_arg(cpu, 0)), (long)(int32_t)m32_arg(cpu, 1), &h);
++    m32_ret(cpu, m32_handle(r), 0, 0);
++    return OCERZ_STEP_OK;
++}
++
++/* SCDynamicStoreCreate(allocator, name, callout, ctx), SCDynamicStoreCreateWithOptions(allocator, name, options,
++ * callout, ctx) and SCNetworkReachabilitySetCallback(target, callout, ctx): the context as a timer's (Chromium in Left
++ * 4 Dead 2 watches the network with them) */
++static void *sc(const char *sym)
++{
++    return ocerz_bridge_host_symbol("/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
++                                    sym);
++}
++static int sp_SCDynamicStoreCreate(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    void *(*f)(void *, void *, void *, HostCtx *) = sc("SCDynamicStoreCreate");
++    uint32_t callout = m32_arg(cpu, 2);
++    HostCtx ctx;
++    void *r = f ? f(m32_host(m32_arg(cpu, 0)), m32_host(m32_arg(cpu, 1)),
++                    callout ? m32_callback(callout, "v(ppp)", "v(ppp)") : NULL, host_ctx(m32_arg(cpu, 3), &ctx))
++                : NULL;
++    m32_ret(cpu, m32_handle(r), 0, 0);
++    return OCERZ_STEP_OK;
++}
++static int sp_SCDynamicStoreCreateWithOptions(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    void *(*f)(void *, void *, void *, void *, HostCtx *) = sc("SCDynamicStoreCreateWithOptions");
++    uint32_t callout = m32_arg(cpu, 3);
++    HostCtx ctx;
++    void *r = f ? f(m32_host(m32_arg(cpu, 0)), m32_host(m32_arg(cpu, 1)), m32_host(m32_arg(cpu, 2)),
++                    callout ? m32_callback(callout, "v(ppp)", "v(ppp)") : NULL, host_ctx(m32_arg(cpu, 4), &ctx))
++                : NULL;
++    m32_ret(cpu, m32_handle(r), 0, 0);
++    return OCERZ_STEP_OK;
++}
++static int sp_SCNetworkReachabilitySetCallback(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    unsigned char (*f)(void *, void *, HostCtx *) = sc("SCNetworkReachabilitySetCallback");
++    uint32_t callout = m32_arg(cpu, 1);
++    HostCtx ctx;
++    unsigned char r = f ? f(m32_host(m32_arg(cpu, 0)), callout ? m32_callback(callout, "v(pup)", "v(pup)") : NULL,
++                            host_ctx(m32_arg(cpu, 2), &ctx))
++                        : 0;
++    m32_ret(cpu, r, 0, 0);
++    return OCERZ_STEP_OK;
++}
++
+ /* CFRunLoopTimerGetContext(timer, ctx): version and info back in the guest's layout.
+  * ponytail: the callbacks come back NULL (the host holds slots, not the guest's functions); keep a map if a game
+  * reads them back. */
+@@ -430,6 +513,97 @@ static int sp_CFArrayGetValues(struct OcerzVM *vm, OcerzCPU *cpu)
+     return OCERZ_STEP_OK;
+ }
+ 
++/* CFStringCreateWithFormat(alloc, options, format, ...) and CFStringCreateWithFormatAndArguments(alloc, options,
++ * format, va_list): the format is a CFString; its arguments become host slots as printf's do (%@ a host object).
++ * ponytail: a format longer than 4 KB in UTF-8 fails, as an unknown conversion does */
++static int cf_format(OcerzCPU *cpu, uint32_t ap)
++{
++    void *(*make)(void *, void *, void *, va_list) = cf("CFStringCreateWithFormatAndArguments");
++    uint8_t (*utf8)(void *, char *, long, uint32_t) = cf("CFStringGetCString");
++    void *fmt = m32_host(m32_arg(cpu, 2)), *r = NULL;
++    char buf[4096];
++    uint64_t slots[64];
++    if (make && utf8 && fmt && utf8(fmt, buf, sizeof buf, 0x08000100 /* kCFStringEncodingUTF8 */) &&
++        m32_printf_slots(buf, ap, slots, 64, "CFStringCreateWithFormat") >= 0)
++        r = make(m32_host(m32_arg(cpu, 0)), m32_host(m32_arg(cpu, 1)), fmt, (va_list)(void *)slots);
++    m32_ret(cpu, m32_handle(r), 0, 0);
++    return OCERZ_STEP_OK;
++}
++static int sp_CFStringCreateWithFormat(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    return cf_format(cpu, (uint32_t)cpu->gpr[OCERZ_RSP] + 16);
++}
++static int sp_CFStringCreateWithFormatAndArguments(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    return cf_format(cpu, m32_arg(cpu, 3));
++}
++
++/* CFUUIDGetConstantUUIDWithBytes and CFUUIDCreateWithBytes(alloc, byte0, ..., byte15): sixteen byte arguments, each
++ * a stack word on i386, are past what a notation describes.  IOKit's plug-in UUIDs (kIOHIDDeviceUserClientTypeID and
++ * the rest) are made this way; answered 0, Source's input system handed the NULL to CoreFoundation. */
++static int uuid_bytes(OcerzCPU *cpu, const char *sym)
++{
++    typedef unsigned char B;
++    void *(*f)(void *, B, B, B, B, B, B, B, B, B, B, B, B, B, B, B, B) = cf(sym);
++    B b[16];
++    for (int i = 0; i < 16; i++)
++        b[i] = (B)m32_arg(cpu, 1 + i);
++    void *r = f ? f(m32_host(m32_arg(cpu, 0)), b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11],
++                    b[12], b[13], b[14], b[15])
++                : NULL;
++    m32_ret(cpu, m32_handle(r), 0, 0);
++    return OCERZ_STEP_OK;
++}
++static int sp_CFUUIDGetConstantUUIDWithBytes(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    return uuid_bytes(cpu, "CFUUIDGetConstantUUIDWithBytes");
++}
++static int sp_CFUUIDCreateWithBytes(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    return uuid_bytes(cpu, "CFUUIDCreateWithBytes");
++}
++
++/* IOCreatePlugInInterfaceForService(service, pluginType, interfaceType, theInterface**, theScore*): the interface is
++ * a COM-style table of host function pointers (IOCFPlugInInterface, then IOHIDDeviceInterface and the like), which
++ * i386 code reads as 4-byte slots; Left 4 Dead 2's input system called through one and reached NULL.  Until m32 hands
++ * out guest tables for them, the documented failure: the caller skips the device.
++ * ponytail: no COM plug-ins for i386 (old-style HID joysticks, ForceFeedback); proxy tables as the Steam bridge's would
++ * add them */
++static int sp_IOCreatePlugInInterfaceForService(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    if (m32_arg(cpu, 3))
++        m32_wr(m32_arg(cpu, 3), 0);
++    m32_log_once("COM plug-in interfaces are not available to i386 code (kIOReturnUnsupported):",
++                 "IOCreatePlugInInterfaceForService");
++    m32_ret(cpu, 0xe00002c7u, 0, 0);   /* kIOReturnUnsupported */
++    return OCERZ_STEP_OK;
++}
++
++/* CFNumberCreate(alloc, type, valuePtr) and CFNumberGetValue(number, type, valuePtr): kCFNumberLongType, CFIndexType
++ * and NSIntegerType are 4 bytes on i386 and 8 on the host, kCFNumberCGFloatType a float there and a double here, so the
++ * host read 8 bytes from the guest's 4 and wrote 8 into them (Left 4 Dead 2 reads display modes this way).  They
++ * become the 4-byte types they are on i386. */
++static long number_type(long t)
++{
++    return t == 10 || t == 14 || t == 15 ? 3 /* kCFNumberSInt32Type */ : t == 16 ? 5 /* kCFNumberFloat32Type */ : t;
++}
++static int sp_CFNumberCreate(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    void *(*f)(void *, long, const void *) = cf("CFNumberCreate");
++    uint32_t v = m32_arg(cpu, 2);
++    void *r = f ? f(m32_host(m32_arg(cpu, 0)), number_type((int32_t)m32_arg(cpu, 1)), v ? m32_h(v) : NULL) : NULL;
++    m32_ret(cpu, m32_handle(r), 0, 0);
++    return OCERZ_STEP_OK;
++}
++static int sp_CFNumberGetValue(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    unsigned char (*f)(void *, long, void *) = cf("CFNumberGetValue");
++    uint32_t v = m32_arg(cpu, 2);
++    unsigned char r = f ? f(m32_host(m32_arg(cpu, 0)), number_type((int32_t)m32_arg(cpu, 1)), v ? m32_h(v) : NULL) : 0;
++    m32_ret(cpu, r, 0, 0);
++    return OCERZ_STEP_OK;
++}
++
+ /* FSCatalogInfo: the i386 FSPermissionInfo ends in a 4-byte reserved word where the host's has an 8-byte FileSecRef,
+  * so from the permissions on every field sits 4 bytes later on the host (i386 144 bytes, valence at 136; host 148, at
+  * 140).  Handed through as is, a directory's valence came back 0 and a game sized its listing from it, then wrote
+@@ -469,6 +643,62 @@ static int sp_FSGetCatalogInfo(struct OcerzVM *vm, OcerzCPU *cpu)
+     m32_ret(cpu, (uint32_t)(int32_t)r, 0, 0);
+     return OCERZ_STEP_OK;
+ }
++/* FSGetCatalogInfoBulk(iterator, maximumObjects, actualObjects*, containerChanged*, whichInfo, catalogInfos, refs,
++ * specs, names): the catalog records convert one by one and the count is an ItemCount; FSRef, FSSpec and HFSUniStr255
++ * are the same bytes to both sides */
++static int sp_FSGetCatalogInfoBulk(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    int16_t (*f)(void *, unsigned long, unsigned long *, void *, uint32_t, void *, void *, void *, void *) =
++        cs("FSGetCatalogInfoBulk");
++    uint32_t max = m32_arg(cpu, 1), gact = m32_arg(cpu, 2), gchg = m32_arg(cpu, 3), info = m32_arg(cpu, 5);
++    uint32_t refs = m32_arg(cpu, 6), specs = m32_arg(cpu, 7), names = m32_arg(cpu, 8);
++    uint8_t *h = info && max && max < (1u << 20) ? calloc(max, CAT_SIZE64) : NULL;
++    unsigned long n = 0;
++    int16_t r = f && (h || !info) ? f(m32_host(m32_arg(cpu, 0)), max, &n, gchg ? m32_h(gchg) : NULL, m32_arg(cpu, 4), h,
++                                      refs ? m32_h(refs) : NULL, specs ? m32_h(specs) : NULL, names ? m32_h(names) : NULL)
++                                  : -50;
++    for (unsigned long i = 0; h && i < n; i++)
++        cat_to_guest(h + i * CAT_SIZE64, info + (uint32_t)i * CAT_SIZE32);
++    free(h);
++    if (gact)
++        m32_wr(gact, (uint32_t)n);
++    m32_ret(cpu, (uint32_t)(int32_t)r, 0, 0);
++    return OCERZ_STEP_OK;
++}
++/* PBReadForkAsync(FSForkIOParam *): the i386 block (offsets measured with clang -arch i386) is read on a queue standing
++ * in for the File Manager's thread, as on a Mac: ioResult is 1 while queued, then the read's result and actualCount,
++ * then the guest's ioCompletion(block) runs on that thread. */
++enum { FIO_COMPLETION = 12, FIO_RESULT = 16, FIO_REFNUM = 24, FIO_BUFFER = 32, FIO_REQUEST = 36, FIO_ACTUAL = 40,
++       FIO_MODE = 44, FIO_OFFSET = 46 };
++static void fork_read(void *ctx)
++{
++    uint32_t pb = (uint32_t)(uintptr_t)ctx;
++    int16_t (*rd)(int, uint16_t, int64_t, unsigned long, void *, unsigned long *) = cs("FSReadFork");
++    int64_t off;
++    memcpy(&off, m32_h(pb + FIO_OFFSET), 8);
++    uint16_t mode;
++    memcpy(&mode, m32_h(pb + FIO_MODE), 2);
++    int16_t ref;
++    memcpy(&ref, m32_h(pb + FIO_REFNUM), 2);
++    unsigned long got = 0;
++    int16_t r = rd ? rd(ref, mode, off, m32_rd(pb + FIO_REQUEST), m32_h(m32_rd(pb + FIO_BUFFER)), &got) : -50;
++    m32_wr(pb + FIO_ACTUAL, (uint32_t)got);
++    __atomic_store_n((int16_t *)m32_h(pb + FIO_RESULT), r, __ATOMIC_RELEASE);
++    uint32_t done = m32_rd(pb + FIO_COMPLETION);
++    if (done)
++        ((void (*)(uint32_t))m32_callback(done, "v(u)", "v(u)"))(pb);
++}
++static int sp_PBReadForkAsync(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    static dispatch_queue_t q;
++    static dispatch_once_t once;
++    dispatch_once(&once, ^{ q = dispatch_queue_create("ocerz.m32.file-manager", DISPATCH_QUEUE_SERIAL); });
++    uint32_t pb = m32_arg(cpu, 0);
++    __atomic_store_n((int16_t *)m32_h(pb + FIO_RESULT), (int16_t)1, __ATOMIC_RELEASE);
++    dispatch_async_f(q, (void *)(uintptr_t)pb, fork_read);
++    m32_ret(cpu, 0, 0, 0);
++    return OCERZ_STEP_OK;
++}
+ /* FSSetCatalogInfo(ref, whichInfo, catalogInfo) */
+ static int sp_FSSetCatalogInfo(struct OcerzVM *vm, OcerzCPU *cpu)
+ {
+@@ -491,12 +721,23 @@ const M32SpecialEntry m32_cf_specials[] = {
+     { "_CFDataGetBytePtr", sp_CFDataGetBytePtr }, { "_CFDataGetMutableBytePtr", sp_CFDataGetBytePtr },
+     { "_IOHIDValueGetBytePtr", sp_IOHIDValueGetBytePtr },
+     { "_FSGetCatalogInfo", sp_FSGetCatalogInfo }, { "_FSSetCatalogInfo", sp_FSSetCatalogInfo },
++    { "_FSGetCatalogInfoBulk", sp_FSGetCatalogInfoBulk }, { "_PBReadForkAsync", sp_PBReadForkAsync },
++    { "_CFStringCreateWithFormat", sp_CFStringCreateWithFormat },
++    { "_CFStringCreateWithFormatAndArguments", sp_CFStringCreateWithFormatAndArguments },
++    { "_CFUUIDGetConstantUUIDWithBytes", sp_CFUUIDGetConstantUUIDWithBytes },
++    { "_CFUUIDCreateWithBytes", sp_CFUUIDCreateWithBytes },
++    { "_IOCreatePlugInInterfaceForService", sp_IOCreatePlugInInterfaceForService },
++    { "_CFNumberCreate", sp_CFNumberCreate }, { "_CFNumberGetValue", sp_CFNumberGetValue },
+     { "_CFDictionaryGetKeysAndValues", sp_CFDictionaryGetKeysAndValues }, { "_CFSetGetValues", sp_CFSetGetValues },
+     { "_CFBagGetValues", sp_CFBagGetValues }, { "_CFArrayGetValues", sp_CFArrayGetValues },
+     { "_GetProcessBundleLocation", sp_GetProcessBundleLocation }, { "_SecCodeCheckValidity", sp_SecCodeCheckValidity },
+     { "_CFReadStreamSetClient", sp_CFReadStreamSetClient }, { "_CFWriteStreamSetClient", sp_CFWriteStreamSetClient },
+     { "_CFRunLoopTimerGetContext", sp_CFRunLoopTimerGetContext },
+     { "_CFRunLoopTimerCreate", sp_CFRunLoopTimerCreate },
++    { "_CFRunLoopObserverCreate", sp_CFRunLoopObserverCreate }, { "_CFRunLoopSourceCreate", sp_CFRunLoopSourceCreate },
++    { "_SCDynamicStoreCreate", sp_SCDynamicStoreCreate },
++    { "_SCDynamicStoreCreateWithOptions", sp_SCDynamicStoreCreateWithOptions },
++    { "_SCNetworkReachabilitySetCallback", sp_SCNetworkReachabilitySetCallback },
+     { "_CFDictionaryGetValueIfPresent", sp_CFDictionaryGetValueIfPresent },
+     { "_CFBundleGetFunctionPointerForName", sp_CFBundleGetFunctionPointerForName },
+     { "_CFBundleGetDataPointerForName", sp_CFBundleGetDataPointerForName },
 diff --git a/src/m32_cross.c b/src/m32_cross.c
-index 6fc64c9f..e6db41a4 100644
+index 3e1e471f..e6db41a4 100644
 --- a/src/m32_cross.c
 +++ b/src/m32_cross.c
+@@ -35,7 +35,7 @@ static int scalar_size(char c, int guest)
+     case 'h': case 'H': return 2;
+     case 'i': case 'u': case 'f': return 4;
+     case 'l': case 'L': case 'T': case 'd': return 8;
+-    case 'p': case 's': case 'P': case 'Q': case 'W': case 'V': case 'c': case 'k': case '@': case '#': case ':':
++    case 'p': case 's': case 'P': case 'Q': case 'W': case 'V': case 'S': case 'c': case 'k': case '@': case '#': case ':':
+         return guest ? 4 : 8;
+     default: return -1;
+     }
 @@ -272,7 +272,14 @@ uint64_t m32_scalar_in(char g, char h, uint64_t raw, const char *fn, int argno)
          return h == 'f' ? bitsf((float)dbits(raw)) : raw;
      case 'T':
@@ -1521,14 +2076,131 @@ index 6fc64c9f..e6db41a4 100644
          return (uint64_t)(uintptr_t)m32_host((uint32_t)raw);
      case '@': return (uint64_t)(uintptr_t)m32_objc_to_host((uint32_t)raw);
      case '#': return (uint64_t)(uintptr_t)m32_class_host((uint32_t)raw);
+@@ -733,12 +740,12 @@ int m32_cross(struct OcerzVM *vm, OcerzCPU *cpu, M32Export *e)
+             put_int(&hc, (uint64_t)(uintptr_t)hs, 8);
+             continue;
+         }
+-        if (ga->cls == 'P' || ga->cls == 'W' || ga->cls == 'V') {
++        if (ga->cls == 'P' || ga->cls == 'W' || ga->cls == 'V' || ga->cls == 'S') {
+             uint64_t *cell = raw ? scratch(&hc, 8) : NULL;
+             if (cell) {
+-                uint32_t cur = m32_rd((uint32_t)raw);
++                uint32_t cur = ga->cls == 'S' ? (uint32_t)(int32_t)*(int16_t *)m32_h((uint32_t)raw) : m32_rd((uint32_t)raw);
+                 *cell = ga->cls == 'P' ? (uint64_t)(uintptr_t)m32_host(cur)
+-                      : ga->cls == 'W' ? (uint64_t)(int64_t)(int32_t)cur : cur;
++                      : ga->cls == 'W' || ga->cls == 'S' ? (uint64_t)(int64_t)(int32_t)cur : cur;
+                 wb[nwb++] = (Writeback){ ga->cls, (uint32_t)raw, cell, NULL, NULL };
+             }
+             put_int(&hc, (uint64_t)(uintptr_t)cell, 8);
+@@ -830,7 +837,10 @@ int m32_cross(struct OcerzVM *vm, OcerzCPU *cpu, M32Export *e)
+             continue;
+         }
+         uint64_t v = *wb[i].cell;
+-        m32_wr(wb[i].guest, wb[i].cls == 'P' ? m32_handle((void *)(uintptr_t)v) : (uint32_t)v);
++        if (wb[i].cls == 'S')
++            *(int16_t *)m32_h(wb[i].guest) = (int16_t)v;
++        else
++            m32_wr(wb[i].guest, wb[i].cls == 'P' ? m32_handle((void *)(uintptr_t)v) : (uint32_t)v);
+     }
+     const M32Type *gr = &g->ret, *hr = &h->ret;
+     if (gr->cls == 'v') {
+@@ -864,7 +874,7 @@ int m32_cross(struct OcerzVM *vm, OcerzCPU *cpu, M32Export *e)
+     uint64_t raw = (hr->cls == 'f' || hr->cls == 'd') ? out_v[0] : out_x[0];
+     if (hr->cls == 'f')
+         raw = (uint32_t)raw;
+-    uint64_t v = m32_scalar_out(gr->cls, hr->cls, raw);
++    uint64_t v = e->file_ret && raw ? m32_file((void *)(uintptr_t)raw) : m32_scalar_out(gr->cls, hr->cls, raw);
+     switch (gr->cls) {
+     case 'f': m32_ret_st0(cpu, fbits((uint32_t)v)); break;
+     case 'd': m32_ret_st0(cpu, dbits(v)); break;
 diff --git a/src/m32_gl.c b/src/m32_gl.c
-index dbea7fbc..04ad99fe 100644
+index 677c7e98..04ad99fe 100644
 --- a/src/m32_gl.c
 +++ b/src/m32_gl.c
-@@ -103,6 +103,155 @@ static uint32_t bound(unsigned target)
+@@ -3,13 +3,20 @@
+  *
+  * glMapBuffer hands back driver memory far outside the guest's 4 GB window, so a guest could never write its vertices
+  * there (handed a handle instead, the writes went nowhere and every 3D draw came out empty).  A mapping gets a shadow
+- * in the guest heap instead: the buffer's bytes are copied in when it is mapped, flushed ranges
+- * (glFlushMappedBufferRange[APPLE]) are copied out as they are flushed, and at unmap the whole shadow is copied out
+- * unless the guest flushed ranges itself (it is then in explicit-flush mode and has said what it wrote).  A shadow is
+- * kept per (context, buffer) for the next mapping.
++ * in the guest heap instead: flushed ranges (glFlushMappedBufferRange[APPLE]) are copied out as they are flushed, and
++ * at unmap the whole shadow is copied out unless the guest flushed ranges itself (it is then in explicit-flush mode and
++ * has said what it wrote).  A shadow is kept per (share group, buffer) for the next mapping.
+  *
+- * ponytail: 256 shadows, a linear scan under one lock, and a full copy in at every map; track written ranges when
+- * the copies show up in a profile.
++ * A shadow is the buffer's mirror once it has been mapped through it: what the buffer holds is what the guest last
++ * wrote there, or undefined after glBufferData without data (the orphaning a game does before refilling a dynamic
++ * buffer).  Mapping it again copies nothing in, and maps ask the driver nothing either: the buffer's size is the
++ * shadow's.  Both cost Left 4 Dead 2's render thread about half its time: the copy of the whole buffer in at each map,
++ * and glGetBufferParameteriv, which on Apple's multithreaded engine waits for every queued command to run first.
++ * glBufferData with data and glBufferSubData keep the mirror true; anything else that writes a buffer (a pixel pack,
++ * transform feedback, glCopyBufferSubData) does not go through m32, so only array and element array buffers are
++ * mirrored and a buffer bound elsewhere is copied in at every map.
++ *
++ * ponytail: 256 shadows, a linear scan under one lock.
+  */
+ #include <pthread.h>
+ #include <stdio.h>
+@@ -23,16 +30,21 @@
+ #define GL_LIB "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL"
+ 
+ typedef struct Shadow {
+-    void *ctx;
++    void *group;
+     uint32_t buffer, guest, cap;   /* the guest copy and its capacity */
+     uint8_t *host;                 /* while mapped: the driver's pointer to the mapped range */
+     uint32_t size, flushed;        /* the mapped range's size; whether the guest flushed any part of it */
++    uint32_t bufsize, mirror;      /* the buffer's size (0: not known); whether the copy is the buffer's mirror */
+ } Shadow;
+ static Shadow g_shadows[256];
+ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+ 
+ static struct {
+     void *(*current)(void);
++    void *(*share_group)(void *);
++    void (*buffer_data)(unsigned, intptr_t, const void *, unsigned);
++    void (*buffer_sub_data)(unsigned, intptr_t, intptr_t, const void *);
++    void (*delete_buffers)(int, const uint32_t *);
+     void (*getiv)(unsigned, int *);
+     void (*buffer_iv)(unsigned, unsigned, int *);
+     void *(*map)(unsigned, unsigned);
+@@ -53,9 +65,26 @@ static void gl_init(void)
+     gl.unmap = (unsigned char (*)(unsigned))ocerz_bridge_host_symbol(GL_LIB, "glUnmapBuffer");
+     gl.flush_apple = (void (*)(unsigned, intptr_t, intptr_t))ocerz_bridge_host_symbol(GL_LIB, "glFlushMappedBufferRangeAPPLE");
+     gl.flush_range = (void (*)(unsigned, intptr_t, intptr_t))ocerz_bridge_host_symbol(GL_LIB, "glFlushMappedBufferRange");
+-    gl.map = (void *(*)(unsigned, unsigned))ocerz_bridge_host_symbol(GL_LIB, "glMapBuffer");
++    gl.share_group = (void *(*)(void *))ocerz_bridge_host_symbol(GL_LIB, "CGLGetShareGroup");
++    gl.buffer_data = (void (*)(unsigned, intptr_t, const void *, unsigned))ocerz_bridge_host_symbol(GL_LIB, "glBufferData");
++    gl.buffer_sub_data =
++        (void (*)(unsigned, intptr_t, intptr_t, const void *))ocerz_bridge_host_symbol(GL_LIB, "glBufferSubData");
++    gl.delete_buffers = (void (*)(int, const uint32_t *))ocerz_bridge_host_symbol(GL_LIB, "glDeleteBuffers");
++    __atomic_store_n(&gl.map, (void *(*)(unsigned, unsigned))ocerz_bridge_host_symbol(GL_LIB, "glMapBuffer"),
++                     __ATOMIC_RELEASE);
++}
++
++/* buffers are shared by the contexts of a share group, so their shadows are too */
++static void *share_group(void)
++{
++    void *ctx = gl.current();
++    void *g = ctx && gl.share_group ? gl.share_group(ctx) : NULL;
++    return g ? g : ctx;
+ }
+ 
++/* only these are mirrored: the guest's own calls are the only writers m32 sees */
++static int mirrored(unsigned target) { return target == 0x8892 || target == 0x8893; }   /* GL_[ELEMENT_]ARRAY_BUFFER */
++
+ /* the buffer bound to target (the binding query of each buffer target) */
+ static uint32_t bound(unsigned target)
+ {
+@@ -74,27 +103,185 @@ static uint32_t bound(unsigned target)
      return (uint32_t)b;
  }
  
+-/* the shadow of (current context, buffer), made or grown to size; NULL when there is no room */
+-static Shadow *shadow_for(uint32_t buffer, uint32_t size)
 +/* GL arguments that are a pointer, or an offset into the buffer bound to their target while one is: the offset goes to
 + * GL as it is.  As a window address it reached GL as a huge offset: glTexImage2D from an unpack buffer failed, and
 + * iOS's GL read Batman's indices at the element buffer's storage plus the window address (a fault that took the
@@ -1678,22 +2350,205 @@ index dbea7fbc..04ad99fe 100644
 +    return fn;
 +}
 +
- /* the shadow of (group, buffer), or NULL; with g_lock held */
- static Shadow *find(void *group, uint32_t buffer)
++/* the shadow of (group, buffer), or NULL; with g_lock held */
++static Shadow *find(void *group, uint32_t buffer)
++{
++    for (int i = 0; i < 256; i++)
++        if (g_shadows[i].group == group && g_shadows[i].buffer == buffer && g_shadows[i].guest)
++            return &g_shadows[i];
++    return NULL;
++}
++
++/* the shadow of (group, buffer), made or grown to size (a grown one mirrors nothing yet); NULL when there is no room */
++static Shadow *shadow_for(void *group, uint32_t buffer, uint32_t size)
  {
-@@ -274,6 +423,7 @@ static int sp_glDeleteBuffers(struct OcerzVM *vm, OcerzCPU *cpu)
+-    void *ctx = gl.current();
+     Shadow *s = NULL, *spare = NULL;
+     pthread_mutex_lock(&g_lock);
+     for (int i = 0; i < 256 && !s; i++) {
+-        if (g_shadows[i].ctx == ctx && g_shadows[i].buffer == buffer)
++        if (g_shadows[i].group == group && g_shadows[i].buffer == buffer)
+             s = &g_shadows[i];
+         else if (!spare && !g_shadows[i].host)
+             spare = &g_shadows[i];   /* empty, or an unmapped one to recycle */
+     }
+     if (!s && spare) {
+         m32_free(spare->guest);
+-        *spare = (Shadow){ ctx, buffer, 0, 0, NULL, 0, 0 };
++        *spare = (Shadow){ group, buffer, 0, 0, NULL, 0, 0, 0, 0 };
+         s = spare;
+     }
+     if (s && s->cap < size) {
+         m32_free(s->guest);
+         s->guest = m32_malloc(size);
+         s->cap = s->guest ? size : 0;
++        s->mirror = 0;
+     }
      pthread_mutex_unlock(&g_lock);
-     if (n >= 0)
-         gl.delete_buffers(n, names ? (const uint32_t *)m32_h(names) : NULL);
+     return s && s->guest ? s : NULL;
+@@ -102,27 +289,34 @@ static Shadow *shadow_for(uint32_t buffer, uint32_t size)
+ 
+ static Shadow *mapped(unsigned target)
+ {
+-    void *ctx = gl.current();
++    void *group = share_group();
+     uint32_t buffer = bound(target);
+     for (int i = 0; i < 256; i++)
+-        if (g_shadows[i].ctx == ctx && g_shadows[i].buffer == buffer && g_shadows[i].host)
++        if (g_shadows[i].group == group && g_shadows[i].buffer == buffer && g_shadows[i].host)
+             return &g_shadows[i];
+     return NULL;
+ }
+ 
+ #define RET(v) do { m32_ret(cpu, (uint32_t)(v), 0, 0); return OCERZ_STEP_OK; } while (0)
+ 
+-static int map_common(OcerzCPU *cpu, unsigned target, uint8_t *host, uint32_t size)
++/* whole: the mapping is the whole buffer, of size bytes, and the shadow may be (or become) its mirror */
++static int map_common(OcerzCPU *cpu, unsigned target, uint32_t buffer, void *group, uint8_t *host, uint32_t size,
++                      int whole)
+ {
+     if (!host)
+         RET(0);
+-    Shadow *s = shadow_for(bound(target), size ? size : 1);
++    Shadow *s = shadow_for(group, buffer, size ? size : 1);
+     if (!s) {
+         fprintf(stderr, "ocerz: m32: glMapBuffer: no guest shadow for %u bytes\n", (unsigned)size);
+         gl.unmap(target);
+         RET(0);
+     }
+-    memcpy(m32_h(s->guest), host, size);
++    int keep = whole && mirrored(target);
++    if (!(keep && s->mirror))
++        memcpy(m32_h(s->guest), host, size);
++    if (whole)
++        s->bufsize = size;
++    s->mirror = keep;
+     s->host = host;
+     s->size = size;
+     s->flushed = 0;
+@@ -134,17 +328,103 @@ static int sp_glMapBuffer(struct OcerzVM *vm, OcerzCPU *cpu)
+ {
+     gl_init();
+     unsigned target = m32_arg(cpu, 0);
+-    int size = 0;
+-    gl.buffer_iv(target, 0x8764, &size);   /* GL_BUFFER_SIZE */
+-    return map_common(cpu, target, gl.map(target, m32_arg(cpu, 1)), (uint32_t)size);
++    uint32_t buffer = bound(target), size = 0;
++    void *group = share_group();
++    pthread_mutex_lock(&g_lock);
++    Shadow *s = mirrored(target) ? find(group, buffer) : NULL;
++    if (s)
++        size = s->bufsize;
++    pthread_mutex_unlock(&g_lock);
++    if (!size) {
++        int q = 0;
++        gl.buffer_iv(target, 0x8764, &q);   /* GL_BUFFER_SIZE */
++        size = (uint32_t)q;
++    }
++    return map_common(cpu, target, buffer, group, gl.map(target, m32_arg(cpu, 1)), size, 1);
+ }
+-/* glMapBufferRange(target, offset, length, access): the shadow holds just the range */
++/* glMapBufferRange(target, offset, length, access): the shadow holds just the range, and mirrors nothing */
+ static int sp_glMapBufferRange(struct OcerzVM *vm, OcerzCPU *cpu)
+ {
+     gl_init();
+     unsigned target = m32_arg(cpu, 0);
+     uint32_t len = m32_arg(cpu, 2);
+-    return map_common(cpu, target, gl.map_range(target, (int32_t)m32_arg(cpu, 1), len, m32_arg(cpu, 3)), len);
++    return map_common(cpu, target, bound(target), share_group(),
++                      gl.map_range(target, (int32_t)m32_arg(cpu, 1), len, m32_arg(cpu, 3)), len, 0);
++}
++
++/* glBufferData(target, size, data, usage): the buffer's new size; without data its contents are undefined, which any
++ * shadow mirrors, and with data the shadow takes them too */
++static int sp_glBufferData(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    (void)vm;
++    gl_init();
++    unsigned target = m32_arg(cpu, 0);
++    int32_t size = (int32_t)m32_arg(cpu, 1);
++    uint32_t data = m32_arg(cpu, 2);
++    gl.buffer_data(target, size, data ? m32_host(data) : NULL, m32_arg(cpu, 3));
++    if (mirrored(target)) {
++        void *group = share_group();
++        uint32_t buffer = bound(target);
++        pthread_mutex_lock(&g_lock);
++        Shadow *s = find(group, buffer);
++        if (s) {
++            s->bufsize = size > 0 ? (uint32_t)size : 0;
++            if (!data)
++                s->mirror = 1;   /* undefined contents: whatever the shadow holds will do */
++            else if (s->cap >= (uint32_t)size && size > 0)
++                memcpy(m32_h(s->guest), m32_host(data), (size_t)size), s->mirror = 1;
++            else
++                s->mirror = 0;
++        }
++        pthread_mutex_unlock(&g_lock);
++    }
++    RET(0);
++}
++/* glBufferSubData(target, offset, size, data): written into the mirror too */
++static int sp_glBufferSubData(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    (void)vm;
++    gl_init();
++    unsigned target = m32_arg(cpu, 0);
++    int32_t off = (int32_t)m32_arg(cpu, 1), size = (int32_t)m32_arg(cpu, 2);
++    uint32_t data = m32_arg(cpu, 3);
++    gl.buffer_sub_data(target, off, size, data ? m32_host(data) : NULL);
++    if (mirrored(target)) {
++        void *group = share_group();
++        uint32_t buffer = bound(target);
++        pthread_mutex_lock(&g_lock);
++        Shadow *s = find(group, buffer);
++        if (s && s->mirror) {
++            if (data && off >= 0 && size >= 0 && (uint64_t)off + (uint64_t)size <= s->cap)
++                memcpy(m32_h(s->guest + (uint32_t)off), m32_host(data), (size_t)size);
++            else
++                s->mirror = 0;
++        }
++        pthread_mutex_unlock(&g_lock);
++    }
++    RET(0);
++}
++/* glDeleteBuffers(n, buffers): their shadows go, so a name made again starts with none */
++static int sp_glDeleteBuffers(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    (void)vm;
++    gl_init();
++    int32_t n = (int32_t)m32_arg(cpu, 0);
++    uint32_t names = m32_arg(cpu, 1);
++    void *group = share_group();
++    pthread_mutex_lock(&g_lock);
++    for (int32_t i = 0; names && i < n; i++) {
++        Shadow *s = find(group, m32_rd(names + 4 * (uint32_t)i));
++        if (s) {
++            m32_free(s->guest);
++            *s = (Shadow){ 0 };
++        }
++    }
++    pthread_mutex_unlock(&g_lock);
++    if (n >= 0)
++        gl.delete_buffers(n, names ? (const uint32_t *)m32_h(names) : NULL);
 +    forget(~0u);   /* a deleted buffer's bindings went back to 0 */
-     RET(0);
++    RET(0);
  }
  /* glFlushMappedBufferRange[APPLE](target, offset, size): the offset is within the mapped range */
+ static int flush_common(OcerzCPU *cpu, void (*flush)(unsigned, intptr_t, intptr_t))
+@@ -261,5 +541,8 @@ const M32SpecialEntry m32_gl_specials[] = {
+     { "_glFlushMappedBufferRange", sp_glFlushMappedBufferRange },
+     { "_glFlushMappedBufferRangeAPPLE", sp_glFlushMappedBufferRangeAPPLE },
+     { "_glUnmapBuffer", sp_glUnmapBuffer }, { "_glUnmapBufferARB", sp_glUnmapBuffer },
++    { "_glBufferData", sp_glBufferData }, { "_glBufferDataARB", sp_glBufferData },
++    { "_glBufferSubData", sp_glBufferSubData }, { "_glBufferSubDataARB", sp_glBufferSubData },
++    { "_glDeleteBuffers", sp_glDeleteBuffers }, { "_glDeleteBuffersARB", sp_glDeleteBuffers },
+     { NULL, NULL }
+ };
 diff --git a/src/m32_leaf.c b/src/m32_leaf.c
-index 3bdaeb53..7d43b255 100644
+index d67b94fc..4e224b83 100644
 --- a/src/m32_leaf.c
 +++ b/src/m32_leaf.c
-@@ -127,27 +127,27 @@ static uint64_t leaf_isinff(uint32_t bits) { return (bits & 0x7fffffffu) == 0x7f
+@@ -107,26 +107,26 @@ static uint64_t leaf_isinff(uint32_t bits) { return (bits & 0x7fffffffu) == 0x7f
  static uint64_t leaf_isnanf(uint32_t bits) { return (bits & 0x7fffffffu) > 0x7f800000u; }
  
  static const M32Leaf g_leaves[] = {
@@ -1703,7 +2558,6 @@ index 3bdaeb53..7d43b255 100644
 -    { "_CGLSetCurrentContext", (void *)leaf_CGLSetCurrentContext, 1, 0, M32_LEAF_I32, 1, 0, 0 },
 -    { "_CGLLockContext", (void *)leaf_CGLLockContext, 1, 0, M32_LEAF_I32, 1, 0, 0 },
 -    { "_CGLUnlockContext", (void *)leaf_CGLUnlockContext, 1, 0, M32_LEAF_I32, 1, 0, 0 },
--    { "_CGLGetCurrentContext", (void *)leaf_CGLGetCurrentContext, 0, 0, M32_LEAF_I32, 1, 0, 0 },
 -    { "_memcpy", (void *)leaf_memmove, 3, 3, M32_LEAF_ARG0, 0, 0, 0 },
 -    { "_memmove", (void *)leaf_memmove, 3, 3, M32_LEAF_ARG0, 0, 0, 0 },
 -    { "_memset", (void *)leaf_memset, 3, 1, M32_LEAF_ARG0, 0, 0, 0 },
@@ -1724,7 +2578,6 @@ index 3bdaeb53..7d43b255 100644
 +    { "_CGLSetCurrentContext", (void *)leaf_CGLSetCurrentContext, 1, 0, M32_LEAF_I32, 1, 0, 0, 0, 0 },
 +    { "_CGLLockContext", (void *)leaf_CGLLockContext, 1, 0, M32_LEAF_I32, 1, 0, 0, 0, 0 },
 +    { "_CGLUnlockContext", (void *)leaf_CGLUnlockContext, 1, 0, M32_LEAF_I32, 1, 0, 0, 0, 0 },
-+    { "_CGLGetCurrentContext", (void *)leaf_CGLGetCurrentContext, 0, 0, M32_LEAF_I32, 1, 0, 0, 0, 0 },
 +    { "_memcpy", (void *)leaf_memmove, 3, 3, M32_LEAF_ARG0, 0, 0, 0, 0, 0 },
 +    { "_memmove", (void *)leaf_memmove, 3, 3, M32_LEAF_ARG0, 0, 0, 0, 0, 0 },
 +    { "_memset", (void *)leaf_memset, 3, 1, M32_LEAF_ARG0, 0, 0, 0, 0, 0 },
@@ -1742,7 +2595,7 @@ index 3bdaeb53..7d43b255 100644
  };
  
  /* any GL function whose guest and host notations agree and that takes 32-bit integers, booleans and pointers and
-@@ -174,10 +174,14 @@ static const M32Leaf *gl_leaf(uint32_t id, const M32Export *e)
+@@ -153,10 +153,14 @@ static const M32Leaf *gl_leaf(uint32_t id, const M32Export *e)
      }
      if (*n != ')')
          return NULL;
@@ -1758,7 +2611,7 @@ index 3bdaeb53..7d43b255 100644
      return &g_gl[id];
  }
  
-@@ -186,7 +190,9 @@ uint64_t m32_leaf_tramp(const M32Leaf *l, uint64_t a0, uint64_t a1, uint64_t a2,
+@@ -165,7 +169,9 @@ uint64_t m32_leaf_tramp(const M32Leaf *l, uint64_t a0, uint64_t a1, uint64_t a2,
  {
      uint64_t a[7] = { a0, a1, a2, a3, a4, a5, a6 };
      for (int k = 0; k < l->nargs; k++) {
@@ -1770,12 +2623,14 @@ index 3bdaeb53..7d43b255 100644
      }
      typedef uint64_t (*F7)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 diff --git a/src/m32_libsystem.c b/src/m32_libsystem.c
-index 0a2e9ba6..4d783e78 100644
+index cf2de50b..b6e00797 100644
 --- a/src/m32_libsystem.c
 +++ b/src/m32_libsystem.c
-@@ -5,8 +5,14 @@
+@@ -3,11 +3,19 @@
+  * forms differ in layout, that allocate for the caller, that take variadic arguments, or that exist only on i386.
+  */
  #include <dirent.h>
- #include <dlfcn.h>
++#include <dlfcn.h>
  #include <mach/mach.h>
 -#include <mach/mach_vm.h>
 +#include "ocerz/mach_vm_compat.h"   /* MacShack: iOS's mach_vm.h is a bare #error */
@@ -1788,7 +2643,392 @@ index 0a2e9ba6..4d783e78 100644
 +#endif
  #include <wchar.h>
  #include <math.h>
- #include <netdb.h>
++#include <netdb.h>
+ #include <fcntl.h>
+ #include <pthread.h>
+ #include <sched.h>
+@@ -16,6 +24,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <errno.h>
++#include <sys/ioctl.h>
+ #include <sys/mman.h>
+ #include <sys/select.h>
+ #include <sys/stat.h>
+@@ -26,6 +35,7 @@
+ #include "ocerz/interp.h"
+ #include "ocerz/m32.h"
+ #include "ocerz/m32_objc.h"
++#include "ocerz/syscall.h"
+ #include "ocerz/types.h"
+ #include "ocerz/vm.h"
+ 
+@@ -63,6 +73,27 @@ static int sp__exit(struct OcerzVM *vm, OcerzCPU *cpu)
+     _exit((int)(m32_arg(cpu, 0) & 0xff));
+ }
+ 
++/* SetFrontProcess(&psn) is how a game started by a script (Left 4 Dead 2 from Steam, through hl2.sh) came to the
++ * front.  Today's cooperative activation ignores it while another app is active, so the game started unfocused:
++ * throttled by engine_no_focus_sleep and without the mouse until the user switched away and back.  For the current
++ * process the call still goes through, and the app also asks to activate once its run loop turns, which is honored. */
++static int sp_SetFrontProcess(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    static short (*set_front)(const void *), (*same)(const void *, const void *, unsigned char *);
++    if (!set_front) {
++        same = (short (*)(const void *, const void *, unsigned char *))dlsym(RTLD_DEFAULT, "SameProcess");
++        set_front = (short (*)(const void *))dlsym(RTLD_DEFAULT, "SetFrontProcess");
++    }
++    const uint32_t *psn = m32_h(m32_arg(cpu, 0)), current[2] = { 0, 2 };   /* kCurrentProcess */
++    unsigned char self = psn[0] == 0 && psn[1] == 2;
++    if (!self && same && same(psn, current, &self) != 0)
++        self = 0;
++    if (self)
++        m32_activate_soon();
++    m32_ret(cpu, (uint32_t)(int32_t)(set_front ? set_front(psn) : 0), 0, 0);
++    return OCERZ_STEP_OK;
++}
++
+ static int sp_ok0(struct OcerzVM *vm, OcerzCPU *cpu)
+ {
+     m32_ret(cpu, 0, 0, 0);
+@@ -528,6 +559,14 @@ static int sp_fcntl(struct OcerzVM *vm, OcerzCPU *cpu)
+  * effect (ponytail: a guard page an allocator protects stays writable; nothing we run relies on the fault). */
+ #define M32_MAP_FAILED 0xffffffffu
+ static uint32_t map_len(uint32_t len) { return (len + 0x3fffu) & ~0x3fffu; }
++/* [a, b) of the 16 KB host page at page, for a fixed anonymous mapping: zeroed, the page mapped if it was not */
++static int map_part(uint32_t page, uint32_t a, uint32_t b)
++{
++    if (!ocerz_addr_readable(page))
++        return ocerz_map_fixed(page, 0x4000, PROT_READ | PROT_WRITE) != OCERZ_OK;
++    memset(m32_h(a), 0, b - a);
++    return 0;
++}
+ 
+ static int sp_mmap(struct OcerzVM *vm, OcerzCPU *cpu)
+ {
+@@ -540,13 +579,25 @@ static int sp_mmap(struct OcerzVM *vm, OcerzCPU *cpu)
+     }
+     uint32_t size = map_len(len), g;
+     if (flags & MAP_FIXED) {
++        /* 4 KB pages, as on the Intel Macs (MW3's VirtualAlloc commits and decommits single pages): the 16 KB host
++         * pages wholly inside are mapped afresh, and of a host page the range covers only partly, just the covered
++         * part is zeroed, as a fresh anonymous page would be; its other bytes stay */
+         g = want;
+-        if ((g & 0x3fff) || (uint64_t)g + size > M32_HANDLE_LO) {
++        uint64_t end = (uint64_t)g + ((len + 0xfffu) & ~0xfffu), lo = ((uint64_t)g + 0x3fff) & ~0x3fffull, hi = end & ~0x3fffull;
++        if ((g & 0xfff) || end > M32_HANDLE_LO) {
+             errno = EINVAL;
+             RETV(M32_MAP_FAILED);
+         }
+-        ocerz_unmap(g, size);
+-        if (ocerz_map_fixed(g, size, PROT_READ | PROT_WRITE) != OCERZ_OK) {
++        int bad = 0;
++        if (lo < hi) {
++            ocerz_unmap(lo, hi - lo);
++            bad |= ocerz_map_fixed(lo, hi - lo, PROT_READ | PROT_WRITE) != OCERZ_OK;
++        }
++        if (g < lo)
++            bad |= map_part(g & ~0x3fffu, g, (uint32_t)(lo < end ? lo : end));
++        if (hi < end && hi >= lo)
++            bad |= map_part((uint32_t)hi, (uint32_t)hi, (uint32_t)end);
++        if (bad) {
+             errno = ENOMEM;
+             RETV(M32_MAP_FAILED);
+         }
+@@ -559,7 +610,7 @@ static int sp_mmap(struct OcerzVM *vm, OcerzCPU *cpu)
+     }
+     if (!(flags & MAP_ANON) && fd >= 0) {
+         /* a file: shared mappings overlay the file where the offset allows it, anything else is a copy */
+-        if ((flags & MAP_SHARED) && !(off & 0x3fff) && ocerz_map_shared_file(g, size, prot | PROT_READ, fd, off) == OCERZ_OK)
++        if ((flags & MAP_SHARED) && !(off & 0x3fff) && !(g & 0x3fff) && ocerz_map_shared_file(g, size, prot | PROT_READ, fd, off) == OCERZ_OK)
+             RETV(g);
+         uint64_t done = 0;
+         while (done < len) {
+@@ -928,7 +979,186 @@ static int sp_bootstrap_check_in(struct OcerzVM *vm, OcerzCPU *cpu)
+     return RETV_PLAIN(kr);
+ }
+ 
++/* dispatch_once and dispatch_once_f on i386: the predicate is a 4-byte long the program's own inline check compares
++ * with ~0, which the host's 8-byte one would overrun, and the block or function is guest code.  So they run here:
++ * the predicate goes 0 -> 1 (running) -> ~0 (done) under one lock, a thread finding it running waits, and the block's
++ * invoke (offset 12 of an i386 block) or the function is called as guest code. */
++static pthread_mutex_t g_once_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t g_once_done = PTHREAD_COND_INITIALIZER;
++static void once_run(struct OcerzVM *vm, uint32_t pred, uint32_t fn, uint32_t arg)
++{
++    if (!pred || m32_rd(pred) == 0xffffffffu)
++        return;
++    pthread_mutex_lock(&g_once_lock);
++    while (m32_rd(pred) == 1)
++        pthread_cond_wait(&g_once_done, &g_once_lock);
++    if (m32_rd(pred) == 0xffffffffu) {
++        pthread_mutex_unlock(&g_once_lock);
++        return;
++    }
++    m32_wr(pred, 1);
++    pthread_mutex_unlock(&g_once_lock);
++    m32_call(vm, fn, &arg, 1, NULL, NULL);
++    pthread_mutex_lock(&g_once_lock);
++    m32_wr(pred, 0xffffffffu);
++    pthread_cond_broadcast(&g_once_done);
++    pthread_mutex_unlock(&g_once_lock);
++}
++static int sp_dispatch_once(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    uint32_t blk = m32_arg(cpu, 1);
++    once_run(vm, m32_arg(cpu, 0), blk ? m32_rd(blk + 12) : 0, blk);
++    return RETV_PLAIN(0);
++}
++static int sp_dispatch_once_f(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    once_run(vm, m32_arg(cpu, 0), m32_arg(cpu, 2), m32_arg(cpu, 1));
++    return RETV_PLAIN(0);
++}
++
++/* getaddrinfo(node, service, hints, res*) and freeaddrinfo(list): the i386 struct addrinfo is {flags, family,
++ * socktype, protocol, addrlen, canonname, addr, next}, 32 bytes, where the host's pointers are 8 bytes.  The host's
++ * list is copied to guest memory, one block per entry holding its address and name, and freed at once; freeaddrinfo
++ * frees the guest copy.  A sockaddr is the same bytes to both sides.  MW3 aborted in the host's freeaddrinfo. */
++enum { AI_ADDRLEN = 16, AI_CANON = 20, AI_ADDR = 24, AI_NEXT = 28, AI_SIZE32 = 32 };
++static void addrinfo_free(uint32_t g)
++{
++    for (uint32_t next; g; g = next) {
++        next = m32_rd(g + AI_NEXT);
++        m32_free(g);
++    }
++}
++static int sp_getaddrinfo(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    uint32_t node = m32_arg(cpu, 0), serv = m32_arg(cpu, 1), gh = m32_arg(cpu, 2), gres = m32_arg(cpu, 3);
++    struct addrinfo hints = { 0 }, *list = NULL;
++    if (gh)
++        memcpy(&hints, m32_h(gh), 16);   /* flags, family, socktype, protocol */
++    int r = getaddrinfo(node ? m32_h(node) : NULL, serv ? m32_h(serv) : NULL, gh ? &hints : NULL, &list);
++    uint32_t head = 0, prev = 0;
++    for (struct addrinfo *a = list; !r && a; a = a->ai_next) {
++        uint32_t alen = a->ai_addr ? a->ai_addrlen : 0, nlen = a->ai_canonname ? (uint32_t)strlen(a->ai_canonname) + 1 : 0;
++        uint32_t g = m32_malloc(AI_SIZE32 + alen + nlen);
++        if (!g) {
++            r = EAI_MEMORY;
++            break;
++        }
++        memcpy(m32_h(g), a, 16);
++        m32_wr(g + AI_ADDRLEN, alen);
++        m32_wr(g + AI_ADDR, alen ? g + AI_SIZE32 : 0);
++        m32_wr(g + AI_CANON, nlen ? g + AI_SIZE32 + alen : 0);
++        m32_wr(g + AI_NEXT, 0);
++        memcpy(m32_h(g + AI_SIZE32), a->ai_addr, alen);
++        memcpy(m32_h(g + AI_SIZE32 + alen), a->ai_canonname, nlen);
++        if (prev)
++            m32_wr(prev + AI_NEXT, g);
++        else
++            head = g;
++        prev = g;
++    }
++    if (list)
++        freeaddrinfo(list);
++    if (r) {
++        addrinfo_free(head);
++        head = 0;
++    }
++    if (gres)
++        m32_wr(gres, head);
++    RETV(r);
++}
++static int sp_freeaddrinfo(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    addrinfo_free(m32_arg(cpu, 0));
++    return RETV_PLAIN(0);
++}
++/* gethostbyname(name): the i386 struct hostent {name, aliases, addrtype, length, addr_list}, 20 bytes, rebuilt in guest
++ * memory with its arrays, names and addresses; like the host's static one, the next call replaces it */
++static int sp_gethostbyname(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    static uint32_t last;
++    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
++    uint32_t name = m32_arg(cpu, 0);
++    pthread_mutex_lock(&lock);
++    struct hostent *h = name ? gethostbyname(m32_h(name)) : NULL;
++    uint32_t g = 0;
++    if (h) {
++        uint32_t na = 0, nd = 0, size = 20 + (uint32_t)strlen(h->h_name) + 1;
++        for (; h->h_aliases && h->h_aliases[na]; na++)
++            size += (uint32_t)strlen(h->h_aliases[na]) + 1;
++        for (; h->h_addr_list && h->h_addr_list[nd]; nd++)
++            size += (uint32_t)h->h_length;
++        size += 4 * (na + 1 + nd + 1);
++        g = m32_malloc(size);
++    }
++    if (g) {
++        uint32_t aliases = g + 20, na = 0, nd = 0;
++        while (h->h_aliases && h->h_aliases[na])
++            na++;
++        while (h->h_addr_list && h->h_addr_list[nd])
++            nd++;
++        uint32_t addrs = aliases + 4 * (na + 1), data = addrs + 4 * (nd + 1);
++        m32_wr(g + 8, (uint32_t)h->h_addrtype);
++        m32_wr(g + 12, (uint32_t)h->h_length);
++        m32_wr(g + 4, aliases);
++        m32_wr(g + 16, addrs);
++        for (uint32_t i = 0; i < nd; i++, data += (uint32_t)h->h_length) {
++            memcpy(m32_h(data), h->h_addr_list[i], (size_t)h->h_length);
++            m32_wr(addrs + 4 * i, data);
++        }
++        m32_wr(addrs + 4 * nd, 0);
++        for (uint32_t i = 0; i <= na; i++) {
++            const char *str = i < na ? h->h_aliases[i] : h->h_name;
++            memcpy(m32_h(data), str, strlen(str) + 1);
++            m32_wr(i < na ? aliases + 4 * i : g, data);
++            data += (uint32_t)strlen(str) + 1;
++        }
++        m32_wr(aliases + 4 * na, 0);
++        m32_free(last);
++        last = g;
++    }
++    pthread_mutex_unlock(&lock);
++    return RETV_PLAIN(g);
++}
++
++/* pipe(int fds[2]): an array the generator cannot describe, the same bytes to both sides (libevent's wakeup pipe in
++ * Left 4 Dead 2's Chromium) */
++static int sp_pipe(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    uint32_t fds = m32_arg(cpu, 0);
++    RETV(fds ? pipe((int *)m32_h(fds)) : (errno = EFAULT, -1));
++}
++
++/* ioctl(fd, request, ...): one argument, guest memory when the request carries data (IOC_IN/IOC_OUT), else a number */
++static int sp_ioctl(struct OcerzVM *vm, OcerzCPU *cpu)
++{
++    unsigned long req = m32_arg(cpu, 1);
++    uint32_t a = m32_arg(cpu, 2);
++    RETV(ioctl((int)m32_arg(cpu, 0), req, (req & (IOC_IN | IOC_OUT)) && a ? m32_h(a) : (void *)(uintptr_t)a));
++}
++
++/* execv/execve: the vectors hold 4-byte pointers; the new program runs under ocerz as well (an i386 one by m32) */
++static int exec_guest(struct OcerzVM *vm, OcerzCPU *cpu, uint32_t genv)
++{
++    extern char **environ;
++    char *v[2][512];
++    uint32_t gv[2] = { m32_arg(cpu, 1), genv };
++    for (int k = 0; k < 2; k++) {
++        int n = 0;
++        for (uint32_t p; gv[k] && n < 511 && (p = m32_rd(gv[k] + 4 * (uint32_t)n)); n++)
++            v[k][n] = (char *)m32_h(p);
++        v[k][n] = NULL;
++    }
++    errno = ocerz_guest_execve(vm, cpu, (const char *)m32_h(m32_arg(cpu, 0)), v[0], genv ? v[1] : environ);
++    RETV(-1);
++}
++static int sp_execv(struct OcerzVM *vm, OcerzCPU *cpu) { return exec_guest(vm, cpu, 0); }
++static int sp_execve(struct OcerzVM *vm, OcerzCPU *cpu) { return exec_guest(vm, cpu, m32_arg(cpu, 2)); }
++
+ static const M32SpecialEntry g_specials[] = {
++    { "_dispatch_once", sp_dispatch_once }, { "_dispatch_once_f", sp_dispatch_once_f },
++    { "_execv", sp_execv }, { "_execve", sp_execve },
++    { "_ioctl", sp_ioctl }, { "_pipe", sp_pipe },
++    { "_getaddrinfo", sp_getaddrinfo }, { "_freeaddrinfo", sp_freeaddrinfo }, { "_gethostbyname", sp_gethostbyname },
+     { "_bootstrap_look_up", sp_bootstrap_look_up }, { "_bootstrap_check_in", sp_bootstrap_check_in },
+     { "_mach_absolute_time", sp_mach_absolute_time }, { "_mach_timebase_info", sp_mach_timebase_info },
+     { "_UpTime", sp_mach_absolute_time }, { "_AbsoluteToNanoseconds", sp_AbsoluteToNanoseconds },
+@@ -993,6 +1223,7 @@ static const M32SpecialEntry g_specials[] = {
+     { "_signal", sp_signal }, { "_sigaction", sp_sigaction }, { "_sigaltstack", sp_ok0 },
+     { "___bzero", sp_bzero }, { "_bzero", sp_bzero }, { "___stack_chk_fail", sp_stack_chk_fail },
+     { "_exit", sp_exit },
++    { "_SetFrontProcess", sp_SetFrontProcess },
+     { "__exit", sp__exit },
+     { "__Exit", sp__exit },
+     { "___cxa_atexit", sp_ok0 },   /* ponytail: C++ static destructors do not run at exit */
+diff --git a/src/m32_objc.c b/src/m32_objc.c
+index 7cd9b816..a6b13ab4 100644
+--- a/src/m32_objc.c
++++ b/src/m32_objc.c
+@@ -746,6 +746,50 @@ static int send_variadic(struct OcerzVM *vm, OcerzCPU *cpu, void *hself, Class s
+     return OCERZ_STEP_OK;
+ }
+ 
++/* Arrays of objects with their count last (arrayWithObjects:count:, dictionaryWithObjects:forKeys:count:,
++ * getObjects:andKeys:count:): the guest's ids are 4 bytes and the host's 8, so each array crosses as a copy of host
++ * ids, written back as guest ids when the method fills it. */
++static int objects_send(struct OcerzVM *vm, OcerzCPU *cpu, Method m, M32Export *e)
++{
++    M32Sig *g = m32_sig_parse(e->gnote, 1);
++    if (!g || g->nargs < 3 || (g->arg[g->nargs - 1].cls != 'u' && g->arg[g->nargs - 1].cls != 'i')) {
++        free(g);
++        return m32_cross(vm, cpu, e);
++    }
++    uint32_t esp = (uint32_t)cpu->gpr[OCERZ_RSP], at[8], old[8], buf[8], off = 4, count = 0;
++    int out[8], n = 0;
++    for (int i = 0; i < g->nargs; off += g->arg[i].size > 4 ? 8 : 4, i++) {
++        char t[16];
++        method_getArgumentType(m, (unsigned)i, t, sizeof t);
++        if ((!strcmp(t, "r^@") || !strcmp(t, "^@")) && n < 8) {
++            out[n] = t[0] == '^';
++            at[n++] = esp + off;
++        }
++        count = m32_rd(esp + off);
++    }
++    free(g);
++    if (count > (1u << 24))
++        return m32_cross(vm, cpu, e);
++    for (int a = 0; a < n; a++) {
++        old[a] = m32_rd(at[a]);
++        buf[a] = old[a] ? m32_malloc(count * 8 + 8) : 0;
++        uint64_t *h = buf[a] ? (uint64_t *)m32_h(buf[a]) : NULL;
++        for (uint32_t k = 0; h && k < count; k++)
++            h[k] = (uint64_t)(uintptr_t)m32_objc_to_host(m32_rd(old[a] + 4 * k));
++        m32_wr(at[a], buf[a]);
++    }
++    int r = m32_cross(vm, cpu, e);
++    for (int a = 0; a < n; a++) {
++        uint64_t *h = buf[a] ? (uint64_t *)m32_h(buf[a]) : NULL;
++        for (uint32_t k = 0; h && out[a] && k < count; k++)
++            m32_wr(old[a] + 4 * k, m32_objc_to_guest((void *)(uintptr_t)h[k]));
++        m32_wr(at[a], old[a]);
++        if (buf[a])
++            m32_free(buf[a]);
++    }
++    return r;
++}
++
+ /* self_at: the guest stack word holding the receiver (1, or 2 after a stret pointer); super: the objc_super */
+ static int host_send(struct OcerzVM *vm, OcerzCPU *cpu, void *hself, Class super_cls, uint32_t gsel, uint32_t gtypes, int is_super)
+ {
+@@ -788,6 +832,8 @@ static int host_send(struct OcerzVM *vm, OcerzCPU *cpu, void *hself, Class super
+         sup.super_class = super_cls;
+         m32_cross_self = &sup;
+     }
++    if (strstr(henc, "^@") && strstr(name, "count:"))
++        return objects_send(vm, cpu, m, e);
+     return m32_cross(vm, cpu, e);
+ }
+ 
+diff --git a/src/m32_stdio.c b/src/m32_stdio.c
+index 2ae0fc36..fe6dd475 100644
+--- a/src/m32_stdio.c
++++ b/src/m32_stdio.c
+@@ -678,6 +678,21 @@ static int sp_getcwd(struct OcerzVM *vm, OcerzCPU *cpu)
+     RET(out);
+ }
+ 
++/* The guest's FILE for a host stream.  i386 code reads struct __sFILE's fields inline: Valve's file system flocks
++ * fp->_file (offset 14) of a file it opened for writing, and on a handle (fd 0) gave up with the file already
++ * truncated.  The twin is an i386 __sFILE (88 bytes) aliased to the host stream with only _file kept current; the rest
++ * reads 0, so the getc/putc macros fall through to __srget/__swbuf.  libc reuses closed FILEs, and their twins. */
++uint32_t m32_file(void *host_file)
++{
++    uint32_t g = m32_handle_twin_lookup(host_file);
++    if (!g) {
++        g = m32_static_alloc(88, 4);
++        m32_alias(g, host_file);
++    }
++    *(int16_t *)m32_h(g + 14) = (int16_t)fileno((FILE *)host_file);
++    return g;
++}
++
+ const M32SpecialEntry m32_stdio_specials[] = {
+     { "___error", sp___error },
+     { "_printf", sp_printf }, { "_vprintf", sp_vprintf }, { "_fprintf", sp_fprintf }, { "_vfprintf", sp_vfprintf },
 diff --git a/src/mem.c b/src/mem.c
 index 7c84cb1f..4d81f69d 100644
 --- a/src/mem.c
@@ -1816,10 +3056,10 @@ index f1e53890..ac86b73d 100644
  
  #define OC_RO_META 0x1u
 diff --git a/src/sysbridge.c b/src/sysbridge.c
-index 4d0688b8..05af8a33 100644
+index 00a504cd..cc27f107 100644
 --- a/src/sysbridge.c
 +++ b/src/sysbridge.c
-@@ -276,7 +276,7 @@
+@@ -279,7 +279,7 @@
  #include <wchar.h>
  #include <arm_acle.h>
  #include <mach/mach.h>
@@ -1828,7 +3068,7 @@ index 4d0688b8..05af8a33 100644
  
  #ifndef F_RDADVISEV
  #define F_RDADVISEV 116
-@@ -1706,6 +1706,22 @@ int ocerz_sys_pthread_create(struct OcerzVM *vm, OcerzCPU *cpu)
+@@ -1712,6 +1712,22 @@ int ocerz_sys_pthread_create(struct OcerzVM *vm, OcerzCPU *cpu)
      return sb_ret(vm, cpu, rc);
  }
  
@@ -1852,7 +3092,7 @@ index 4d0688b8..05af8a33 100644
  {
      void *value = sb_ptr(sb_arg(cpu, 0));
 diff --git a/src/syscall.c b/src/syscall.c
-index ca145c02..068900be 100644
+index f9d76770..96c72a2d 100644
 --- a/src/syscall.c
 +++ b/src/syscall.c
 @@ -419,7 +419,7 @@
@@ -1865,10 +3105,10 @@ index ca145c02..068900be 100644
  #include <sys/shm.h>
  #include <mach-o/dyld.h>
 diff --git a/src/vm.c b/src/vm.c
-index 78c47542..92023767 100644
+index 572884c6..4aa29ec8 100644
 --- a/src/vm.c
 +++ b/src/vm.c
-@@ -351,7 +351,7 @@
+@@ -363,7 +363,7 @@
  #include <mach-o/loader.h>
  #include <malloc/malloc.h>
  #include <mach/mach.h>
@@ -1877,7 +3117,7 @@ index 78c47542..92023767 100644
  
  #define OCERZ_CALL_SENTINEL 0x00000000deadca11ull
  #define ENV_SET(name) ({ static int set_ = -1; if (set_ < 0) set_ = getenv(name) != NULL; set_; })
-@@ -1888,8 +1888,32 @@ static void ripdump_handler(int sig, siginfo_t *si, void *ctx)
+@@ -1923,8 +1923,32 @@ static void ripdump_handler(int sig, siginfo_t *si, void *ctx)
      }
  }
  
@@ -1911,7 +3151,7 @@ index 78c47542..92023767 100644
      ocerz_cpu_dump(g_cur_cpu, stderr);
      uint64_t rsp = g_cur_cpu->gpr[OCERZ_RSP];
      fprintf(stderr, "ocerz: WILD-STACK rsp=%#llx:", (unsigned long long)rsp);
-@@ -2631,7 +2655,7 @@ static void crash_handler(int sig, siginfo_t *si, void *ctx)
+@@ -2666,7 +2690,7 @@ static void crash_handler(int sig, siginfo_t *si, void *ctx)
                  write(2, ab, (size_t)(a - ab));
              }
              if (getenv("OCERZ_WILDDUMP"))
@@ -1920,7 +3160,7 @@ index 78c47542..92023767 100644
              if (ocerz_signal_deliver(g_cur_cpu, SIGSEGV, wgaddr, 1, werr)) {
                  ocerz_recov_note(5, g_cur_cpu->rip);
                  depth = 0;
-@@ -2693,7 +2717,7 @@ static void crash_handler(int sig, siginfo_t *si, void *ctx)
+@@ -2728,7 +2752,7 @@ static void crash_handler(int sig, siginfo_t *si, void *ctx)
                  }
              }
              if (getenv("OCERZ_WILDDUMP"))
@@ -1929,7 +3169,7 @@ index 78c47542..92023767 100644
              g_cur_cpu->terminated = 1;
              ocerz_recov_note(6, g_cur_cpu->rip);
              siglongjmp(*g_sig_recover, 1);
-@@ -2993,6 +3017,22 @@ static void crash_handler(int sig, siginfo_t *si, void *ctx)
+@@ -3028,6 +3052,22 @@ static void crash_handler(int sig, siginfo_t *si, void *ctx)
          }
          p = str_into(p, "\n");
          write(2, buf, (size_t)(p - buf));
@@ -1952,7 +3192,7 @@ index 78c47542..92023767 100644
          const char *pk = getenv("OCERZ_PEEK");
          if (pk) {
              p = buf;
-@@ -3591,7 +3631,10 @@ static int vm_call_core(OcerzVM *vm, uint64_t func, OcerzGuestCall *call, int ng
+@@ -3627,7 +3667,10 @@ static int vm_call_core(OcerzVM *vm, uint64_t func, OcerzGuestCall *call, int ng
      ocerz_host_sigmask_clear("callback");
      uint64_t jmark = ocerz_jit_thread_mark();
      int esc_r;
@@ -1964,7 +3204,7 @@ index 78c47542..92023767 100644
          esc_r = t_jit_escape_r;
      else
          esc_r = 0;
-@@ -3706,6 +3749,20 @@ static int vm_call_core(OcerzVM *vm, uint64_t func, OcerzGuestCall *call, int ng
+@@ -3748,6 +3791,20 @@ static int vm_call_core(OcerzVM *vm, uint64_t func, OcerzGuestCall *call, int ng
                  break;
              }
  
@@ -1985,7 +3225,7 @@ index 78c47542..92023767 100644
              {
                  uint64_t frames[24];
                  int nframes = 0;
-@@ -4228,9 +4285,11 @@ int ocerz_vm_run_cpu(OcerzVM *vm, OcerzCPU *cpu)
+@@ -4272,9 +4329,11 @@ int ocerz_vm_run_cpu(OcerzVM *vm, OcerzCPU *cpu)
          esc_r = 0;
          break;
      case 2:
@@ -1997,7 +3237,7 @@ index 78c47542..92023767 100644
          esc_r = 0;
          if (ENV_SET("OCERZ_CPUREG_LOG")) {
              static _Atomic unsigned recov;
-@@ -4314,6 +4373,20 @@ int ocerz_vm_run_cpu(OcerzVM *vm, OcerzCPU *cpu)
+@@ -4366,6 +4425,20 @@ int ocerz_vm_run_cpu(OcerzVM *vm, OcerzCPU *cpu)
          if (r == OCERZ_STEP_FATAL) {
          fatal:
              ocerz_cpu_dump(cpu, stderr);
@@ -2128,6 +3368,534 @@ index cc0483fb..f119319b 100644
      { "x87-courier",   h_x87_courier },
      { "x87-trunc",     h_x87_trunc },
      { "x87-pc24",      h_x87_pc24 },
+diff --git a/tests/m32/audioqueue.c b/tests/m32/audioqueue.c
+new file mode 100644
+index 00000000..bab99cf8
+--- /dev/null
++++ b/tests/m32/audioqueue.c
+@@ -0,0 +1,46 @@
++/* AudioQueue output as Bink's and Miles' CoreAudio drivers use it: i386 AudioQueueBuffers (28 bytes, the samples
++ * written through mAudioData), enqueued, and handed back to the output callback as the same buffers. Plays a moment
++ * of silence. audioqueue.expected is the x86_64 build's output under Rosetta. */
++#include <AudioToolbox/AudioToolbox.h>
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
++
++static AudioQueueBufferRef bufs[3];
++static volatile int calls, same, intact;
++
++static void played(void *user, AudioQueueRef q, AudioQueueBufferRef b)
++{
++    int i = (int)(intptr_t)b->mUserData;
++    same += i >= 0 && i < 3 && bufs[i] == b && user == (void *)bufs;
++    intact += b->mAudioDataBytesCapacity == 4096 && b->mAudioData != NULL;
++    if (++calls < 6) {
++        memset(b->mAudioData, 0, 4096);
++        b->mAudioDataByteSize = 4096;
++        AudioQueueEnqueueBuffer(q, b, 0, NULL);
++    }
++}
++
++int main(void)
++{
++    AudioStreamBasicDescription f = { 44100, kAudioFormatLinearPCM, kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
++                                      4, 1, 4, 2, 16, 0 };
++    AudioQueueRef q;
++    OSStatus e = AudioQueueNewOutput(&f, played, bufs, NULL, NULL, 0, &q);
++    printf("new %d\n", (int)e);
++    for (int i = 0; i < 3; i++) {
++        e = AudioQueueAllocateBuffer(q, 4096, &bufs[i]);
++        bufs[i]->mUserData = (void *)(intptr_t)i;
++        memset(bufs[i]->mAudioData, 0, 4096);
++        bufs[i]->mAudioDataByteSize = 4096;
++        e |= AudioQueueEnqueueBuffer(q, bufs[i], 0, NULL);
++        printf("buffer %d %d capacity %u\n", i, (int)e, (unsigned)bufs[i]->mAudioDataBytesCapacity);
++    }
++    printf("start %d\n", (int)AudioQueueStart(q, NULL));
++    for (int i = 0; i < 300 && calls < 6; i++)
++        usleep(10000);
++    AudioQueueStop(q, true);
++    printf("callbacks %d same %d intact %d\n", calls >= 6, same == calls, intact == calls);
++    printf("dispose %d\n", (int)AudioQueueDispose(q, true));
++    return 0;
++}
+diff --git a/tests/m32/audioqueue.expected b/tests/m32/audioqueue.expected
+new file mode 100644
+index 00000000..902c5ceb
+--- /dev/null
++++ b/tests/m32/audioqueue.expected
+@@ -0,0 +1,8 @@
++new 0
++buffer 0 0 capacity 4096
++buffer 1 0 capacity 4096
++buffer 2 0 capacity 4096
++start 0
++callbacks 1 same 1 intact 1
++dispose 0
++exit 0
+diff --git a/tests/m32/audioqueue.link b/tests/m32/audioqueue.link
+new file mode 100644
+index 00000000..604793bd
+--- /dev/null
++++ b/tests/m32/audioqueue.link
+@@ -0,0 +1 @@
++-framework AudioToolbox
+diff --git a/tests/m32/cfformat.c b/tests/m32/cfformat.c
+new file mode 100644
+index 00000000..723956cb
+--- /dev/null
++++ b/tests/m32/cfformat.c
+@@ -0,0 +1,44 @@
++/* Variadic calls the API database cannot describe: CFStringCreateWithFormat (and its va_list form), whose CFString
++ * format can hold %@, and ioctl's one argument. MW3 released the NULL the unsupported call returned.
++ * cfformat.expected is the x86_64 build's output under Rosetta. */
++#include <CoreFoundation/CoreFoundation.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/ioctl.h>
++#include <unistd.h>
++
++static CFStringRef fmt_v(CFStringRef fmt, ...)
++{
++    va_list ap;
++    va_start(ap, fmt);
++    CFStringRef s = CFStringCreateWithFormatAndArguments(NULL, NULL, fmt, ap);
++    va_end(ap);
++    return s;
++}
++
++static void show(const char *what, CFStringRef s)
++{
++    char buf[256] = "(null)";
++    if (s) {
++        CFStringGetCString(s, buf, sizeof buf, kCFStringEncodingUTF8);
++        CFRelease(s);
++    }
++    printf("%s [%s]\n", what, buf);
++}
++
++int main(void)
++{
++    show("format", CFStringCreateWithFormat(NULL, NULL, CFSTR("%d %s %@ %.2f %lld %x"), 42, "text", CFSTR("object"), 2.5,
++                                            1LL << 40, 0xbeef));
++    show("va_list", fmt_v(CFSTR("%@/%05u"), CFSTR("dir"), 7u));
++    char path[] = "/tmp/m32cfformatXXXXXX";
++    int fd = mkstemp(path), n = -1;
++    write(fd, "hello", 5);
++    lseek(fd, 0, SEEK_SET);
++    int r = ioctl(fd, FIONREAD, &n);
++    close(fd);
++    unlink(path);
++    printf("ioctl %d FIONREAD %d\n", r, n);
++    return 0;
++}
+diff --git a/tests/m32/cfformat.expected b/tests/m32/cfformat.expected
+new file mode 100644
+index 00000000..40eeba60
+--- /dev/null
++++ b/tests/m32/cfformat.expected
+@@ -0,0 +1,4 @@
++format [42 text object 2.50 1099511627776 beef]
++va_list [dir/00007]
++ioctl 0 FIONREAD 5
++exit 0
+diff --git a/tests/m32/cfformat.link b/tests/m32/cfformat.link
+new file mode 100644
+index 00000000..b1720c32
+--- /dev/null
++++ b/tests/m32/cfformat.link
+@@ -0,0 +1 @@
++-framework CoreFoundation
+diff --git a/tests/m32/cfnumber.c b/tests/m32/cfnumber.c
+new file mode 100644
+index 00000000..939bc9f8
+--- /dev/null
++++ b/tests/m32/cfnumber.c
+@@ -0,0 +1,24 @@
++/* CFNumber with the types named after long, CFIndex, NSInteger and CGFloat, which are 4 bytes on i386 (8 on the host):
++ * a value read back stays within its own bytes, and one created from them is whole. cfnumber.expected is the x86_64
++ * build's output under Rosetta. */
++#include <CoreFoundation/CoreFoundation.h>
++#include <stdio.h>
++
++int main(void)
++{
++    CFNumberType types[] = { kCFNumberLongType, kCFNumberCFIndexType, kCFNumberNSIntegerType };
++    for (int i = 0; i < 3; i++) {
++        long in = -123456;
++        CFNumberRef n = CFNumberCreate(NULL, types[i], &in);
++        struct { long v, guard; } out = { 0, 0x5a5a };
++        Boolean ok = CFNumberGetValue(n, types[i], &out.v);
++        printf("type %d: ok %d value %ld guard %#lx\n", (int)types[i], ok, out.v, out.guard);
++        CFRelease(n);
++    }
++    CGFloat f = 2.5;
++    CFNumberRef n = CFNumberCreate(NULL, kCFNumberCGFloatType, &f);
++    struct { CGFloat v; long guard; } out = { 0, 0x5a5a };
++    CFNumberGetValue(n, kCFNumberCGFloatType, &out.v);
++    printf("CGFloat: value %.2f guard %#lx\n", (double)out.v, out.guard);
++    return 0;
++}
+diff --git a/tests/m32/cfnumber.expected b/tests/m32/cfnumber.expected
+new file mode 100644
+index 00000000..47edc3e7
+--- /dev/null
++++ b/tests/m32/cfnumber.expected
+@@ -0,0 +1,5 @@
++type 10: ok 1 value -123456 guard 0x5a5a
++type 14: ok 1 value -123456 guard 0x5a5a
++type 15: ok 1 value -123456 guard 0x5a5a
++CGFloat: value 2.50 guard 0x5a5a
++exit 0
+diff --git a/tests/m32/cfnumber.link b/tests/m32/cfnumber.link
+new file mode 100644
+index 00000000..b1720c32
+--- /dev/null
++++ b/tests/m32/cfnumber.link
+@@ -0,0 +1 @@
++-framework CoreFoundation
+diff --git a/tests/m32/cfuuid.c b/tests/m32/cfuuid.c
+new file mode 100644
+index 00000000..22fbda00
+--- /dev/null
++++ b/tests/m32/cfuuid.c
+@@ -0,0 +1,22 @@
++/* CFUUIDGetConstantUUIDWithBytes and CFUUIDCreateWithBytes take sixteen byte arguments, more than a notation holds.
++ * IOKit's plug-in UUIDs are made this way (Left 4 Dead 2's input system). cfuuid.expected is the x86_64 build's
++ * output under Rosetta. */
++#include <CoreFoundation/CoreFoundation.h>
++#include <stdio.h>
++
++int main(void)
++{
++    CFUUIDRef a = CFUUIDGetConstantUUIDWithBytes(NULL, 0xFA, 0x12, 0xFA, 0x38, 0x6F, 0x1A, 0x11, 0xD4, 0xBA, 0x0C, 0x00,
++                                                 0x05, 0x02, 0x8F, 0x18, 0xD5);
++    CFUUIDRef b = CFUUIDGetConstantUUIDWithBytes(NULL, 0xFA, 0x12, 0xFA, 0x38, 0x6F, 0x1A, 0x11, 0xD4, 0xBA, 0x0C, 0x00,
++                                                 0x05, 0x02, 0x8F, 0x18, 0xD5);
++    CFUUIDRef c = CFUUIDCreateWithBytes(NULL, 0xFA, 0x12, 0xFA, 0x38, 0x6F, 0x1A, 0x11, 0xD4, 0xBA, 0x0C, 0x00, 0x05,
++                                        0x02, 0x8F, 0x18, 0xD5);
++    char buf[64] = "(null)";
++    CFStringRef s = a ? CFUUIDCreateString(NULL, a) : NULL;
++    if (s)
++        CFStringGetCString(s, buf, sizeof buf, kCFStringEncodingASCII);
++    CFUUIDBytes by = CFUUIDGetUUIDBytes(c);
++    printf("constant %s same %d equal %d last byte %#x\n", buf, a == b, a && c && CFEqual(a, c), by.byte15);
++    return 0;
++}
+diff --git a/tests/m32/cfuuid.expected b/tests/m32/cfuuid.expected
+new file mode 100644
+index 00000000..10bb9ffc
+--- /dev/null
++++ b/tests/m32/cfuuid.expected
+@@ -0,0 +1,2 @@
++constant FA12FA38-6F1A-11D4-BA0C-0005028F18D5 same 1 equal 1 last byte 0xd5
++exit 0
+diff --git a/tests/m32/cfuuid.link b/tests/m32/cfuuid.link
+new file mode 100644
+index 00000000..b1720c32
+--- /dev/null
++++ b/tests/m32/cfuuid.link
+@@ -0,0 +1 @@
++-framework CoreFoundation
+diff --git a/tests/m32/dispatchonce.c b/tests/m32/dispatchonce.c
+new file mode 100644
+index 00000000..bb730660
+--- /dev/null
++++ b/tests/m32/dispatchonce.c
+@@ -0,0 +1,43 @@
++/* dispatch_once and dispatch_once_f from i386 code, where the predicate is 4 bytes (8 on the host), so m32 runs them
++ * itself. Eight threads race for each; each block and function runs once, and the others wait for it to finish.
++ * dispatchonce.expected is the x86_64 build's output under Rosetta. */
++#include <dispatch/dispatch.h>
++#include <pthread.h>
++#include <stdio.h>
++#include <unistd.h>
++
++static dispatch_once_t once_block, once_fn;
++static volatile int runs_block, runs_fn, ready_block, ready_fn, early;
++
++static void run_fn(void *ctx)
++{
++    __sync_fetch_and_add((volatile int *)ctx, 1);
++    usleep(20000);
++    ready_fn = 1;
++}
++
++static void *worker(void *arg)
++{
++    (void)arg;
++    dispatch_once(&once_block, ^{
++        __sync_fetch_and_add(&runs_block, 1);
++        usleep(20000);
++        ready_block = 1;
++    });
++    early += !ready_block;
++    dispatch_once_f(&once_fn, (void *)&runs_fn, run_fn);
++    early += !ready_fn;
++    return NULL;
++}
++
++int main(void)
++{
++    pthread_t t[8];
++    for (int i = 0; i < 8; i++)
++        pthread_create(&t[i], NULL, worker, NULL);
++    for (int i = 0; i < 8; i++)
++        pthread_join(t[i], NULL);
++    printf("block ran %d, function ran %d, returned early %d, predicates set %d %d\n", runs_block, runs_fn, early,
++           once_block != 0, once_fn != 0);
++    return 0;
++}
+diff --git a/tests/m32/dispatchonce.expected b/tests/m32/dispatchonce.expected
+new file mode 100644
+index 00000000..0912549a
+--- /dev/null
++++ b/tests/m32/dispatchonce.expected
+@@ -0,0 +1,2 @@
++block ran 1, function ran 1, returned early 0, predicates set 1 1
++exit 0
+diff --git a/tests/m32/exec.c b/tests/m32/exec.c
+new file mode 100644
+index 00000000..85e9c16f
+--- /dev/null
++++ b/tests/m32/exec.c
+@@ -0,0 +1,29 @@
++/* execv and execve from an i386 guest: the vectors hold 4-byte pointers, and the new i386 program runs under ocerz too.
++ * The program execs itself twice, the second time with an environment of its own. */
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++int main(int argc, char **argv)
++{
++    if (argc == 1) {
++        printf("parent\n");
++        fflush(stdout);
++        char *args[] = { argv[0], "execv", "two words", NULL };
++        execv(argv[0], args);
++        printf("execv failed\n");
++        return 1;
++    }
++    if (!strcmp(argv[1], "execv")) {
++        printf("execv argc %d [%s]\n", argc, argv[2]);
++        fflush(stdout);
++        char *args[] = { argv[0], "execve", NULL }, *env[] = { "M32_EXEC=set", NULL };
++        execve(argv[0], args, env);
++        printf("execve failed\n");
++        return 1;
++    }
++    const char *e = getenv("M32_EXEC");
++    printf("execve argc %d M32_EXEC=%s\n", argc, e ? e : "(none)");
++    return 0;
++}
+diff --git a/tests/m32/exec.expected b/tests/m32/exec.expected
+new file mode 100644
+index 00000000..fff0e8b9
+--- /dev/null
++++ b/tests/m32/exec.expected
+@@ -0,0 +1,4 @@
++parent
++execv argc 3 [two words]
++execve argc 2 M32_EXEC=set
++exit 0
+diff --git a/tests/m32/filefd.c b/tests/m32/filefd.c
+new file mode 100644
+index 00000000..046c6d28
+--- /dev/null
++++ b/tests/m32/filefd.c
+@@ -0,0 +1,32 @@
++/* A FILE's fields as i386 code reads them inline.  Valve's file system (Left 4 Dead 2) flocks fp->_file of every file
++ * it opens for writing and gives up when that fails, after fopen has truncated it: settings and config.cfg came out
++ * empty while _file read 0.  _file must be the stream's descriptor, also for a FILE libc reuses after fclose and for
++ * fdopen and tmpfile.  Expected output written by hand. */
++#include <stdio.h>
++#include <sys/file.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++FILE *fopen_plain(const char *, const char *) __asm("_fopen");
++
++static int same(FILE *f) { return f && *(short *)((char *)f + 14) == fileno(f); }
++
++int main(void)
++{
++    const char *p = "/tmp/m32-filefd.txt";
++    FILE *a = fopen_plain(p, "w"), *b = fopen("/dev/null", "r");
++    int locked = flock(*(short *)((char *)a + 14), LOCK_EX | LOCK_NB) == 0;
++    fputs("\"config\"\n{\n}\n", a);
++    printf("fopen %d %d flock %d\n", same(a), same(b), locked);
++    fclose(a);
++    struct stat st;
++    stat(p, &st);
++    printf("written %lld\n", (long long)st.st_size);
++    FILE *c = fopen(p, "r");   /* libc hands out a's FILE again */
++    printf("reused %d\n", same(c));
++    FILE *d = fdopen(dup(fileno(b)), "r"), *t = tmpfile();
++    printf("fdopen %d tmpfile %d\n", same(d), same(t));
++    fclose(b), fclose(c), fclose(d), fclose(t);
++    unlink(p);
++    return 0;
++}
+diff --git a/tests/m32/filefd.expected b/tests/m32/filefd.expected
+new file mode 100644
+index 00000000..b5368fff
+--- /dev/null
++++ b/tests/m32/filefd.expected
+@@ -0,0 +1,5 @@
++fopen 1 1 flock 1
++written 13
++reused 1
++fdopen 1 tmpfile 1
++exit 0
+diff --git a/tests/m32/frontprocess.expected b/tests/m32/frontprocess.expected
+new file mode 100644
+index 00000000..f298f123
+--- /dev/null
++++ b/tests/m32/frontprocess.expected
+@@ -0,0 +1,2 @@
++asked 1
++exit 0
+diff --git a/tests/m32/frontprocess.link b/tests/m32/frontprocess.link
+new file mode 100644
+index 00000000..c95c86fc
+--- /dev/null
++++ b/tests/m32/frontprocess.link
+@@ -0,0 +1 @@
++-framework ApplicationServices
+diff --git a/tests/m32/frontprocess.m b/tests/m32/frontprocess.m
+new file mode 100644
+index 00000000..5b744195
+--- /dev/null
++++ b/tests/m32/frontprocess.m
+@@ -0,0 +1,32 @@
++// A game that brings itself to the front as Left 4 Dead 2's launcher does from the script Steam runs: TransformProcessType
++// and SetFrontProcess on kCurrentProcess before its NSApplication exists.  Today's cooperative activation ignores that
++// while another app is in front, so the game ran unfocused (throttled, without the mouse) until the user switched away
++// and back.  The app must now be asked to activate once its event loop turns, once per request; whether the window
++// server then grants it depends on what is in front, so the request is what is counted.  Expected written by hand.
++#import <AppKit/AppKit.h>
++#import <ApplicationServices/ApplicationServices.h>
++#import <objc/message.h>
++
++static int asked;
++@interface App : NSApplication @end
++@implementation App - (void)activateIgnoringOtherApps:(BOOL)flag { asked++; [super activateIgnoringOtherApps:flag]; } @end
++
++int main(void)
++{
++    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
++    ProcessSerialNumber psn = { 0, kCurrentProcess }, other = { 0, 12345 };
++    TransformProcessType(&psn, kProcessTransformToForegroundApplication);
++    SetFrontProcess(&psn);
++    SetFrontProcess(&other);   /* another process: no request for this one */
++    [App sharedApplication];
++    for (int i = 0; i < 50; i++) {
++        NSEvent *e = ((NSEvent * (*)(id, SEL, NSUInteger, id, id, BOOL))objc_msgSend)(   /* a 4-byte mask, as the game */
++            NSApp, @selector(nextEventMatchingMask:untilDate:inMode:dequeue:), 0xffffffffu,
++            [NSDate dateWithTimeIntervalSinceNow:0.01], NSDefaultRunLoopMode, YES);
++        if (e)
++            [NSApp sendEvent:e];
++    }
++    printf("asked %d\n", asked);
++    [pool drain];
++    return 0;
++}
+diff --git a/tests/m32/fsfork.c b/tests/m32/fsfork.c
+new file mode 100644
+index 00000000..1c1ca51e
+--- /dev/null
++++ b/tests/m32/fsfork.c
+@@ -0,0 +1,70 @@
++/* The Carbon File Manager as MW3 uses it: FSOpenFork's 16-bit fork number (32-bit on the host; the guard beside it
++ * must survive), PBReadForkAsync with a completion routine (the i386 parameter block; the completion runs on another
++ * thread), FSGetCatalogInfoBulk over a folder (i386 FSCatalogInfo records). fsfork.expected is the x86_64 build's
++ * output under Rosetta. */
++#include <CoreServices/CoreServices.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++static volatile int completed;
++static void done(ParmBlkPtr pb) { (void)pb; completed++; }
++
++int main(void)
++{
++    char dir[] = "/tmp/m32fsforkXXXXXX", path[256];
++    mkdtemp(dir);
++    const char *names[] = { "a.ff", "b.ff", "c.iwd" };
++    for (int i = 0; i < 3; i++) {
++        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
++        FILE *f = fopen(path, "w");
++        for (int k = 0; k < 1000 * (i + 1); k++)
++            fputc('a' + k % 26, f);
++        fclose(f);
++    }
++    snprintf(path, sizeof path, "%s/b.ff", dir);
++    FSRef ref;
++    HFSUniStr255 fork;
++    FSGetDataForkName(&fork);
++    struct { FSIORefNum num; short guard; } open = { 0, 0x1234 };
++    OSErr e = FSPathMakeRef((const UInt8 *)path, &ref, NULL);
++    e |= FSOpenFork(&ref, fork.length, fork.unicode, fsRdPerm, &open.num);
++    printf("open %d guard %#x\n", e, (unsigned short)open.guard);
++    char buf[64] = { 0 };
++    FSForkIOParam pb;
++    memset(&pb, 0, sizeof pb);
++    pb.ioCompletion = NewIOCompletionUPP(done);
++    pb.forkRefNum = open.num;
++    pb.buffer = buf;
++    pb.requestCount = 10;
++    pb.positionMode = fsFromStart;
++    pb.positionOffset = 1990;
++    PBReadForkAsync(&pb);
++    for (int i = 0; i < 500 && (pb.ioResult > 0 || !completed); i++)
++        usleep(2000);
++    printf("read %d actual %u [%s] completed %d\n", pb.ioResult, (unsigned)pb.actualCount, buf, completed);
++    FSCloseFork(open.num);
++    FSRef dref;
++    FSIterator it;
++    FSPathMakeRef((const UInt8 *)dir, &dref, NULL);
++    FSOpenIterator(&dref, kFSIterateFlat, &it);
++    FSCatalogInfo info[8];
++    ItemCount n = 0;
++    Boolean changed = 0;
++    e = FSGetCatalogInfoBulk(it, 8, &n, &changed, kFSCatInfoDataSizes | kFSCatInfoNodeFlags, info, NULL, NULL, NULL);
++    unsigned long long total = 0;
++    int files = 0;
++    for (ItemCount i = 0; i < n; i++) {
++        total += info[i].dataLogicalSize;
++        files += !(info[i].nodeFlags & kFSNodeIsDirectoryMask);
++    }
++    printf("bulk %d count %lu files %d bytes %llu\n", e == errFSNoMoreItems ? 0 : e, (unsigned long)n, files, total);
++    FSCloseIterator(it);
++    for (int i = 0; i < 3; i++) {
++        snprintf(path, sizeof path, "%s/%s", dir, names[i]);
++        unlink(path);
++    }
++    rmdir(dir);
++    return 0;
++}
+diff --git a/tests/m32/fsfork.expected b/tests/m32/fsfork.expected
+new file mode 100644
+index 00000000..1a78cf91
+--- /dev/null
++++ b/tests/m32/fsfork.expected
+@@ -0,0 +1,4 @@
++open 0 guard 0x1234
++read 0 actual 10 [opqrstuvwx] completed 1
++bulk 0 count 3 files 3 bytes 6000
++exit 0
+diff --git a/tests/m32/fsfork.link b/tests/m32/fsfork.link
+new file mode 100644
+index 00000000..b4eec25f
+--- /dev/null
++++ b/tests/m32/fsfork.link
+@@ -0,0 +1 @@
++-framework CoreServices
 diff --git a/tests/m32/glbufferoffset.c b/tests/m32/glbufferoffset.c
 new file mode 100644
 index 00000000..9a509bbb
@@ -2256,6 +4024,489 @@ index 00000000..fbce3651
 +++ b/tests/m32/glbufferoffset.link
 @@ -0,0 +1 @@
 +-framework OpenGL
+diff --git a/tests/m32/glmirror.c b/tests/m32/glmirror.c
+new file mode 100644
+index 00000000..1350deee
+--- /dev/null
++++ b/tests/m32/glmirror.c
+@@ -0,0 +1,88 @@
++/* Mapped buffers keep a mirror in guest memory: a map copies the buffer in only when what it holds may have changed
++ * outside the guest's own calls.  The way Valve's ToGL fills a dynamic buffer (orphan with glBufferData, map, write,
++ * flush the written range under GL_APPLE_flush_buffer_range, unmap), a partial write without flushing, glBufferData
++ * with data, glBufferSubData, a READ_ONLY map, and a name deleted and made again.  Each result is read back from the
++ * driver with glGetBufferSubData.  glmirror.expected is the x86_64 build's output under Rosetta. */
++#include <OpenGL/OpenGL.h>
++#include <OpenGL/gl.h>
++#include <OpenGL/glext.h>
++#include <stdio.h>
++#include <string.h>
++
++static unsigned sum(const unsigned char *p, int n)
++{
++    unsigned s = 0;
++    for (int i = 0; i < n; i++)
++        s = s * 31 + p[i];
++    return s;
++}
++
++static unsigned driver(int n)
++{
++    static unsigned char back[4096];
++    glGetBufferSubDataARB(GL_ARRAY_BUFFER, 0, n, back);
++    return sum(back, n);
++}
++
++int main(void)
++{
++    CGLPixelFormatAttribute at[] = { kCGLPFAAccelerated, 0 };
++    CGLPixelFormatObj pf;
++    GLint np;
++    CGLContextObj ctx;
++    CGLChoosePixelFormat(at, &pf, &np);
++    CGLCreateContext(pf, NULL, &ctx);
++    CGLSetCurrentContext(ctx);
++    unsigned char want[4096];
++    GLuint b;
++    glGenBuffersARB(1, &b);
++    glBindBufferARB(GL_ARRAY_BUFFER, b);
++
++    /* ToGL's dynamic buffer, three frames */
++    glBufferParameteriAPPLE(GL_ARRAY_BUFFER, GL_BUFFER_FLUSHING_UNMAP_APPLE, GL_FALSE);
++    for (int frame = 0; frame < 3; frame++) {
++        glBufferDataARB(GL_ARRAY_BUFFER, 4096, NULL, GL_STREAM_DRAW);
++        unsigned char *p = glMapBufferARB(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
++        for (int i = 0; i < 1024; i++)
++            p[i] = want[i] = (unsigned char)(i * 7 + frame);
++        glFlushMappedBufferRangeAPPLE(GL_ARRAY_BUFFER, 0, 1024);
++        glUnmapBufferARB(GL_ARRAY_BUFFER);
++        printf("frame %d flushed range %d\n", frame, driver(1024) == sum(want, 1024));
++    }
++    glBufferParameteriAPPLE(GL_ARRAY_BUFFER, GL_BUFFER_FLUSHING_UNMAP_APPLE, GL_TRUE);
++
++    /* the whole buffer known, then part of it written through a map: the rest keeps its bytes */
++    for (int i = 0; i < 4096; i++)
++        want[i] = (unsigned char)(i * 13);
++    glBufferDataARB(GL_ARRAY_BUFFER, 4096, want, GL_DYNAMIC_DRAW);
++    unsigned char *p = glMapBufferARB(GL_ARRAY_BUFFER, GL_READ_WRITE);
++    printf("data then map reads it %d\n", sum(p, 4096) == sum(want, 4096));
++    for (int i = 100; i < 200; i++)
++        p[i] = want[i] = 0x5a;
++    glUnmapBufferARB(GL_ARRAY_BUFFER);
++    printf("partial write kept the rest %d\n", driver(4096) == sum(want, 4096));
++
++    /* glBufferSubData, then a READ_ONLY map */
++    memset(want + 1000, 0x33, 50);
++    glBufferSubDataARB(GL_ARRAY_BUFFER, 1000, 50, want + 1000);
++    p = glMapBufferARB(GL_ARRAY_BUFFER, GL_READ_ONLY);
++    printf("sub data seen through a map %d\n", sum(p, 4096) == sum(want, 4096));
++    glUnmapBufferARB(GL_ARRAY_BUFFER);
++    printf("read only map changed nothing %d\n", driver(4096) == sum(want, 4096));
++
++    /* deleted and made again: the new buffer's own contents */
++    glDeleteBuffersARB(1, &b);
++    glGenBuffersARB(1, &b);
++    glBindBufferARB(GL_ARRAY_BUFFER, b);
++    for (int i = 0; i < 4096; i++)
++        want[i] = (unsigned char)(255 - i);
++    glBufferDataARB(GL_ARRAY_BUFFER, 4096, want, GL_STATIC_DRAW);
++    p = glMapBufferARB(GL_ARRAY_BUFFER, GL_READ_ONLY);
++    printf("new buffer's contents %d\n", sum(p, 4096) == sum(want, 4096));
++    glUnmapBufferARB(GL_ARRAY_BUFFER);
++    printf("errors %#x\n", glGetError());
++    glDeleteBuffersARB(1, &b);
++    CGLSetCurrentContext(NULL);
++    CGLDestroyContext(ctx);
++    return 0;
++}
+diff --git a/tests/m32/glmirror.expected b/tests/m32/glmirror.expected
+new file mode 100644
+index 00000000..1f051a1d
+--- /dev/null
++++ b/tests/m32/glmirror.expected
+@@ -0,0 +1,10 @@
++frame 0 flushed range 1
++frame 1 flushed range 1
++frame 2 flushed range 1
++data then map reads it 1
++partial write kept the rest 1
++sub data seen through a map 1
++read only map changed nothing 1
++new buffer's contents 1
++errors 0
++exit 0
+diff --git a/tests/m32/glmirror.link b/tests/m32/glmirror.link
+new file mode 100644
+index 00000000..fbce3651
+--- /dev/null
++++ b/tests/m32/glmirror.link
+@@ -0,0 +1 @@
++-framework OpenGL
+diff --git a/tests/m32/ioplugin.c b/tests/m32/ioplugin.c
+new file mode 100644
+index 00000000..e007bc19
+--- /dev/null
++++ b/tests/m32/ioplugin.c
+@@ -0,0 +1,15 @@
++/* IOCreatePlugInInterfaceForService hands back a COM-style object the caller drives through its vtable, which does not
++ * cross; it answers kIOReturnUnsupported and leaves the interface NULL, so a caller (SDL's and Chromium's HID code in
++ * Left 4 Dead 2) goes on without the device. Expected output written by hand. */
++#include <IOKit/IOCFPlugIn.h>
++#include <IOKit/hid/IOHIDLib.h>
++#include <stdio.h>
++
++int main(void)
++{
++    IOCFPlugInInterface **plug = (IOCFPlugInInterface **)1;
++    SInt32 score = 7;
++    IOReturn r = IOCreatePlugInInterfaceForService(0, kIOHIDDeviceUserClientTypeID, kIOCFPlugInInterfaceID, &plug, &score);
++    printf("result %#x interface %p\n", (unsigned)r, (void *)plug);
++    return 0;
++}
+diff --git a/tests/m32/ioplugin.expected b/tests/m32/ioplugin.expected
+new file mode 100644
+index 00000000..2ab8c2e6
+--- /dev/null
++++ b/tests/m32/ioplugin.expected
+@@ -0,0 +1,2 @@
++result 0xe00002c7 interface 0x0
++exit 0
+diff --git a/tests/m32/ioplugin.link b/tests/m32/ioplugin.link
+new file mode 100644
+index 00000000..286094fe
+--- /dev/null
++++ b/tests/m32/ioplugin.link
+@@ -0,0 +1 @@
++-framework IOKit -framework CoreFoundation
+diff --git a/tests/m32/mmap4k.c b/tests/m32/mmap4k.c
+new file mode 100644
+index 00000000..e71c7ac7
+--- /dev/null
++++ b/tests/m32/mmap4k.c
+@@ -0,0 +1,35 @@
++/* MAP_FIXED anonymous mappings at 4 KB granularity, as the i386 Intel Macs allowed (MW3's VirtualAlloc commits and
++ * decommits single pages this way): the pages asked for read as zeros, every other byte is untouched.
++ * mmap4k.expected is the x86_64 build's output under Rosetta, which keeps 4 KB pages. */
++#include <stdio.h>
++#include <string.h>
++#include <sys/mman.h>
++
++static unsigned char *base;
++
++static void fixed(unsigned off, unsigned len)
++{
++    void *p = mmap(base + off, len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0);
++    printf("fixed %#x+%#x %s\n", off, len, p == base + off ? "ok" : "failed");
++}
++
++int main(void)
++{
++    base = mmap(NULL, 0x10000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
++    memset(base, 0xab, 0x10000);
++    fixed(0x1000, 0x1000);   /* inside one 16 KB host page */
++    fixed(0x4000, 0x1000);   /* at a 16 KB boundary */
++    fixed(0x7000, 0x2000);   /* across one */
++    fixed(0x9000, 0x6000);   /* a whole 16 KB page and parts of two others */
++    unsigned zero = 0, kept = 0;
++    for (unsigned i = 0; i < 0x10000; i++) {
++        int cleared = (i >= 0x1000 && i < 0x2000) || (i >= 0x4000 && i < 0x5000) || (i >= 0x7000 && i < 0x9000) ||
++                      (i >= 0x9000 && i < 0xf000);
++        if (cleared)
++            zero += base[i] == 0;
++        else
++            kept += base[i] == 0xab;
++    }
++    printf("zeroed %#x kept %#x\n", zero, kept);
++    return 0;
++}
+diff --git a/tests/m32/mmap4k.expected b/tests/m32/mmap4k.expected
+new file mode 100644
+index 00000000..bd2a4362
+--- /dev/null
++++ b/tests/m32/mmap4k.expected
+@@ -0,0 +1,6 @@
++fixed 0x1000+0x1000 ok
++fixed 0x4000+0x1000 ok
++fixed 0x7000+0x2000 ok
++fixed 0x9000+0x6000 ok
++zeroed 0xa000 kept 0x6000
++exit 0
+diff --git a/tests/m32/objc_arrays.expected b/tests/m32/objc_arrays.expected
+new file mode 100644
+index 00000000..cf96bb0e
+--- /dev/null
++++ b/tests/m32/objc_arrays.expected
+@@ -0,0 +1,7 @@
++array 3 a 2 tag
++dict 3 a 2 1
++init 2
++set 3 1
++get 3
++empty 0
++exit 0
+diff --git a/tests/m32/objc_arrays.m b/tests/m32/objc_arrays.m
+new file mode 100644
+index 00000000..872f1287
+--- /dev/null
++++ b/tests/m32/objc_arrays.m
+@@ -0,0 +1,26 @@
++#import <Foundation/Foundation.h>
++@interface Tag : NSObject @end
++@implementation Tag - (NSString *)description { return @"tag"; } @end
++int main(void) {
++    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
++    id objs[3] = { @"a", [NSNumber numberWithInt:2], [[[Tag alloc] init] autorelease] };
++    id keys[3] = { @"k1", @"k2", @"k3" };
++    NSArray *a = [NSArray arrayWithObjects:objs count:3];
++    printf("array %lu %s %d %s\n", (unsigned long)[a count], [[a objectAtIndex:0] UTF8String], [[a objectAtIndex:1] intValue],
++           [[[a objectAtIndex:2] description] UTF8String]);
++    NSDictionary *d = [NSDictionary dictionaryWithObjects:objs forKeys:keys count:3];
++    printf("dict %lu %s %d %d\n", (unsigned long)[d count], [[d objectForKey:@"k1"] UTF8String], [[d objectForKey:@"k2"] intValue],
++           [d objectForKey:@"k3"] == objs[2]);
++    NSDictionary *d2 = [[[NSDictionary alloc] initWithObjects:objs forKeys:keys count:2] autorelease];
++    printf("init %lu\n", (unsigned long)[d2 count]);
++    NSSet *s = [NSSet setWithObjects:objs count:3];
++    printf("set %lu %d\n", (unsigned long)[s count], [s containsObject:@"a"]);
++    id outo[3] = { 0 }, outk[3] = { 0 };
++    [d getObjects:outo andKeys:outk count:3];
++    int found = 0;
++    for (int i = 0; i < 3; i++) found += [d objectForKey:outk[i]] == outo[i];
++    printf("get %d\n", found);
++    printf("empty %lu\n", (unsigned long)[[NSArray arrayWithObjects:objs count:0] count]);
++    [pool drain];
++    return 0;
++}
+diff --git a/tests/m32/quicktime.c b/tests/m32/quicktime.c
+new file mode 100644
+index 00000000..b8262c49
+--- /dev/null
++++ b/tests/m32/quicktime.c
+@@ -0,0 +1,29 @@
++/* QuickTime and QuickDraw are gone from macOS. Their calls Left 4 Dead 2's video code makes answer as QuickTime did on a
++ * Mac that cannot play the file: EnterMovies succeeds, opening a movie fails with unimpErr (-4) and leaves no movie, and
++ * the GWorld calls do nothing. The game then shows no menu movie. Expected output written by hand. */
++#include <stdio.h>
++
++typedef short OSErr;
++OSErr EnterMovies(void);
++OSErr GetMoviesError(void);
++OSErr OpenMovieFile(const void *spec, short *ref, signed char permission);
++OSErr NewMovieFromFile(void **movie, short ref, short *id, unsigned char *name, short flags, unsigned char *changed);
++void SetGWorld(void *port, void *device);
++void *GetGWorldPixMap(void *world);
++unsigned char LockPixels(void *pixmap);
++long GetPixRowBytes(void *pixmap);
++
++int main(void)
++{
++    short ref = 123;
++    void *movie = (void *)1;
++    char spec[70] = { 0 };
++    printf("EnterMovies %d\n", EnterMovies());
++    OSErr open = OpenMovieFile(spec, &ref, 1);
++    printf("OpenMovieFile %d ref %d\n", open, ref);
++    OSErr made = NewMovieFromFile(&movie, ref, NULL, NULL, 0, NULL);
++    printf("NewMovieFromFile %d movie %p error %d\n", made, movie, GetMoviesError());
++    SetGWorld(NULL, NULL);
++    printf("GWorld %p %d %ld\n", GetGWorldPixMap(NULL), LockPixels(NULL), GetPixRowBytes(NULL));
++    return 0;
++}
+diff --git a/tests/m32/quicktime.expected b/tests/m32/quicktime.expected
+new file mode 100644
+index 00000000..5813891f
+--- /dev/null
++++ b/tests/m32/quicktime.expected
+@@ -0,0 +1,5 @@
++EnterMovies 0
++OpenMovieFile -4 ref 0
++NewMovieFromFile -4 movie 0x0 error -4
++GWorld 0x0 0 0
++exit 0
+diff --git a/tests/m32/resolver.c b/tests/m32/resolver.c
+new file mode 100644
+index 00000000..5a153d2b
+--- /dev/null
++++ b/tests/m32/resolver.c
+@@ -0,0 +1,31 @@
++/* The resolver's structures from i386: getaddrinfo's list (i386 struct addrinfo, 32 bytes) freed with freeaddrinfo,
++ * and gethostbyname's struct hostent. MW3 aborted in the host's freeaddrinfo. resolver.expected is the x86_64 build's
++ * output under Rosetta. */
++#include <arpa/inet.h>
++#include <netdb.h>
++#include <netinet/in.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/socket.h>
++
++int main(void)
++{
++    struct addrinfo hints, *list = NULL;
++    memset(&hints, 0, sizeof hints);
++    hints.ai_family = AF_INET;
++    hints.ai_socktype = SOCK_STREAM;
++    hints.ai_flags = AI_CANONNAME;
++    int r = getaddrinfo("localhost", "8080", &hints, &list);
++    printf("getaddrinfo %d\n", r);
++    for (struct addrinfo *a = list; a; a = a->ai_next) {
++        struct sockaddr_in *in = (struct sockaddr_in *)a->ai_addr;
++        printf("  family %d socktype %d addrlen %u %s:%d canon %s\n", a->ai_family, a->ai_socktype, (unsigned)a->ai_addrlen,
++               inet_ntoa(in->sin_addr), ntohs(in->sin_port), a->ai_canonname ? a->ai_canonname : "-");
++    }
++    freeaddrinfo(list);
++    printf("missing %d\n", getaddrinfo("no-such-host.invalid", NULL, &hints, &list) != 0);
++    struct hostent *h = gethostbyname("localhost");
++    printf("gethostbyname %s type %d length %d first %s\n", h ? h->h_name : "-", h ? h->h_addrtype : 0, h ? h->h_length : 0,
++           h && h->h_addr_list[0] ? inet_ntoa(*(struct in_addr *)h->h_addr_list[0]) : "-");
++    return 0;
++}
+diff --git a/tests/m32/resolver.expected b/tests/m32/resolver.expected
+new file mode 100644
+index 00000000..bbd6420c
+--- /dev/null
++++ b/tests/m32/resolver.expected
+@@ -0,0 +1,5 @@
++getaddrinfo 0
++  family 2 socktype 1 addrlen 16 127.0.0.1:8080 canon localhost
++missing 1
++gethostbyname localhost type 2 length 4 first 127.0.0.1
++exit 0
+diff --git a/tests/m32/runloopsrc.c b/tests/m32/runloopsrc.c
+new file mode 100644
+index 00000000..ca2e92ed
+--- /dev/null
++++ b/tests/m32/runloopsrc.c
+@@ -0,0 +1,34 @@
++/* Run loop observers and version 0 sources from i386 code: their contexts are five and ten 4-byte fields there, 8-byte
++ * ones on the host, with callbacks in them. Left 4 Dead 2's threads crashed the host passing them through.
++ * runloopsrc.expected is the x86_64 build's output under Rosetta. */
++#include <CoreFoundation/CoreFoundation.h>
++#include <stdio.h>
++
++static int performed, observed, retained, released, scheduled;
++static const void *keep(const void *info) { retained++; return info; }
++static void drop(const void *info) { (void)info; released++; }
++static void schedule(void *info, CFRunLoopRef rl, CFStringRef mode) { (void)rl; (void)mode; scheduled += info == &performed; }
++static void perform(void *info) { *(int *)info += 1; }
++static void observe(CFRunLoopObserverRef o, CFRunLoopActivity a, void *info) { (void)o; (void)a; *(int *)info += 1; }
++
++int main(void)
++{
++    CFRunLoopRef rl = CFRunLoopGetCurrent();
++    CFRunLoopSourceContext sc = { 0, &performed, keep, drop, NULL, NULL, NULL, schedule, NULL, perform };
++    CFRunLoopSourceRef src = CFRunLoopSourceCreate(NULL, 0, &sc);
++    CFRunLoopObserverContext oc = { 0, &observed, keep, drop, NULL };
++    CFRunLoopObserverRef obs = CFRunLoopObserverCreate(NULL, kCFRunLoopBeforeWaiting | kCFRunLoopBeforeSources, true, 0,
++                                                       observe, &oc);
++    CFRunLoopAddSource(rl, src, kCFRunLoopDefaultMode);
++    CFRunLoopAddObserver(rl, obs, kCFRunLoopDefaultMode);
++    CFRunLoopSourceSignal(src);
++    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
++    printf("source created %d scheduled %d performed %d observed %d\n", src != NULL, scheduled, performed,
++           observed > 0);
++    CFRunLoopRemoveObserver(rl, obs, kCFRunLoopDefaultMode);
++    CFRunLoopRemoveSource(rl, src, kCFRunLoopDefaultMode);
++    CFRelease(obs);
++    CFRelease(src);
++    printf("retained %d released %d\n", retained, released);
++    return 0;
++}
+diff --git a/tests/m32/runloopsrc.expected b/tests/m32/runloopsrc.expected
+new file mode 100644
+index 00000000..d6fb7341
+--- /dev/null
++++ b/tests/m32/runloopsrc.expected
+@@ -0,0 +1,3 @@
++source created 1 scheduled 1 performed 1 observed 1
++retained 2 released 2
++exit 0
+diff --git a/tests/m32/runloopsrc.link b/tests/m32/runloopsrc.link
+new file mode 100644
+index 00000000..b1720c32
+--- /dev/null
++++ b/tests/m32/runloopsrc.link
+@@ -0,0 +1 @@
++-framework CoreFoundation
+diff --git a/tests/m32/scstore.c b/tests/m32/scstore.c
+new file mode 100644
+index 00000000..015afad8
+--- /dev/null
++++ b/tests/m32/scstore.c
+@@ -0,0 +1,35 @@
++/* SystemConfiguration calls that take a {version, info, retain, release, copyDescription} context, 4-byte fields on
++ * i386 (Chromium in Left 4 Dead 2 watches the network with them), and pipe's int[2]. scstore.expected is the x86_64
++ * build's output under Rosetta. */
++#include <SystemConfiguration/SystemConfiguration.h>
++#include <stdio.h>
++#include <unistd.h>
++
++static int retained, released;
++static const void *keep(const void *info) { retained++; return info; }
++static void drop(const void *info) { (void)info; released++; }
++static void changed(SCDynamicStoreRef s, CFArrayRef keys, void *info) { (void)s; (void)keys; (void)info; }
++static void reach(SCNetworkReachabilityRef t, SCNetworkReachabilityFlags f, void *info) { (void)t; (void)f; (void)info; }
++
++int main(void)
++{
++    static int info;
++    SCDynamicStoreContext dc = { 0, &info, keep, drop, NULL };
++    SCDynamicStoreRef store = SCDynamicStoreCreate(NULL, CFSTR("m32 test"), changed, &dc);
++    SCDynamicStoreRef store2 = SCDynamicStoreCreateWithOptions(NULL, CFSTR("m32 test 2"), NULL, changed, &dc);
++    SCNetworkReachabilityRef r = SCNetworkReachabilityCreateWithName(NULL, "localhost");
++    SCNetworkReachabilityContext rc = { 0, &info, keep, drop, NULL };
++    Boolean set = SCNetworkReachabilitySetCallback(r, reach, &rc);
++    printf("store %d store2 %d reachability callback %d retained %d\n", store != NULL, store2 != NULL, set, retained);
++    CFRelease(store);
++    CFRelease(store2);
++    SCNetworkReachabilitySetCallback(r, NULL, NULL);
++    CFRelease(r);
++    int fds[2] = { -1, -1 };
++    char buf[4] = "";
++    int p = pipe(fds);
++    write(fds[1], "abc", 4);
++    read(fds[0], buf, 4);
++    printf("released %d pipe %d [%s]\n", released, p, buf);
++    return 0;
++}
+diff --git a/tests/m32/scstore.expected b/tests/m32/scstore.expected
+new file mode 100644
+index 00000000..066af402
+--- /dev/null
++++ b/tests/m32/scstore.expected
+@@ -0,0 +1,3 @@
++store 1 store2 1 reachability callback 1 retained 3
++released 3 pipe 0 [abc]
++exit 0
+diff --git a/tests/m32/scstore.link b/tests/m32/scstore.link
+new file mode 100644
+index 00000000..971fce57
+--- /dev/null
++++ b/tests/m32/scstore.link
+@@ -0,0 +1 @@
++-framework SystemConfiguration -framework CoreFoundation
+diff --git a/tests/m32/versions.expected b/tests/m32/versions.expected
+new file mode 100644
+index 00000000..42c7654e
+--- /dev/null
++++ b/tests/m32/versions.expected
+@@ -0,0 +1,4 @@
++appkit 1
++foundation 1
++corefoundation 1
++exit 0
+diff --git a/tests/m32/versions.m b/tests/m32/versions.m
+new file mode 100644
+index 00000000..a9b4fa8f
+--- /dev/null
++++ b/tests/m32/versions.m
+@@ -0,0 +1,9 @@
++// The framework version variables (doubles, aligned to 4 on i386 and 8 on arm64): SDL 2 reads NSAppKitVersionNumber
++// to decide whether display modes can be queried, and finds no display when it reads 0.
++#import <AppKit/AppKit.h>
++int main(void) {
++    printf("appkit %d\n", NSAppKitVersionNumber >= NSAppKitVersionNumber10_6);
++    printf("foundation %d\n", NSFoundationVersionNumber >= NSFoundationVersionNumber10_6);
++    printf("corefoundation %d\n", kCFCoreFoundationVersionNumber >= kCFCoreFoundationVersionNumber10_6);
++    return 0;
++}
 diff --git a/tests/unit/test_a64emit.c b/tests/unit/test_a64emit.c
 index 37ee97e9..631bfddf 100644
 --- a/tests/unit/test_a64emit.c
@@ -2341,3 +4592,27 @@ index e7e125ea..1c756bfc 100644
 +special _curl_multi_info_read curl_multi_info_read
 +special _curl_slist_append curl_slist_append
 +special _curl_slist_free_all curl_slist_free_all
+diff --git a/tools/sdkgen/sdkgen.c b/tools/sdkgen/sdkgen.c
+index b6e30250..9e57582f 100644
+--- a/tools/sdkgen/sdkgen.c
++++ b/tools/sdkgen/sdkgen.c
+@@ -2100,8 +2100,8 @@ static const char *class32(CXType tx, CXType ta, int is_result, Buf *out, int ho
+             int same_scalar = (is_integer_kind(k, &sign) || k == TK.Float || k == TK.Double) &&
+                               clang_Type_getSizeOf(px) == clang_Type_getSizeOf(pa);
+             if (!same_scalar && !layout_same(px, pa, pxs)) {
+-                if (is_integer_kind(k, &sign) && !cst && !is_result) {
+-                    buf_addc(out, host ? 'p' : sign ? 'W' : 'V');
++                if (is_integer_kind(k, &sign) && !cst && !is_result) {   /* FSIORefNum *: 16 bits on i386, 32 on the host */
++                    buf_addc(out, host ? 'p' : clang_Type_getSizeOf(px) == 2 ? 'S' : sign ? 'W' : 'V');
+                     return NULL;
+                 }
+                 if (px.kind == TK.Record && !is_result) {   /* a structure read, or written back, through a pointer */
+@@ -2178,6 +2178,8 @@ static void classify32(Rec *r)
+             kind = "ptr";
+         else if (is_integer_kind(cx_.kind, &sign) || cx_.kind == TK.Enum || cx_.kind == TK.Bool)
+             kind = "int";
++        else if ((cx_.kind == TK.Double || cx_.kind == TK.Float) && cx_.kind == ca.kind)
++            kind = "blob";     /* NSAppKitVersionNumber: the same bytes, only aligned to 4 on i386 */
+         else if (layout_same(cx_, ca, tx))
+             kind = "blob";
+         if (!kind) {

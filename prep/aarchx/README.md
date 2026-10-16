@@ -6,11 +6,19 @@ Objective-C bridge. Only its **native mode** is usable on iOS: it synthesizes x8
 system libraries and bridges each call to the arm64 framework, so no Rosetta x86 shared cache is
 needed. Cache mode maps Rosetta's cache and exists only on a Mac.
 
-The pinned commit is efd64711 of [Jfishin/AArchX](https://github.com/Jfishin/AArchX): mont127/AArchX's main
-plus the MW3 and L4D2 series (mont127/AArchX#13, #14), which carry MacShack's earlier fixes and m32 upstream.
-`macshack.patch` (`git diff efd64711 ios` of Jfishin/AArchX, without test binaries) holds what iOS needs and the
-phone-proven fixes not upstream; the iOS changes are marked `MacShack:` in the source:
+The pinned commit is 4722b7b8 of mont127/AArchX (its main at version 0.7.3), which carries MacShack's earlier fixes
+and m32. `macshack.patch` (`git diff 4722b7b8 ios-073` of [Jfishin/AArchX](https://github.com/Jfishin/AArchX), without
+test binaries) holds what iOS needs, the m32 fixes Batman: Arkham Asylum needs from the open MW3 and L4D2 series, and
+the phone-proven fixes not upstream; the iOS changes are marked `MacShack:` in the source:
 
+- from mont127/AArchX#13 and #14 (MW3, L4D2), the m32 fixes for calls Batman makes: `dispatch_once` with i386's 4-byte
+  predicate; Objective-C `...Objects:count:` arrays; `execv`/`execve`; double and float variables
+  (`kCFAbsoluteTimeIntervalSince1970`); `mmap` `MAP_FIXED` on 4 KB pages; 16-bit File Manager fork numbers
+  (`FSOpenResourceFile`); `CFStringCreateWithFormat` and `ioctl` arguments; AudioQueue output; `gethostbyname`; CFUUID
+  byte constructors; `IOCreatePlugInInterfaceForService` answering unsupported; CFNumber's 4-byte types; run loop
+  source and SystemConfiguration callback contexts; `pipe`; QuickTime and QuickDraw failing as on a Mac without them;
+  mapped GL buffers mirrored in guest memory; a `FILE` that holds its descriptor; `SetFrontProcess` activating the
+  app. The rest of the two series serves only MW3 and L4D2 and is left to those PRs
 - iOS declarations: `include/ocerz/mach_vm_compat.h` (the iOS SDK's `mach_vm.h` is a bare `#error`, though
   libsystem_kernel exports every function; `pthread_jit_write_protect_np` becomes a no-op there) and
   `bootstrap_look_up`/`bootstrap_check_in` prototypes (no `servers/bootstrap.h` on iOS)
@@ -37,7 +45,7 @@ phone-proven fixes not upstream; the iOS changes are marked `MacShack:` in the s
   flags nothing reads no longer keeps the earlier flags live (shld/shrd); shifts, rotates, adc, sbb, setcc and
   mul/div with a memory operand run as load, register form, store; pushf, popf, movs, stos, shifts of ah-bh, haddps,
   rsqrtss and rcpss run translated (`docs/m32.md` lists their switches; diff32 covers each). These are also the
-  `m32-speed` branch on efd64711, for upstream.
+  `m32-speed-073` branch of Jfishin/AArchX on 4722b7b8, for upstream.
 
 Not carried over from the old patch (no failing test on this base): the side-gap fusion check (`check_sidegap.c`
 passes without it), the low-shadow fallback (it broke cache mode on the Mac; unreachable on iOS) and the bridged-call
@@ -58,7 +66,8 @@ export DEVELOPER_DIR=<path to Xcode 27>.app/Contents/Developer
 make -j && make apis && bash tools/build_guest_cxx.sh   # guest x86 libc++ in runtime/guest
 # make apis stops at DVDPlayback (gone from the macOS 27 SDK): run tools/sdkgen.sh --no-baseline <library> for the
 # rest of tools/sdkgen/libraries (and --guest i386 <library> runtime/apis32 for APIS32_LIBS), then touch the stamps
-bash tools/fetch_guest32_cxx.sh   # i386 libstdc++, libgcc and libc++ in runtime/guest32 (m32)
+bash tools/fetch_guest32_cxx.sh   # i386 libstdc++ and libgcc in runtime/guest32 (m32)
+# (MacPorts has replaced the GCC 15.2 i386 archive it pins with 15.3: the prebuilt-deps download has the libraries)
 bash ../../prep/aarchx/guest_libstdcxx.sh   # GNU libstdc++.6 (old Unity, Aragami, Blasphemous, Gungeon)
 echo 'int ocerz_libstdcxx_shim;' > /tmp/stdcxx.c && G=runtime/guest/usr/lib
 # libgcc_s.1 stand-in (FMOD links it, imports nothing): re-exports the guest libunwind
