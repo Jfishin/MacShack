@@ -799,6 +799,20 @@ void ShackHooksEnableGL(void) {
         gGLBundle = CFBundleCreate(NULL, (__bridge CFURLRef)[NSURL fileURLWithPath:@"/System/Library/Frameworks/OpenGLES.framework"]);
 }
 
+// A hook's original is what the guest binds the name to: a MacShack shim's own export where one defines it, the
+// system's otherwise. MacShack Play dlopens the shims after launch, and RTLD_DEFAULT searches launch-time images first,
+// so it found the real IOKit, not libShackIOKit (ShackHID): Rewired's IORegistry lookup saw no pad (Cuphead, 2026-10-15).
+static void *guestOriginal(const char *name) {
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const char *path = _dyld_get_image_name(i);
+        if (!strstr(path, "/libShack")) continue;
+        void *h = dlopen(path, RTLD_NOLOAD | RTLD_FIRST), *f = h ? dlsym(h, name) : NULL;   // RTLD_FIRST: that image only
+        if (h) dlclose(h);
+        if (f) return f;
+    }
+    return dlsym(RTLD_DEFAULT, name);
+}
+
 void ShackHooksInstall(NSString *bundlePath, NSString *execPath, NSString *codePath) {
     // Once only: a second swap would undo the first, and fishhook would save our own
     // shack_proc_pidpath as the original (infinite recursion for foreign pids).
@@ -893,7 +907,7 @@ void ShackHooksInstall(NSString *bundlePath, NSString *execPath, NSString *codeP
         // Originals come from dlsym, not fishhook: fishhook only fills them in if some already-loaded image imports the
         // symbol, and a hook whose original is still NULL when a later image calls it jumps to 0.
         for (size_t i = 0; i < sizeof r / sizeof *r; i++)
-            if (r[i].replaced) { *r[i].replaced = dlsym(RTLD_DEFAULT, r[i].name); r[i].replaced = NULL; }
+            if (r[i].replaced) { *r[i].replaced = guestOriginal(r[i].name); r[i].replaced = NULL; }
         rebind_symbols(r, sizeof r / sizeof *r);   // ponytail: rebinds every image incl. the host; fine, the host is done after launch
         struct sigaction fault = {0}; fault.sa_sigaction = shack_fault; fault.sa_flags = SA_SIGINFO | SA_ONSTACK;
         orig_sigaction(SIGSEGV, &fault, NULL); orig_sigaction(SIGBUS, &fault, NULL);
