@@ -544,10 +544,12 @@ static int startWindowsProgram(pid_t *pid, char *const argv[], char *const envp[
     for (int i = 3; i < argc; i++) {
         NSString *a = @(argv[i]) ?: @"";
         if ([option firstMatchInString:a options:0 range:NSMakeRange(0, a.length)]) say([@"Steam Play: launch option not passed on: " stringByAppendingString:a]);
-        else [args addObject:a];
+        else [args addObject:viaSharedHome(a)];
     }
-    NSDictionary<NSString *, NSString *> *query = @{@"exe": @(argv[2]) ?: @"", @"install": env[@"STEAM_COMPAT_INSTALL_PATH"] ?: @"",
-        @"compat": env[@"STEAM_COMPAT_DATA_PATH"] ?: @"", @"appid": env[@"STEAM_COMPAT_APP_ID"] ?: env[@"SteamAppId"] ?: @"",
+    // Paths as Play can read them: Steam's default library is spelled through MacShack's container (as for Mac games).
+    NSDictionary<NSString *, NSString *> *query = @{@"exe": viaSharedHome(@(argv[2]) ?: @""),
+        @"install": viaSharedHome(env[@"STEAM_COMPAT_INSTALL_PATH"] ?: @""), @"compat": viaSharedHome(env[@"STEAM_COMPAT_DATA_PATH"] ?: @""),
+        @"appid": env[@"STEAM_COMPAT_APP_ID"] ?: env[@"SteamAppId"] ?: @"",
         @"args": [args componentsJoinedByString:@" "],
         // NotProton's launch, for the Steam API in Windows games (lsteamclient, the ntdll detour, Valve's DLLs in the prefix),
         // started by its steam.exe; Play prepares Valve's steamclient for it first.
