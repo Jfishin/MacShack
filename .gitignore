@@ -9,3 +9,4 @@ host/Guests/*
 !host/Guests/.gitkeep
 .claude/worktrees/
 Signing.local.xcconfig
+macshack-prebuilt-deps.tar.gz
