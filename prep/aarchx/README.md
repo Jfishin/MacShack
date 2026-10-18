@@ -7,9 +7,9 @@ system libraries and bridges each call to the arm64 framework, so no Rosetta x86
 needed. Cache mode maps Rosetta's cache and exists only on a Mac.
 
 The pinned commit is 4722b7b8 of mont127/AArchX (its main at version 0.7.3), which carries MacShack's earlier fixes
-and m32. `macshack.patch` (`git diff 4722b7b8 ios-073` of [Jfishin/AArchX](https://github.com/Jfishin/AArchX), without
-test binaries) holds what iOS needs, the m32 fixes Batman: Arkham Asylum needs from the open MW3 and L4D2 series, and
-the phone-proven fixes not upstream; the iOS changes are marked `MacShack:` in the source:
+and m32. `macshack.patch` (a diff against 4722b7b8, without test binaries) holds what iOS needs, the m32 fixes Batman:
+Arkham Asylum needs from the MW3 and L4D2 series (upstream after 0.7.3), and the phone-proven fixes not upstream; the
+iOS changes are marked `MacShack:` in the source:
 
 - from mont127/AArchX#13 and #14 (MW3, L4D2), the m32 fixes for calls Batman makes: `dispatch_once` with i386's 4-byte
   predicate; Objective-C `...Objects:count:` arrays; `execv`/`execve`; double and float variables
@@ -44,8 +44,7 @@ the phone-proven fixes not upstream; the iOS changes are marked `MacShack:` in t
 - m32 JIT coverage (Batman's renderer ran millions of instructions a second in the interpreter): a shift by cl whose
   flags nothing reads no longer keeps the earlier flags live (shld/shrd); shifts, rotates, adc, sbb, setcc and
   mul/div with a memory operand run as load, register form, store; pushf, popf, movs, stos, shifts of ah-bh, haddps,
-  rsqrtss and rcpss run translated (`docs/m32.md` lists their switches; diff32 covers each). These are also the
-  `m32-speed-073` branch of Jfishin/AArchX on 4722b7b8, for upstream.
+  rsqrtss and rcpss run translated (`docs/m32.md` lists their switches; diff32 covers each). Meant for upstream.
 
 Not carried over from the old patch (no failing test on this base): the side-gap fusion check (`check_sidegap.c`
 passes without it), the low-shadow fallback (it broke cache mode on the Mac; unreachable on iOS) and the bridged-call
