@@ -22,7 +22,7 @@ export CC="clang -arch arm64" CXX="clang++ -arch arm64" LIBTOOLIZE=$(command -v 
 export CFLAGS="-mmacosx-version-min=11.0 -isysroot $SDK -g -Os" CPPFLAGS="-mmacosx-version-min=11.0 -isysroot $SDK"
 export CXXFLAGS="$CFLAGS -stdlib=libc++" LDFLAGS="-stdlib=libc++"
 [ -f mono/mini/Makefile ] || ./autogen.sh --disable-mcs-build --with-glib=embedded --disable-nls --with-mcs-docs=no \
-  --prefix="$SRC-prefix" --enable-no-threads-discovery=yes --enable-ignore-dynamic-loading=yes \
+  --prefix=/usr/local/unity-mono --enable-no-threads-discovery=yes --enable-ignore-dynamic-loading=yes \
   --enable-dont-register-main-static-data=yes --enable-thread-local-alloc=no --enable-unity-define=yes \
   --with-monotouch=no --host=aarch64-apple-darwinmacos12.2.0 --with-libgdiplus=libgdiplus.dylib \
   --enable-minimal=com,shared_perfcounters --disable-parallel-mark --enable-verify-defines --disable-btls
