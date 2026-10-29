@@ -374,6 +374,13 @@ static void runGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
         request[@"run"] = [[exe substringFromIndex:install.length + 1] stringByReplacingOccurrencesOfString:@"/" withString:@"\\"];
         request[@"prefix"] = [compat stringByAppendingPathComponent:@"pfx"];
         note(@"%@", useSteamProfile(request[@"prefix"]));
+        // Madeira's video decoder hands frames over in one format, and Media Foundation here has no converter (no
+        // msvproc): it must be the one the game's sink asks for. GameMaker's (data.win beside the game) takes YUY2; with
+        // ARGB32 its intro never ended (Victory Heat Rally). ARGB32 for the rest (Unity 6: Kami Quest). madeira.cfg's
+        // env.* still win: Madeira reads them first.
+        BOOL gameMaker = [NSFileManager.defaultManager fileExistsAtPath:[exe.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"data.win"]];
+        setenv("MADEIRA_WG_VIDEO_FORMAT", gameMaker ? "yuy2" : "argb32", 1);
+        setenv("MADEIRA_WG_64BIT", "1", 0);   // the Windows kit's ARM64EC winegstreamer for 64-bit games (Madeira binds it only so)
         if (query[@"appid"].length) {
             request[@"steamAppID"] = query[@"appid"];
             setenv("SteamAppId", query[@"appid"].UTF8String, 1);
