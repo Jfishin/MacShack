@@ -30,10 +30,10 @@ static NSString *stopped(NSString *mine, NSString *shared, NSArray<NSString *> *
     return moved.count ? [NSString stringWithFormat:@"%@; moved so far (linked back): %@", why, [moved componentsJoinedByString:@", "]] : why;
 }
 
-// One folder. ponytail: clashes are settled per top-level entry (a game's whole folder), not merged file by file.
-static NSString *linkFolder(NSString *container, NSString *home, NSString *folder) {
+// One folder, mine, into shared (folder names it in the report). ponytail: clashes are settled per top-level entry (a
+// game's whole folder), not merged file by file.
+static NSString *linkFolder(NSString *mine, NSString *shared, NSString *folder) {
     NSFileManager *fm = NSFileManager.defaultManager;
-    NSString *mine = [container stringByAppendingPathComponent:folder], *shared = [home stringByAppendingPathComponent:folder];
     NSError *e = nil;
     if (![fm createDirectoryAtPath:shared withIntermediateDirectories:YES attributes:nil error:&e])
         return [NSString stringWithFormat:@"%@: FAILED, no shared folder: %@", folder, e.localizedDescription];
@@ -50,7 +50,7 @@ static NSString *linkFolder(NSString *container, NSString *home, NSString *folde
         for (NSString *name in [[fm contentsOfDirectoryAtPath:mine error:NULL] sortedArrayUsingSelector:@selector(compare:)]) {
             NSString *from = [mine stringByAppendingPathComponent:name], *to = [shared stringByAppendingPathComponent:name];
             if ([[fm attributesOfItemAtPath:from error:NULL].fileType isEqualToString:NSFileTypeSymbolicLink] &&
-                [[fm destinationOfSymbolicLinkAtPath:from error:NULL] hasPrefix:home]) {   // already leads into the home
+                [[fm destinationOfSymbolicLinkAtPath:from error:NULL] hasPrefix:shared]) {   // already leads there (a stopped move's)
                 [fm removeItemAtPath:from error:NULL];
                 continue;
             }
@@ -79,8 +79,17 @@ static NSString *linkFolder(NSString *container, NSString *home, NSString *folde
 
 NSString *ShackHomeLink(NSString *container, NSString *home, NSArray<NSString *> *folders) {
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
-    for (NSString *folder in folders) [lines addObject:linkFolder(container, home, folder)];
+    for (NSString *folder in folders)
+        [lines addObject:linkFolder([container stringByAppendingPathComponent:folder], [home stringByAppendingPathComponent:folder], folder)];
     return [lines componentsJoinedByString:@"\n"];
+}
+
+NSString *ShackWineProfileLinks(NSString *profile) {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    for (NSArray<NSString *> *names in @[@[@"Local Settings/Application Data", @"AppData/Local"], @[@"My Documents", @"Documents"],
+                                         @[@"Application Data", @"AppData/Roaming"]])
+        [lines addObject:linkFolder([profile stringByAppendingPathComponent:names[0]], [profile stringByAppendingPathComponent:names[1]], names[0])];
+    return [lines componentsJoinedByString:@"; "];
 }
 
 NSString *ShackHomeGroup(void) {

@@ -156,6 +156,25 @@ int main(void) {
         NSString *exported = ShackHomeExport(list, home, out);
         check([readText([out stringByAppendingPathComponent:@"Library/Application Support/Feral Interactive/Batman/MacInit/BmEngine.ini"]) isEqual:@"[Engine.Engine]"] &&
               [exported containsString:@"not/there: missing"] && [exported containsString:@"../escape: refused"], "listed home paths copied out; a missing one and one leaving the home are said");
+        // A Wine profile: Steam Cloud's save under XP's names reaches the game's Vista folder; the game's own clashing
+        // folder is set aside, not lost; the old names become links (Victory Heat Rally, Over the Hill).
+        NSString *profile = [scratch stringByAppendingPathComponent:@"pfx/drive_c/users/steamuser"];
+        NSString *appLocal = [profile stringByAppendingPathComponent:@"AppData/Local"];
+        writeText([profile stringByAppendingPathComponent:@"Local Settings/Application Data/VHR/save/savedata.dat"], @"cloud");
+        writeText([appLocal stringByAppendingPathComponent:@"VHR/save/savedata.dat"], @"fresh");
+        writeText([profile stringByAppendingPathComponent:@"My Documents/My Games/oth/save.json"], @"cloud");
+        [fm createDirectoryAtPath:[profile stringByAppendingPathComponent:@"Documents"] withIntermediateDirectories:YES attributes:nil error:NULL];
+        NSString *wine = ShackWineProfileLinks(profile);
+        NSArray *appLocalEntries = [fm contentsOfDirectoryAtPath:appLocal error:NULL];
+        check([readText([appLocal stringByAppendingPathComponent:@"VHR/save/savedata.dat"]) isEqual:@"cloud"] &&
+              [[appLocalEntries filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'VHR (set aside'"]] count] == 1 &&
+              [readText([profile stringByAppendingPathComponent:@"Documents/My Games/oth/save.json"]) isEqual:@"cloud"] &&
+              [linkOf([profile stringByAppendingPathComponent:@"Local Settings/Application Data"]) isEqual:appLocal] &&
+              [linkOf([profile stringByAppendingPathComponent:@"Application Data"]) isEqual:[profile stringByAppendingPathComponent:@"AppData/Roaming"]],
+              "Wine profile: XP folders moved into Vista's (Steam's copy wins, the game's set aside) and linked");
+        check([ShackWineProfileLinks(profile) isEqual:@"Local Settings/Application Data: linked; My Documents: linked; Application Data: linked"] &&
+              [readText([profile stringByAppendingPathComponent:@"Local Settings/Application Data/VHR/save/savedata.dat"]) isEqual:@"cloud"],
+              [[@"Wine profile again: nothing moves (first: " stringByAppendingString:wine] stringByAppendingString:@")"].UTF8String);
         [fm removeItemAtPath:scratch error:NULL];
         puts("home move ok");
     }

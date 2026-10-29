@@ -10,6 +10,12 @@ NS_ASSUME_NONNULL_BEGIN
 // at home again; a missing folder is linked. A rename iOS refuses stops that folder (it stays a real folder, nothing is
 // lost). Returns one report line per folder.
 NSString *ShackHomeLink(NSString *container, NSString *home, NSArray<NSString *> *folders);
+// A Wine user profile (a prefix's drive_c/users/<user>): macOS Steam's Steam Cloud keeps a Windows game's files under
+// Windows XP's folder names (WinAppDataLocal in Local Settings/Application Data, WinMyDocuments in My Documents), and
+// Wine's games use Vista's. As on Windows, each old name becomes a link to its new folder (AppData/Local, Documents,
+// AppData/Roaming), as ShackHomeLink does: Steam's entries move there first, its copy winning (the cloud's) and a
+// clashing one set aside. One report part per folder.
+NSString *ShackWineProfileLinks(NSString *profile);
 // The app's own: its container, <App Group>/Home, Application Support and Logs; the report goes to
 // Documents/Logs/shared-home.txt. Call first, before anything reads those folders. Without an App Group: nothing.
 NSString *ShackHomeEnsure(void);

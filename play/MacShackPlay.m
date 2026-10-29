@@ -321,8 +321,10 @@ static NSString *useSteamProfile(NSString *prefix) {
             [fm createSymbolicLinkAtPath:old withDestinationPath:@"steamuser" error:NULL];
         [merged addObject:name];
     }
-    return [NSString stringWithFormat:@"Wine user steamuser (Steam Cloud's profile)%@", merged.count
-            ? [NSString stringWithFormat:@"; merged %@ into it, kept as .previous", [merged componentsJoinedByString:@", "]] : @""];
+    // After the merge: Steam Cloud's files under XP's folder names reach the Vista folders the game reads.
+    return [NSString stringWithFormat:@"Wine user steamuser (Steam Cloud's profile)%@; %@", merged.count
+            ? [NSString stringWithFormat:@"; merged %@ into it, kept as .previous", [merged componentsJoinedByString:@", "]] : @"",
+            ShackWineProfileLinks(profile)];
 }
 
 // One plain file name: a value from the URL joined to a folder never leads outside it or to the folder itself
