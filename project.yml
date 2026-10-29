@@ -240,6 +240,7 @@ targets:
       properties:
         CFBundleDisplayName: MacShack JIT
         NSLocalNetworkUsageDescription: MacShack connects to this device through LocalDevVPN to enable JIT.
+        NSBonjourServices: [_remotepairing._tcp]   # RemotePairing's port (jithelper/JITHelper.swift)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: MacShackJITRequestHandler
