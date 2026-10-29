@@ -335,7 +335,7 @@ static NSString *PrepareGeneration(NSString *name, NSString *exe, NSString *sour
                     [unsignedRoot stringByAppendingPathComponent:@"Contents/MacOS"],
                     [relative isEqual:mainRelative], linkShifts[relative], signing[@"identifier"], &binaryError);
             }
-            if (!hash) { if (error) *error = binaryError; return nil; }
+            if (!hash) return InstallFail(error, [NSString stringWithFormat:@"%@: %@", relative, binaryError.localizedDescription]);
             hashes[relative] = hash;
         }
         NSString *infoHash = Digest(infoPath, error);

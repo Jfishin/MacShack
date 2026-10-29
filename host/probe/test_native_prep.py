@@ -127,6 +127,17 @@ class NativePrepTests(unittest.TestCase):
         self.compile(self.exe, lib)
         self.assertEquivalent()
 
+    def test_rpath_before_the_executable_folder_exists(self):
+        # The installer prepares a game's Frameworks before its MacOS folder exists (TetherGeist in MacShack Play's
+        # App Group, /private/var/...): the rewritten path must not depend on which folders exist yet.
+        app = self.tmp.resolve() / 'Late.app/Contents'
+        lib = app / 'Frameworks/lib.dylib'
+        lib.parent.mkdir(parents=True)
+        self.compile(lib, '-dynamiclib', '-Wl,-rpath,@executable_path/../Resources')
+        result = subprocess.run([str(self.cli), str(lib), str(lib), str(app / 'MacOS'), '0'], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertIn(b'@loader_path/../Resources\0', lib.read_bytes())
+
     def test_fat32_and_fat64_thin_without_payload_changes(self):
         thin = self.exe.read_bytes()
         for wide in (False, True):

@@ -201,9 +201,15 @@ static NSString *StripFrameworkVersions(NSString *path) {
     NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"\\.framework/Versions/[A-Z]/" options:0 error:nil];
     return [re stringByReplacingMatchesInString:path options:0 range:NSMakeRange(0, path.length) withTemplate:@".framework/"];
 }
+// stringByStandardizingPath drops a leading /private only from a path that exists, and the executable's folder may not
+// exist yet (the installer prepares Contents/Frameworks before Contents/MacOS): both ends lose it here.
+static NSArray *DirectoryComponents(NSString *dir) {
+    NSMutableArray *parts = [dir.stringByStandardizingPath.pathComponents mutableCopy];
+    if (parts.count > 2 && [parts[0] isEqual:@"/"] && [parts[1] isEqual:@"private"]) [parts removeObjectAtIndex:1];
+    return parts;
+}
 static NSString *LoaderPath(NSString *path, NSString *exeDir, NSString *input) {
-    NSArray *from = [[input.stringByDeletingLastPathComponent stringByStandardizingPath] pathComponents];
-    NSArray *to = [[exeDir stringByStandardizingPath] pathComponents];
+    NSArray *from = DirectoryComponents(input.stringByDeletingLastPathComponent), *to = DirectoryComponents(exeDir);
     NSUInteger common = 0;
     while (common < from.count && common < to.count && [from[common] isEqual:to[common]]) common++;
     NSMutableArray *relative = [NSMutableArray array];
