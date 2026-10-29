@@ -20,6 +20,9 @@ void *h_mmap(void *a, size_t l, int p, int f, int fd, off_t o) {
     return mmap(a, l, p & ~PROT_EXEC, f & ~MAP_JIT, fd, o);
 }
 int h_munmap(void *a, size_t l) { return ShackTrapJITOwns(a) ? 0 : munmap(a, l); }
+// The phone's answer: success, but no execute permission outside the debugger-prepared pool (whose own protection
+// never changes). Without this, a Mono that TrapJIT missed makes its own pages executable here and seems to work.
+int h_mprotect(void *a, size_t l, int p) { return ShackTrapJITOwns(a) ? 0 : mprotect(a, l, p & ~PROT_EXEC); }
 __attribute__((constructor)) static void init(void) {
     size_t size = 256 << 20;
     void *w = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -32,4 +35,5 @@ __attribute__((constructor)) static void init(void) {
     ShackTrapJITHookMono();
 }
 __attribute__((used, section("__DATA,__interpose"))) static void *ip[] = {
-    (void *)h_mmap, (void *)mmap, (void *)h_munmap, (void *)munmap, (void *)h_sigaction, (void *)sigaction };
+    (void *)h_mmap, (void *)mmap, (void *)h_munmap, (void *)munmap, (void *)h_mprotect, (void *)mprotect,
+    (void *)h_sigaction, (void *)sigaction };

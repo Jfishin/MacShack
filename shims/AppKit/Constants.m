@@ -34,6 +34,8 @@ K(NSWindowDidExposeNotification) K(NSWindowWillEnterFullScreenNotification) K(NS
 K(NSWorkspaceDidActivateApplicationNotification) K(NSWorkspaceDidDeactivateApplicationNotification)
 K(NSBackingPropertyOldScaleFactorKey) K(NSDeviceRGBColorSpace) KV(NSFilenamesPboardType)
 K(NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification)   // Godot 4; never posted
+// SDL3's Cocoa backend (FNA: Terraria); NSWindow.m posts the occlusion one.
+K(NSWindowWillMiniaturizeNotification) K(NSWindowDidChangeOcclusionStateNotification)
 K(NSWorkspaceLaunchConfigurationAppleEvent) K(NSWorkspaceLaunchConfigurationArchitecture)   // Unity 5 player
 K(NSWorkspaceLaunchConfigurationArguments) K(NSWorkspaceLaunchConfigurationEnvironment)
 K(NSAppearanceNameAqua) K(NSAppearanceNameDarkAqua)   // CoronaCards; NSAppearance answers nil (light), see Stubs.m

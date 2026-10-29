@@ -113,12 +113,12 @@ NSString *PlaySteamProbe(NSURL *group, mach_port_t ipc, uint32_t appID, unsigned
 static char gGameCode[PATH_MAX];
 static NSString *gSteamMacOS;
 static kern_return_t (*gShimLookUp)(mach_port_t, const char *, mach_port_t *);
-static void *(*gameOrigDlopen)(const char *, int);   // the image's dlopen as it loaded (ShackHooks')
-static void *gameDlopen(const char *path, int mode) {
+static void *gameDlopen(const char *path, int mode) {   // ShackDlopen gets the game's call site (a leaf name's @rpath search)
+    void *caller = __builtin_return_address(0);
     const char *slash = path ? strrchr(path, '/') : NULL;
-    if (!slash || strcmp(slash + 1, "steamclient.dylib")) return gameOrigDlopen(path, mode);
+    if (!slash || strcmp(slash + 1, "steamclient.dylib")) return ShackDlopen(path, mode, caller);
     if (!gSteamMacOS) { NSLog(@"[MacShack Play] the game's Steam API: no signed steamclient, the game runs without Steam"); return NULL; }
-    void *handle = gameOrigDlopen([gSteamMacOS stringByAppendingPathComponent:@"steamclient_g.dylib"].fileSystemRepresentation, mode);
+    void *handle = ShackDlopen([gSteamMacOS stringByAppendingPathComponent:@"steamclient_g.dylib"].fileSystemRepresentation, mode, caller);
     NSLog(@"[MacShack Play] the game's Steam API: %s", handle ? "Play's steamclient_g" : dlerror());
     return handle;
 }
@@ -150,7 +150,7 @@ static void rebindGameImage(const struct mach_header *h, intptr_t slide) {
     char real[PATH_MAX];
     size_t n = strlen(gGameCode);
     if (!n || !dladdr(h, &info) || !info.dli_fname || !realpath(info.dli_fname, real) || strncmp(real, gGameCode, n) || real[n] != '/') return;
-    struct rebinding r[5] = {{"dlopen", gameDlopen, (void **)&gameOrigDlopen}, {"SteamInternal_SteamAPI_Init", gameSteamInit, (void **)&realSteamInit}};
+    struct rebinding r[5] = {{"dlopen", gameDlopen, NULL}, {"SteamInternal_SteamAPI_Init", gameSteamInit, (void **)&realSteamInit}};
     size_t count = 2;
     if (gShimLookUp) r[count++] = (struct rebinding){"bootstrap_look_up", gShimLookUp, NULL};
     if (!strcmp(strrchr(real, '/'), "/libsteam_api.dylib")) {

@@ -48,6 +48,7 @@ struct guest_args { const char *path; guest_main_t main; int argc; char **argv; 
 static void *guestThread(void *arg) {
     struct guest_args *g = arg;
     pthread_setname_np("guest-main");
+    ShackHooksAdoptMainThread();
     *_NSGetArgc() = g->argc;
     *_NSGetArgv() = g->argv;
     ShackSetGuestCommandLine(g->argc, g->argv);
@@ -182,8 +183,12 @@ NSDictionary *ShackGamePrepareProcess(NSDictionary *launch, NSError **error) {
     NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[appPath stringByAppendingPathComponent:@"Contents/Info.plist"]];
     NSString *exeName = info[@"CFBundleExecutable"];
     if (![exeName isKindOfClass:NSString.class] || !exeName.length) { if (error) *error = err(@"no CFBundleExecutable in Info.plist"); return nil; }
-    NSString *exePath = [appPath stringByAppendingFormat:@"/Contents/MacOS/%@", exeName];
-    NSString *codePath = [codeRoot stringByAppendingFormat:@"/Contents/MacOS/%@", exeName];
+    // MonoKickstart (Terraria): exeName is a shell script, which the installer left out; it prepared <exeName>.bin.osx.
+    NSString *binName = exeName, *kick = [exeName stringByAppendingString:@".bin.osx"];
+    if (![NSFileManager.defaultManager fileExistsAtPath:[codeRoot stringByAppendingFormat:@"/Contents/MacOS/%@", exeName]] &&
+        [NSFileManager.defaultManager fileExistsAtPath:[codeRoot stringByAppendingFormat:@"/Contents/MacOS/%@", kick]]) binName = kick;
+    NSString *exePath = [appPath stringByAppendingFormat:@"/Contents/MacOS/%@", binName];
+    NSString *codePath = [codeRoot stringByAppendingFormat:@"/Contents/MacOS/%@", binName];
     // HOME is the container for every game, as on a Mac where all games share ~: engines that build paths from HOME
     // (Godot) and engines that ask NSSearchPath (Unity, Unreal, SDL) land in the same Library, one folder per cloud
     // root.

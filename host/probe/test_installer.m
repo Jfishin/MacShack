@@ -105,6 +105,16 @@ int main(int argc, const char **argv) {
         Check([[ShackInstaller playCodeRootForAppPath:throughLink guests:guests identifier:@"com.example.fixture.play" steam:NO error:&error] length] &&
               [[ShackInstaller playCodeRootForAppPath:throughLink guests:guests identifier:@"com.example.fixture.play" steam:YES error:&error] isEqual:steamCopy] &&
               signedIdentifiers.count == before, @"both copies reused, none prepared again");
+        // MonoKickstart (Terraria): Contents/MacOS/Main is a shell script that runs Main.bin.osx, which has Mono linked in.
+        NSString *kick = App(root, @"Kickstart", fixture), *kickExe = [kick stringByAppendingPathComponent:@"Contents/MacOS/Main"];
+        Check([fm moveItemAtPath:kickExe toPath:[kickExe stringByAppendingString:@".bin.osx"] error:nil] &&
+              [@"#!/bin/bash\n./Main.bin.osx $@\n" writeToFile:kickExe atomically:YES encoding:NSUTF8StringEncoding error:nil], @"kickstart fixture");
+        Check(![ShackInstaller translationForAppPath:kick], @"kickstart game is arm64");
+        NSString *kickCode = [ShackInstaller playCodeRootForAppPath:kick guests:guests identifier:@"com.example.fixture.play" steam:YES error:&error];
+        NSDictionary *kickRecord = [NSDictionary dictionaryWithContentsOfFile:[guests stringByAppendingPathComponent:@"Play.Steam.Kickstart/current.plist"]];
+        Check(kickCode && [fm fileExistsAtPath:[kickCode stringByAppendingPathComponent:@"Contents/MacOS/Main.bin.osx"]] &&
+              [kickRecord[@"executable"] isEqual:@"Main.bin.osx"] && [kickRecord[@"requiresJIT"] boolValue],
+              error.description ?: @"kickstart: its .bin.osx prepared, JIT required");
         // A universal static library beside the code (Coromon's Firebase frameworks) is neither prepared nor signed.
         NSString *withArchive = App(root, @"Archive", fixture);
         NSString *archiveDir = [withArchive stringByAppendingPathComponent:@"Contents/Plugins/Static.framework"];

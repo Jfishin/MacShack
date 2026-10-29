@@ -722,6 +722,9 @@ static void runMacGame(NSDictionary<NSString *, NSString *> *query) {   // g_que
         if (!ShackStartTranslated(ready[@"exePath"], ready[@"args"], &e)) { note(@"not started: %@", e.localizedDescription); reportExit(126); backToMacShack(); }
     } else dispatch_async(dispatch_get_main_queue(), ^{   // as MacShack: its run loop turns while the game's initializers load
         NSError *e = nil;
+        // The game's main thread is its main thread, as on a Mac (ShackHooksAdoptMainThread); after the game's own
+        // settings, so a SHACK_APP_THREAD=main game (Unreal, .args) keeps UIKit's. Not in MacShack: Steam runs there.
+        setenv("SHACK_APP_THREAD", "guest", 0);
         if (ShackStartGuest(ready[@"codePath"], ready[@"exePath"], ready[@"args"], nil, NULL, &e)) return;
         dispatch_async(g_queue, ^{ note(@"not started: %@", e.localizedDescription); reportExit(126); backToMacShack(); });
     });

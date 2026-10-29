@@ -70,11 +70,16 @@ static void *t_memset_chk(void *d, int c, size_t n, size_t l) { __memset_chk(W(d
 static int t_mprotect(void *a, size_t l, int p) { return inpool(a) ? 0 : mprotect(a, l, p); }
 static void t_icache(void *p, size_t n) { if (inpool(p)) sys_dcache_flush(W(p), n); sys_icache_invalidate(p, n); }
 
+// Unity's Mono library, or a MonoKickstart program (<Game>.bin.osx, FNA games: Terraria), which has Mono linked in.
+// ponytail: by name; a Mono linked into a program named otherwise is missed (look for mono_jit_init in its exports then).
+static int isMono(const char *path) {
+    size_t n = strlen(path);
+    return (n >= 22 && !strcmp(path + n - 22, "libmonobdwgc-2.0.dylib")) || (n >= 8 && !strcmp(path + n - 8, ".bin.osx"));
+}
+
 static void onImage(const struct mach_header *mh, intptr_t slide) {
     Dl_info d;
-    if (!dladdr(mh, &d) || !d.dli_fname) return;
-    size_t n = strlen(d.dli_fname);
-    if (n < 22 || strcmp(d.dli_fname + n - 22, "libmonobdwgc-2.0.dylib")) return;
+    if (!dladdr(mh, &d) || !d.dli_fname || !isMono(d.dli_fname)) return;
     strlcpy(monoPath, d.dli_fname, sizeof monoPath);
     struct rebinding r[] = {
         {"memcpy", t_memcpy, NULL}, {"memmove", t_memmove, NULL}, {"memset", t_memset, NULL}, {"bzero", t_bzero, NULL},

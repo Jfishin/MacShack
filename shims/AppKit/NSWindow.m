@@ -13,7 +13,7 @@
 
 @protocol ShackWindowDelegate <NSObject> @optional - (void)windowDidBecomeKey:(NSNotification *)n; @end
 
-@implementation NSWindow { ShackHostView *_host; ShackWindowVC *_vc; NSInteger _number; BOOL _visible; CGFloat _alphaValue; NSSize _minSize, _maxSize; NSResponder *_mouseTarget; pthread_t _creator; CFRunLoopRef _creatorLoop; }
+@implementation NSWindow { ShackHostView *_host; ShackWindowVC *_vc; NSInteger _number; BOOL _visible, _transparent; CGFloat _alphaValue; NSSize _minSize, _maxSize; NSResponder *_mouseTarget; pthread_t _creator; CFRunLoopRef _creatorLoop; }
 static NSInteger gWindowCounter = 1;
 - (instancetype)initWithContentRect:(NSRect)r styleMask:(NSWindowStyleMask)m backing:(NSBackingStoreType)b defer:(BOOL)d screen:(id)screen {
     return [self initWithContentRect:r styleMask:m backing:b defer:d];   // one screen
@@ -204,6 +204,10 @@ static void GiveScreen(UIWindow *w, NSWindow *to) {   // main thread; to has its
 - (NSUInteger)occlusionState { return self == gOwner && !gBackground ? 1 << 1 : 0; }   // NSWindowOcclusionStateVisible: has the screen (GiveScreen), app in front
 - (CGFloat)alphaValue { return _alphaValue; }
 - (void)setAlphaValue:(CGFloat)a { _alphaValue = a; }
+// Opaque unless set otherwise, as AppKit's: SDL3 reads a non-opaque window as transparent, which its GPU API refuses
+// (Terraria). Stored only; nothing is composited behind a game's window here.
+- (BOOL)isOpaque { return !_transparent; }
+- (void)setOpaque:(BOOL)f { _transparent = !f; }
 - (NSRect)frameRectForContentRect:(NSRect)r { return r; }   // borderless: frame == content
 - (NSRect)contentRectForFrameRect:(NSRect)r { return r; }
 - (NSRect)contentLayoutRect { return (NSRect){NSZeroPoint, _frame.size}; }   // no title bar: the whole content area
@@ -226,7 +230,7 @@ static void GiveScreen(UIWindow *w, NSWindow *to) {   // main thread; to has its
 - (NSSize)minSize { return _minSize; } - (void)setMinSize:(NSSize)s { _minSize = s; }
 - (NSSize)maxSize { return _maxSize; } - (void)setMaxSize:(NSSize)s { _maxSize = s; }
 #define NOP(decl) - (void)decl {}
-NOP(setOpaque:(BOOL)f) NOP(setBackgroundColor:(id)c) NOP(setHasShadow:(BOOL)f) NOP(setTitlebarAppearsTransparent:(BOOL)f)
+NOP(setBackgroundColor:(id)c) NOP(setHasShadow:(BOOL)f) NOP(setTitlebarAppearsTransparent:(BOOL)f)
 NOP(setTitleVisibility:(NSInteger)v) NOP(setMovableByWindowBackground:(BOOL)f) NOP(setMovable:(BOOL)f) NOP(setHidesOnDeactivate:(BOOL)f)
 NOP(setRestorable:(BOOL)f) NOP(disableSnapshotRestoration) NOP(setReleasedWhenClosed:(BOOL)f) NOP(setContentMinSize:(NSSize)s)
 NOP(setContentMaxSize:(NSSize)s) NOP(setAspectRatio:(NSSize)s) NOP(setContentAspectRatio:(NSSize)s) NOP(miniaturize:(id)s)

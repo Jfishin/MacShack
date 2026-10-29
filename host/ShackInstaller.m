@@ -89,6 +89,13 @@ static BOOL IsMachO(NSString *path) {
     return n == 4 && (magic == MH_MAGIC_64 || magic == MH_CIGAM_64 || magic == MH_MAGIC ||
         magic == MH_CIGAM || magic == FAT_MAGIC || magic == FAT_CIGAM || magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64);
 }
+// The game's own executable for CFBundleExecutable exe. MonoKickstart (FNA games: Terraria): Contents/MacOS/<exe> is a
+// shell script that runs <exe>.bin.osx beside it, a Mach-O with Mono linked in.
+static NSString *MainExecutable(NSString *appPath, id exe) {
+    if (!SafeComponent(exe)) return exe;
+    NSString *dir = [appPath stringByAppendingPathComponent:@"Contents/MacOS"], *kick = [exe stringByAppendingString:@".bin.osx"];
+    return !IsMachO([dir stringByAppendingPathComponent:exe]) && IsMachO([dir stringByAppendingPathComponent:kick]) ? kick : exe;
+}
 // sub -1 accepts any subtype (x86_64 and x86_64h alike).
 static BOOL HasSlice(NSString *path, cpu_type_t want, cpu_subtype_t wantSub) {
     int fd = open(path.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW);
@@ -234,7 +241,7 @@ static NSString *PrepareGeneration(NSString *name, NSString *exe, NSString *sour
     NSMutableArray<NSString *> *skipped = [NSMutableArray array];
     NSMutableDictionary<NSString *, NSString *> *replacements = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString *, NSString *> *linkShifts = [NSMutableDictionary dictionary];   // linked binary -> directory offset to its real file
-    BOOL mono = NO, monoRebuilt = NO;
+    BOOL mono = [exe hasSuffix:@".bin.osx"], monoRebuilt = NO;   // MonoKickstart: Mono is in the main executable
     __block NSError *scanError = nil;
     NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:[NSURL fileURLWithPath:source]
         includingPropertiesForKeys:@[NSURLIsSymbolicLinkKey, NSURLIsRegularFileKey]
@@ -414,7 +421,7 @@ static NSString *InPlaceCodeRoot(NSString *name, NSString *appPath, NSString *ro
     if (!SafeComponent(name)) return InstallFail(error, @"Invalid game name.");
     if (!RecoverAt(root, name, error)) return nil;
     NSString *infoPath = [appPath stringByAppendingPathComponent:@"Contents/Info.plist"];
-    NSString *exe = [NSDictionary dictionaryWithContentsOfFile:infoPath][@"CFBundleExecutable"];
+    NSString *exe = MainExecutable(appPath, [NSDictionary dictionaryWithContentsOfFile:infoPath][@"CFBundleExecutable"]);
     NSString *main = [appPath stringByAppendingFormat:@"/Contents/MacOS/%@", exe];
     if (!SafeComponent(exe) || !Regular(infoPath) || !Inside(infoPath.stringByResolvingSymlinksInPath, appPath.stringByResolvingSymlinksInPath))
         return InstallFail(error, @"The game needs a valid Contents/Info.plist with a safe CFBundleExecutable filename.");
@@ -476,7 +483,7 @@ static NSString *InPlaceCodeRoot(NSString *name, NSString *appPath, NSString *ro
             return InstallFail(error, @"A game with this name is already installed. This importer does not replace existing game data.");
         NSString *infoPath = [source stringByAppendingPathComponent:@"Contents/Info.plist"];
         NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
-        NSString *exe = info[@"CFBundleExecutable"];
+        NSString *exe = MainExecutable(source, info[@"CFBundleExecutable"]);
         if (!SafeComponent(exe) || !Regular(infoPath) || !Inside(infoPath.stringByResolvingSymlinksInPath, source))
             return InstallFail(error, @"The app needs a valid Contents/Info.plist with a safe CFBundleExecutable filename.");
         NSString *mainRelative = [@"Contents/MacOS" stringByAppendingPathComponent:exe];
@@ -531,7 +538,7 @@ static NSString *InPlaceCodeRoot(NSString *name, NSString *appPath, NSString *ro
     }
 }
 + (NSString *)translationForAppPath:(NSString *)appPath {
-    NSString *exe = [NSDictionary dictionaryWithContentsOfFile:[appPath stringByAppendingPathComponent:@"Contents/Info.plist"]][@"CFBundleExecutable"];
+    NSString *exe = MainExecutable(appPath, [NSDictionary dictionaryWithContentsOfFile:[appPath stringByAppendingPathComponent:@"Contents/Info.plist"]][@"CFBundleExecutable"]);
     return SafeComponent(exe) ? TranslationOf([appPath stringByAppendingFormat:@"/Contents/MacOS/%@", exe]) : nil;
 }
 

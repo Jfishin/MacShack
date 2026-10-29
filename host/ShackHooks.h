@@ -8,11 +8,15 @@ void ShackHooksInstall(NSString *guestBundlePath, NSString *guestExecPath, NSStr
 // Guest images prepared under another name: code-relative path -> the bundle-relative original whose name
 // _dyld_get_image_name and dladdr report for it (Steam Helper's private tier0, vstdlib and SDL3).
 void ShackHooksSetImageAliases(NSDictionary<NSString *, NSString *> *aliases);
+// The guest's dlopen, for a hook in front of it (Play's on a Steam game's images): caller is the game's call site, whose
+// LC_RPATHs a leaf name is searched along, as on macOS.
+void *ShackDlopen(const char *path, int mode, void *caller);
 // A second guest in this process (a game the Steam client starts, beside Steam): its code and the thread that adopts
 // it see its bundle, executable, prepared code and defaults; its exit calls ended instead of ending MacShack's run.
 // translated: an Intel game (AArchX), whose calls come from libOcerz and its JIT pool, not from images under codePath.
 void ShackHooksAddGuest(NSString *bundlePath, NSString *execPath, NSString *codePath, BOOL translated, void (^ended)(int code));
 void ShackHooksAdoptGuestThread(void);   // the calling thread is the second guest's main thread
+void ShackHooksAdoptMainThread(void);    // the calling thread runs the guest's main: with SHACK_APP_THREAD=guest, the guest's +[NSThread isMainThread] is YES there
 BOOL ShackHooksIsSecondCaller(const void *pc);   // pc is in the second guest's code, or this is its main thread
 void ShackHooksEnableGL(void);   // desktop OpenGL on ES for a guest that needs it (as SHACK_OPENGL=1 at install)
 // Case-insensitive lookup of a guest path (the guest expects a case-insensitive volume). YES and the on-disk

@@ -6,6 +6,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import "ShackMetal.h"
+#import "ShackPrep.h"
 #import <IOKit/IOKitLib.h>
 #import <mach-o/dyld.h>
 #import <crt_externs.h>
@@ -268,6 +269,21 @@ static BOOL isSecondCaller(const void *pc) {
     return gGuestDefaults && isGuestCaller(pc) ? gGuestDefaults : [self shack_standardUserDefaults];
 }
 @end
+// macOS's main thread is the one that runs main(). A guest's main runs on MacShack's guest-main thread, its app thread
+// (shims/AppKit/NSApplication.m), so with SHACK_APP_THREAD=guest (MacShack Play's games) the guest's own code is told so
+// there: SDL3's Cocoa video starts nowhere else ("No available video device": Terraria). MacShack's shims keep the real
+// answer, and so does the Steam client in MacShack (unset) and SHACK_APP_THREAD=main (UIKit's main thread is the app thread).
+static pthread_t gGuestMainThread;
+@implementation NSThread (Shack)
++ (BOOL)shack_isMainThread {
+    return [self shack_isMainThread] ||
+        (gGuestMainThread && pthread_equal(pthread_self(), gGuestMainThread) && isGuestCaller(__builtin_return_address(0)));
+}
+@end
+void ShackHooksAdoptMainThread(void) {
+    const char *model = getenv("SHACK_APP_THREAD");
+    if (model && !strcmp(model, "guest")) gGuestMainThread = pthread_self();
+}
 // A Mac game starts in a fresh process, so GameController announces every pad (mouse, keyboard) after the game has
 // subscribed. Here they connected to MacShack before the game ran, and a game that builds its pad list only from
 // GCControllerDidConnectNotification (Cyberpunk 2077: it never asks +controllers) saw none. A guest subscribing to a
@@ -618,10 +634,39 @@ static int shack_dladdr(const void *a, Dl_info *info) {
     return r;
 }
 
+extern void *dlopen_from(const char *path, int mode, void *addressInCaller);   // libdyld SPI, exported on iOS
 static void *(*o_dlopen)(const char *, int);
-static void *shack_dlopen(const char *p, int mode) {
+void *ShackDlopen(const char *p, int mode, void *caller) {
     size_t n0 = p ? strlen(p) : 0;
     if (gGLBundle && n0 >= 23 && !strcmp(p + n0 - 23, "OpenGL.framework/OpenGL")) return GL_HANDLE;
+    // SDL's Cocoa GL library (SDL2 and 3). SDL3 loads it for every new window, OpenGL being its macOS default, and its
+    // GPU backend then makes the window Metal and unloads it (Terraria: "Failed loading .../libGL.dylib"). Any library
+    // does for that; the OpenGL shim is the one prep links OpenGL to.
+    if (n0 >= 38 && !strcmp(p + n0 - 38, "OpenGL.framework/Libraries/libGL.dylib"))
+        return gGLBundle ? GL_HANDLE : o_dlopen("@rpath/libShackOpenGL.dylib", mode);
+    // A macOS framework by path is the shim prep links it to, as AArchX's bridged opens are (ShackTranslated.m): IOKit
+    // always (iOS has one, without the virtual pads: Rewired's P/Invokes open it themselves, Sno), the rest when iOS has
+    // no such path (Rewired's CFStringGetTypeID comes from ApplicationServices.framework/Frameworks/CoreText.framework;
+    // its DllNotFoundException made Rewired drop the pad, Sno).
+    NSString *shim = p && isGuestCaller(caller) ? [ShackPrep hostLibraryForInstallName:@(p)] : nil;
+    if (![shim hasPrefix:@"@rpath/libShack"]) shim = nil;
+    if ([shim isEqualToString:@"@rpath/libShackIOKit.dylib"]) {
+        void *io = o_dlopen(shim.fileSystemRepresentation, mode);
+        static _Atomic int said;
+        if (io && !said++) fprintf(stderr, "[MacShack] dlopen %s from the game -> libShackIOKit\n", p);
+        if (io) return io;
+    }
+    // macOS searches a leaf name along the caller's LC_RPATHs: Mono's DllImport of "libSDL3.0.dylib" finds Terraria's
+    // osx/ through Terraria.bin.osx's @executable_path/osx (@loader_path once prepared). o_dlopen would search from here,
+    // the host, so the guest's address goes to dlopen_from.
+    char rp[PATH_MAX], why[1024]; void *h;
+    if (p && !strchr(p, '/') && isGuestCaller(caller) && (size_t)snprintf(rp, sizeof rp, "@rpath/%s", p) < sizeof rp) {
+        if ((h = dlopen_from(rp, mode, caller))) return h;
+        strlcpy(why, dlerror() ?: "", sizeof why);   // a missing shim symbol shows here
+        if ((h = o_dlopen(p, mode))) return h;   // the system's (libc.dylib)
+        fprintf(stderr, "[MacShack] dlopen %s from the game: %s\n", rp, why);
+        return NULL;
+    }
     char real[PATH_MAX], alt[PATH_MAX], cased[PATH_MAX]; struct stat st; size_t n = strlen(gGuestRoot);
     // Stray asks for libAPEXFramework.dylib and ships libApexFramework.dylib: same case fallback as file opens.
     if (p && o_stat(p, &st) != 0 && ShackResolveCase(p, cased, sizeof cased)) p = cased;
@@ -632,8 +677,11 @@ static void *shack_dlopen(const char *p, int mode) {
         fprintf(stderr, "[MacShack] dlopen %s -> prepared code\n", real + n + 1);
         p = alt;
     }
-    return o_dlopen(p, mode);
+    if ((h = o_dlopen(p, mode)) || !shim) return h;
+    if ((h = o_dlopen(shim.fileSystemRepresentation, mode))) fprintf(stderr, "[MacShack] dlopen %s from the game -> %s\n", p, shim.lastPathComponent.UTF8String);
+    return h;
 }
+static void *shack_dlopen(const char *p, int mode) { return ShackDlopen(p, mode, __builtin_return_address(0)); }
 
 // iOS refuses mmap(MAP_JIT) with EPERM; Mono's code allocator does not check the failure and
 // memset()s the returned pointer, crashing a Unity/Mono guest before any generated code runs.
@@ -833,6 +881,8 @@ void ShackHooksInstall(NSString *bundlePath, NSString *execPath, NSString *codeP
         Method a = class_getClassMethod(NSBundle.class, @selector(mainBundle));
         Method b = class_getClassMethod(NSBundle.class, @selector(shack_mainBundle));
         method_exchangeImplementations(a, b);
+        method_exchangeImplementations(class_getClassMethod(NSThread.class, @selector(isMainThread)),
+                                       class_getClassMethod(NSThread.class, @selector(shack_isMainThread)));
         method_exchangeImplementations(class_getInstanceMethod(NSURL.class, @selector(getResourceValue:forKey:error:)),
                                        class_getInstanceMethod(NSURL.class, @selector(shack_getResourceValue:forKey:error:)));
         method_exchangeImplementations(class_getInstanceMethod(NSFileManager.class, @selector(containerURLForSecurityApplicationGroupIdentifier:)),
