@@ -368,6 +368,7 @@ static void runGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
         // A Steam game (Steam Play): its own prefix in its compatdata, its folder linked in, its Steam identity.
         request[@"game"] = install.lastPathComponent;
         request[@"gameDir"] = install;
+        request[@"gameExe"] = exe;   // its header: a .exe fixed at its link base gets a smaller pool (MadeiraEngine.m)
         request[@"run"] = [[exe substringFromIndex:install.length + 1] stringByReplacingOccurrencesOfString:@"/" withString:@"\\"];
         request[@"prefix"] = [compat stringByAppendingPathComponent:@"pfx"];
         note(@"%@", useSteamProfile(request[@"prefix"]));

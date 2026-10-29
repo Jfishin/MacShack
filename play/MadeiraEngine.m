@@ -9,6 +9,7 @@
 #import "ShackJIT.h"
 #import "EngineBundle.h"
 #import "ShackPlay.h"
+#import "vendor/fishhook.h"
 
 // Runs Madeira's Windows engine (Windows/engine in the App Group, laid out by MacShack's Set up Windows games: the
 // release's Madeira.debug.dylib, GPL-3.0) in MacShack Play the way Madeira's own app does from its "x64 DX11 cube"
@@ -24,6 +25,54 @@
 // iPad, 1 in ~5 launches had no 896 MB piece left (the script's "RX allocation failed: E53"). So main() holds the space
 // (1 GB if it can, for slack against maps made while the debugger attaches) and preparePool gives it back just before
 // the debugger picks RX, first fit, from the lowest free hole.
+// A Windows .exe without relocations (GameMaker's x64 runner: Advent NEON) loads only at its link base, 0x140000000,
+// in that hole: Madeira runs every Windows process in Play's address space. The hole ends below the main thread's stack
+// (~0x16b000000), so no 896 MB piece lies beside that address: such a game gets a 512 MB pool, and Play holds its image
+// range from before the pool is picked until the engine maps the game there (imageMap): the engine's libraries, which
+// dyld puts in the lowest gap above the pool, and macshack-launch.exe and steam.exe, which link there too, go elsewhere.
+// ponytail: 512 MB fits below 0x140000000 with slack; a fixed-base game that outgrows it needs the largest free piece.
+static BOOL FixedImageRange(NSString *path, vm_address_t *base, vm_size_t *size) {
+    NSData *d = path ? [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:NULL] : nil;
+    const uint8_t *b = d.bytes;
+    if (d.length < 0x40 || b[0] != 'M' || b[1] != 'Z') return NO;
+    uint32_t pe = OSReadLittleInt32(b, 0x3c);
+    if ((NSUInteger)pe + 84 > d.length || memcmp(b + pe, "PE\0\0", 4) || OSReadLittleInt16(b, pe + 24) != 0x20b) return NO;   // PE32+
+    if (!(OSReadLittleInt16(b, pe + 22) & 1)) return NO;   // IMAGE_FILE_RELOCS_STRIPPED
+    *base = OSReadLittleInt64(b, pe + 48); *size = OSReadLittleInt32(b, pe + 80);
+    return *base < 0x180000000 && *base + *size > 0x119000000;
+}
+
+// The engine maps an image at its link base with anon_mmap_tryfixed: mach_vm_map, VM_FLAGS_FIXED there, the image's
+// size. Called so for the held range, the hold goes first; anything else asking for it (steam.exe at its own size,
+// a VirtualAlloc there) finds it taken and goes elsewhere.
+static mach_vm_address_t gImageHeld;
+static mach_vm_size_t gImageSize;
+static kern_return_t (*gMachVmMap)(vm_map_t, mach_vm_address_t *, mach_vm_size_t, mach_vm_offset_t, int, mem_entry_name_port_t,
+                                   memory_object_offset_t, boolean_t, vm_prot_t, vm_prot_t, vm_inherit_t);
+static kern_return_t imageMap(vm_map_t task, mach_vm_address_t *address, mach_vm_size_t size, mach_vm_offset_t mask, int flags,
+                              mem_entry_name_port_t object, memory_object_offset_t offset, boolean_t copy, vm_prot_t cur,
+                              vm_prot_t max, vm_inherit_t inheritance) {
+    mach_vm_address_t held = gImageHeld;
+    if (held && *address == held && !(flags & VM_FLAGS_ANYWHERE) && size >= gImageSize && size < gImageSize + (1u << 20) &&
+        __sync_bool_compare_and_swap(&gImageHeld, held, 0))
+        vm_deallocate(mach_task_self(), held, gImageSize);
+    return gMachVmMap(task, address, size, mask, flags, object, offset, copy, cur, max, inheritance);
+}
+
+static NSString *releaseImageOnItsMap(const void *engineSymbol) {
+    Dl_info info;
+    for (uint32_t i = 0; gImageHeld && dladdr(engineSymbol, &info) && i < _dyld_image_count(); i++) {   // fishhook wants the slide
+        if ((const void *)_dyld_get_image_header(i) != info.dli_fbase) continue;
+        struct rebinding rebinding = {"mach_vm_map", (void *)imageMap, (void **)&gMachVmMap};
+        rebind_symbols_image((void *)info.dli_fbase, _dyld_get_image_vmaddr_slide(i), &rebinding, 1);
+        break;
+    }
+    if (gMachVmMap) return @"the game's image range stays held until the engine maps the game there";
+    if (gImageHeld) vm_deallocate(mach_task_self(), gImageHeld, gImageSize);
+    gImageHeld = 0;
+    return @"the engine has no mach_vm_map import: the game's image range is given back now";
+}
+
 static vm_address_t gHeld;
 static vm_size_t gHeldSize;
 
@@ -44,7 +93,7 @@ void MadeiraEngineReleasePoolSpace(void) {   // the fence page stays: it is one 
     gHeld = 0;
 }
 
-static NSString *preparePool(size_t mb) {
+static NSString *preparePool(size_t mb, vm_address_t image, vm_size_t imageSize) {
     for (int i = 0; i < 32; i++) {   // kept for the process's life, as Madeira does
         vm_address_t a = 0;
         if (vm_allocate(mach_task_self(), &a, 16u << 20, VM_FLAGS_ANYWHERE) != KERN_SUCCESS || a + (16u << 20) >= 0x119000000) break;
@@ -53,6 +102,10 @@ static NSString *preparePool(size_t mb) {
                            : @"nothing held from launch: no 896 MB hole then";
     if (gHeld) vm_deallocate(mach_task_self(), gHeld, gHeldSize);
     gHeld = 0;
+    vm_address_t at = image;   // a fixed-base .exe's range: held from here until the engine maps the game (imageMap)
+    if (imageSize && vm_allocate(mach_task_self(), &at, imageSize, VM_FLAGS_FIXED) == KERN_SUCCESS) { gImageHeld = image; gImageSize = imageSize; }
+    if (imageSize) held = [held stringByAppendingFormat:@"; the game's fixed-base image 0x%lx+0x%lx %@", (unsigned long)image,
+                           (unsigned long)imageSize, gImageHeld ? @"held" : @"was already taken"];
     // The guest band is held only while the debugger picks RX: the RW alias may then land at 0x7000000000, where
     // Madeira's engine expects it (its usable-VA floor is 0x7000000000 + pool size).
     if (!ShackJITPoolSetupAvoiding(mb << 20, 0x7000000000, 0x1000000000))
@@ -266,8 +319,10 @@ NSString *MadeiraEngineRun(NSDictionary *request, CAMetalLayer *layer) {
     NSString *exe = request[@"run"], *game = request[@"game"];
     NSArray<NSString *> *screen = [request[@"screen"] ?: (game ? @"1408x648" : @"960x540") componentsSeparatedByString:@"x"];
     int screenW = screen.count == 2 ? screen[0].intValue : 960, screenH = screen.count == 2 ? screen[1].intValue : 540;
-    size_t jitMB = [request[@"jitMB"] unsignedLongValue] ?: (game ? 896 : 384);   // Madeira's sizes: games, test programs
-    NSString *pool = preparePool(jitMB);
+    vm_address_t image = 0; vm_size_t imageSize = 0;
+    if (!FixedImageRange(request[@"gameExe"], &image, &imageSize)) imageSize = 0;
+    size_t jitMB = [request[@"jitMB"] unsignedLongValue] ?: imageSize ? 512 : (game ? 896 : 384);   // Madeira's sizes: games, test programs
+    NSString *pool = preparePool(jitMB, image, imageSize);
     [o appendFormat:@"engine: %@\n", pool];
     if (!getenv("WINE_IOS_JIT_RX")) return o;
 
@@ -287,6 +342,7 @@ NSString *MadeiraEngineRun(NSDictionary *request, CAMetalLayer *layer) {
     g_padSet = dlsym(engine, "winios_gamepad_set_state");
     if (!wineserverStart || !wineProcessStart || !setLayer || !presents || !trapHandler)
         return [o stringByAppendingString:@"engine: an entry point is missing\n"];
+    if (gImageHeld) [o appendFormat:@"engine: %@\n", releaseImageOnItsMap((const void *)wineserverStart)];
     ShackEngineBundleRedirect((const void *)wineserverStart, dir);   // the engine's own files: Windows/engine, not Play's bundle
     [o appendFormat:@"engine: loaded %@\n", dylib.lastPathComponent];
     [o appendFormat:@"engine: JIT-pool bookkeeping for child processes: %@\n", fixPoolBookkeeping()];
