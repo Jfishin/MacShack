@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #import <objc/runtime.h>
 #import "ShackTouchPad.h"
+#import "../shims/ShackDisplay.h"
 #import <objc/message.h>
 #import <os/lock.h>
 #import <os/proc.h>
@@ -352,14 +353,25 @@ NSString *ShackMetalTakePacing(void) {
 // Clamped where the size is set, so a game that sizes its render targets from the layer reads back the panel size (Hades
 // II allocated 6 GB of targets from 8604x3960), and again before each drawable for layers sized from their bounds.
 static CGSize gNativePixels;   // landscape, set on the main thread in ShackMetalFixups
+static CGFloat gNativeScale;
 static _Atomic uint64_t gClamps, gSizeSets;
+// The panel at the backing scale games are given (NSScreen: the render scale, 2x by default, ShackGameRenderScale), a
+// third fewer pixels per side at 2x on a 3x panel. Such a game then draws that many pixels: Hades II at 2x renders
+// 1912x880, and its 3824x1760 drawable clamped to the native 2868x1320 left the picture in the top-left two thirds. A
+// virtual display (SHACK_DISPLAY_SIZE) keeps the native panel.
+static CGSize maxDrawable(void) {
+    Class screen = NSClassFromString(@"NSScreen");
+    CGFloat s = screen && !ShackVirtualDisplaySize(NULL) ? ((CGFloat (*)(id, SEL))objc_msgSend)(((id (*)(id, SEL))objc_msgSend)(screen, @selector(mainScreen)), NSSelectorFromString(@"backingScaleFactor")) : 0;
+    if (s <= 0 || gNativeScale <= 0 || s >= gNativeScale) return gNativePixels;
+    return CGSizeMake(round(gNativePixels.width * s / gNativeScale), round(gNativePixels.height * s / gNativeScale));
+}
 static CGSize clampedSize(CGSize z) {
-    CGSize mx = gNativePixels;
+    CGSize mx = maxDrawable();
     if (mx.width <= 0 || (z.width <= mx.width + 1 && z.height <= mx.height + 1)) return z;
     gClamps++;
     double k = MIN(mx.width / z.width, mx.height / z.height);
     CGSize c = CGSizeMake(floor(z.width * k), floor(z.height * k));
-    static _Atomic int logged; if (logged++ < 3) NSLog(@"[MacShack] Metal: drawable %.0fx%.0f larger than the %.0fx%.0f panel, clamped to %.0fx%.0f",
+    static _Atomic int logged; if (logged++ < 3) NSLog(@"[MacShack] Metal: drawable %.0fx%.0f larger than the panel at the render scale (%.0fx%.0f), clamped to %.0fx%.0f",
                                                        z.width, z.height, mx.width, mx.height, c.width, c.height);
     return c;
 }
@@ -488,6 +500,7 @@ void ShackMetalFixups(void) {
     ShackMetalFXTraceInstall();
     CGSize nb = ((UIWindowScene *)UIApplication.sharedApplication.connectedScenes.anyObject).screen.nativeBounds.size;
     gNativePixels = CGSizeMake(MAX(nb.width, nb.height), MIN(nb.width, nb.height));   // games are landscape
+    gNativeScale = ((UIWindowScene *)UIApplication.sharedApplication.connectedScenes.anyObject).screen.nativeScale;
     gDevice = MTLCreateSystemDefaultDevice();
     if (!gDevice) return;
     Class dev = [gDevice class];
