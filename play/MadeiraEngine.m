@@ -260,6 +260,69 @@ static ssize_t engineWrite(int fd, const void *buf, size_t n) {
     return written;
 }
 
+// 4. A hot ntdll pointer in a child's emulator is healed to the child's own ntdll copy. After 256 exec faults on one
+//    PE address the engine rewrites the pool slots holding it (ios_jit_patch_stale_pointer), translating each pool copy
+//    for its owner, and an emulator's copy (libarm64ecfex.dll, one per process) has none: KiUserExceptionDispatcher,
+//    which an emulator enters for each x64 syscall and exception, went to the first process's ntdll in every child's
+//    emulator, and the child's next syscall ran that copy's invoke_arm64ec_syscall, which its emulator cannot place
+//    (Hi-Fi Rush: its protection's direct syscall, [iOS-xquery] MISS, NoExec). Madeira's fix (#141, the mapper's PEB per
+//    entry) is not in 0.1.3. Here, on the engine's "queued for heal" line (its scanner heals 100 ms later), each child's
+//    emulator copy gets the child's own ntdll copy instead; the engine's heal then finds only the first process's slot.
+// ponytail: emulators' copies only (where the slots were); another per-process module holding an ntdll VA keeps the
+// engine's choice.
+#define MAP_TEXT(e) (*(uint64_t *)((e) + 0x18))
+#define MAP_TEXT_SIZE(e) (*(uint64_t *)((e) + 0x20))
+
+static uint64_t peek(uint64_t address) {   // a dead process's memory reads as 0
+    uint64_t v = 0;
+    vm_size_t n;
+    return vm_read_overwrite(mach_task_self(), address, 8, (vm_address_t)&v, &n) ? 0 : v;
+}
+
+static uint64_t emulatorBase(uint64_t peb) {   // the process's xtajit64.dll, from its loader list (PEB.Ldr)
+    uint64_t head = peek(peb + 0x18) + 0x10, link = peek(head);
+    for (int n = 0; link && link != head && n < 1024; n++, link = peek(link)) {
+        uint16_t name[12] = { 0 };
+        vm_size_t got;
+        if ((peek(link + 0x58) & 0xffff) != 2 * 12 ||   // BaseDllName.Length
+            vm_read_overwrite(mach_task_self(), peek(link + 0x60), sizeof name, (vm_address_t)name, &got)) continue;
+        BOOL same = YES;
+        for (int i = 0; i < 12 && same; i++) same = name[i] < 128 && tolower(name[i]) == "xtajit64.dll"[i];
+        if (same) return peek(link + 0x30);   // DllBase
+    }
+    return 0;
+}
+
+static void healForChildren(uint64_t va) {
+    int count = *gMappingCount;
+    for (int c = 0; c < count; c++) {
+        char *own = MAP_ENTRY(c);   // a child's own copy of the image holding va (ntdll)
+        if (!MAP_OWNER(own) || !MAP_PE(own) || va < MAP_PE(own) || va >= MAP_PE(own) + MAP_SIZE(own)) continue;
+        uint64_t fex = emulatorBase((uint64_t)MAP_OWNER(own)), target = MAP_POOL(own) + va - MAP_PE(own);
+        for (int i = 0; fex && i < count; i++) {
+            char *e = MAP_ENTRY(i);
+            if (MAP_PE(e) != fex || MAP_OWNER(e)) continue;
+            uint64_t *w = (uint64_t *)(gPoolRW + MAP_POOL(e) - gPoolRX);
+            int fixed = 0;
+            for (uint64_t off = 0; off + 8 <= MAP_SIZE(e); off += 8)
+                if ((off < MAP_TEXT(e) || off >= MAP_TEXT(e) + MAP_TEXT_SIZE(e)) && w[off / 8] == va) { w[off / 8] = target; fixed++; }
+            fprintf(stderr, "[macshack] hot 0x%llx: process %p's emulator 0x%llx -> its own copy 0x%llx, %d slot(s)\n",
+                    va, MAP_OWNER(own), fex, target, fixed);
+        }
+    }
+}
+
+static int engineFprintf(FILE *f, const char *format, ...) {
+    va_list ap, args;
+    va_start(ap, format);
+    va_copy(args, ap);
+    int n = vfprintf(f, format, ap);
+    va_end(ap);
+    if (!strncmp(format, "[stale-heal] 0x%llx crossed", 27)) healForChildren(va_arg(args, unsigned long long));
+    va_end(args);
+    return n;
+}
+
 // Replaces table[slot] (in the engine's read-only data) with fn and returns what was there.
 static void *swapEntry(void **table, int slot, void *fn) {
     vm_address_t page = (vm_address_t)&table[slot] & ~(vm_address_t)(vm_page_size - 1);
@@ -331,10 +394,10 @@ static NSString *fixPoolBookkeeping(void) {
     gUnmapEx = syscalls[unmapEx];
     if (!swapEntry(calls, push, pushAliases) || !swapEntry(syscalls, unmap, unmapView) || !swapEntry(syscalls, unmapEx, unmapViewEx))
         return @"a table is not writable";
-    struct rebinding write = {"write", (void *)engineWrite, (void **)&gWrite};
-    BOOL tls = gPoolRX && !rebind_symbols_image((void *)mh, slide, &write, 1) && gWrite;
-    return [NSString stringWithFormat:@"wrapped unix call %d, syscalls %d and %d; TLS slots to the pool copies: %@", push, unmap,
-                                      unmapEx, tls ? @"on" : @"off (no write import)"];
+    struct rebinding hooks[2] = {{"write", (void *)engineWrite, (void **)&gWrite}, {"fprintf", (void *)engineFprintf, NULL}};
+    BOOL tls = gPoolRX && !rebind_symbols_image((void *)mh, slide, hooks, 2) && gWrite;
+    return [NSString stringWithFormat:@"wrapped unix call %d, syscalls %d and %d; TLS slots to the pool copies and hot ntdll pointers "
+                                      "per process: %@", push, unmap, unmapEx, tls ? @"on" : @"off (no write import)"];
 }
 
 static NSString *logTail(NSString *path, NSUInteger bytes) {
