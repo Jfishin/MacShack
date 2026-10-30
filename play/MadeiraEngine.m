@@ -25,6 +25,9 @@
 // iPad, 1 in ~5 launches had no 896 MB piece left (the script's "RX allocation failed: E53"). So main() holds the space
 // (1 GB if it can, for slack against maps made while the debugger attaches) and preparePool gives it back just before
 // the debugger picks RX, first fit, from the lowest free hole.
+// malloc's first regions can land inside the hole before main (iPhone, Hi-Fi Rush: 8 MB at 0x143d00000, two 685 MB
+// pieces left), so the hold takes down to 640 MB, and a pool asked for more than was held gets the held size less the
+// same 128 MB of slack (512 MB at least, what fixed-base games run with).
 // A Windows .exe without relocations (GameMaker's x64 runner: Advent NEON) loads only at its link base, 0x140000000,
 // in that hole: Madeira runs every Windows process in Play's address space. The hole ends below the main thread's stack
 // (~0x16b000000), so no 896 MB piece lies beside that address: such a game gets a 512 MB pool, and Play holds its image
@@ -76,9 +79,10 @@ static NSString *releaseImageOnItsMap(const void *engineSymbol) {
 static vm_address_t gHeld;
 static vm_size_t gHeldSize;
 static uint64_t gPoolRX, gPoolRW;   // the JIT pool's executable and writable views (preparePool)
+static char gInTheWay[600];   // what filled the hole at launch, when nothing could be held
 
 void MadeiraEngineHoldPoolSpace(void) {
-    for (vm_size_t size = 1024u << 20; size >= (896u << 20) && !gHeld; size -= 128u << 20)
+    for (vm_size_t size = 1024u << 20; size >= (640u << 20) && !gHeld; size -= 128u << 20)
         for (vm_address_t a = 0x119000000; a + size <= 0x180000000; a += 16u << 20) {
             vm_address_t at = a;   // FIXED: fails, never moves or replaces, where something already is
             if (vm_allocate(mach_task_self(), &at, size, VM_FLAGS_FIXED) == KERN_SUCCESS) { gHeld = at; gHeldSize = size; break; }
@@ -87,6 +91,24 @@ void MadeiraEngineHoldPoolSpace(void) {
     // join the space when it is given back, and RX would start below 0x119000000 (seen on the iPad: rx 0x1180e0000).
     vm_address_t fence = gHeld - vm_page_size;
     if (gHeld) vm_allocate(mach_task_self(), &fence, vm_page_size, VM_FLAGS_FIXED);
+    // No hole: what is in the way, for preparePool's report (address, size, tag, the image it belongs to).
+    vm_address_t a = 0x119000000;
+    vm_size_t size;
+    natural_t depth = 0;
+    vm_region_submap_info_data_64_t info;
+    mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    size_t used = 0;
+    while (!gHeld && used < sizeof gInTheWay - 80 && a < 0x180000000 &&
+           vm_region_recurse_64(mach_task_self(), &a, &size, &depth, (vm_region_recurse_info_t)&info, &count) == KERN_SUCCESS &&
+           a < 0x180000000) {
+        Dl_info image = { 0 };
+        dladdr((const void *)a, &image);
+        const char *name = image.dli_fname ? strrchr(image.dli_fname, '/') : NULL;
+        used += snprintf(gInTheWay + used, sizeof gInTheWay - used, " 0x%lx+%lu MB tag %u%s%s;", (unsigned long)a,
+                         (unsigned long)(size >> 20), info.user_tag, name ? " " : "", name ? name + 1 : "");
+        a += size;
+        count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    }
 }
 
 void MadeiraEngineReleasePoolSpace(void) {   // the fence page stays: it is one page
@@ -100,7 +122,8 @@ static NSString *preparePool(size_t mb, vm_address_t image, vm_size_t imageSize)
         if (vm_allocate(mach_task_self(), &a, 16u << 20, VM_FLAGS_ANYWHERE) != KERN_SUCCESS || a + (16u << 20) >= 0x119000000) break;
     }
     NSString *held = gHeld ? [NSString stringWithFormat:@"held %lu MB at 0x%lx from launch", (unsigned long)(gHeldSize >> 20), (unsigned long)gHeld]
-                           : @"nothing held from launch: no 896 MB hole then";
+                           : [NSString stringWithFormat:@"nothing held from launch: no 640 MB hole then; in the way:%s", gInTheWay];
+    if (gHeld && gHeldSize >> 20 < mb) mb = (gHeldSize >> 20) - 128;   // a smaller piece was all there was
     if (gHeld) vm_deallocate(mach_task_self(), gHeld, gHeldSize);
     gHeld = 0;
     vm_address_t at = image;   // a fixed-base .exe's range: held from here until the engine maps the game (imageMap)
