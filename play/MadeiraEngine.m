@@ -75,6 +75,7 @@ static NSString *releaseImageOnItsMap(const void *engineSymbol) {
 
 static vm_address_t gHeld;
 static vm_size_t gHeldSize;
+static uint64_t gPoolRX, gPoolRW;   // the JIT pool's executable and writable views (preparePool)
 
 void MadeiraEngineHoldPoolSpace(void) {
     for (vm_size_t size = 1024u << 20; size >= (896u << 20) && !gHeld; size -= 128u << 20)
@@ -114,6 +115,7 @@ static NSString *preparePool(size_t mb, vm_address_t image, vm_size_t imageSize)
     sscanf(getenv("SHACK_JIT_POOL") ?: "", "%llx,%llx,%llx", &rx, &rw, &size);
     if (rx < 0x119000000 || (rx + size > 0x7000000000 && rx < 0x8000000000))
         return [NSString stringWithFormat:@"bad pool placement rx 0x%llx (%@)", rx, held];
+    gPoolRX = rx; gPoolRW = rw;
     char v[32];
     snprintf(v, sizeof v, "%llx", rx); setenv("WINE_IOS_JIT_RX", v, 1);   // hex, no 0x (Madeira's format)
     snprintf(v, sizeof v, "%llx", rw); setenv("WINE_IOS_JIT_RW", v, 1);
@@ -212,6 +214,52 @@ static int unmapViewEx(void *process, void *addr, unsigned flags) {
     return status;
 }
 
+// 3. A module's TLS slot reaches the pool copy. The loader (alloc_tls_slot) writes the slot into the image's _tls_index
+//    after the engine copied the image into the pool, and ARM64EC code reads it PC-relative, from the copy, where it is
+//    still 0. When the game's .exe has TLS it takes slot 0 and FEX (xtajit64.dll) slot 1, so FEX kept its thread_locals
+//    in the game's block: its IR capture writes at +8, MSVC's magic-static epoch, and the game skipped its static
+//    initialisers (Team Dehdehbon: no Ogg callbacks, 127 "Failed to open file stream", then a NULL table). Madeira's fix
+//    (wine 694442e4, unix_ios_sync_pe_write: the same four bytes into this process's copy, as ios_jit_sync_write) is not
+//    in 0.1.3. Here it runs on the loader's own "[tls-life] ml704 slot=" line, the engine's write() of it: that line goes
+//    out right after the slot is written, before the module's TLS callbacks or DllMain.
+// ponytail: that line is the loader's first 24 slots of a process; a later module with TLS keeps reading slot 0.
+static ssize_t (*gWrite)(int, const void *, size_t);
+
+static void syncTLSIndex(int fd, uint64_t base) {
+    const uint8_t *pe = (const uint8_t *)base;
+    if (!base || pe[0] != 'M' || pe[1] != 'Z') return;
+    const uint8_t *opt = pe + *(const uint32_t *)(pe + 0x3c) + 24;
+    uint32_t tls = *(const uint16_t *)opt == 0x20b ? *(const uint32_t *)(opt + 112 + 9 * 8) : 0;   // PE32+, directory 9
+    if (!tls) return;
+    uint64_t index = *(const uint64_t *)(pe + tls + 16);   // IMAGE_TLS_DIRECTORY64.AddressOfIndex
+    void *peb = gCurrentPeb();
+    char *copy = NULL;   // this process's own copy, else the shared one (ios_jit_sync_write's choice)
+    for (int i = 0; i < *gMappingCount; i++) {
+        char *e = MAP_ENTRY(i);
+        if (index < MAP_PE(e) || index >= MAP_PE(e) + MAP_SIZE(e)) continue;
+        if (MAP_OWNER(e) == peb) { copy = e; break; }
+        if (!MAP_OWNER(e) && !copy) copy = e;
+    }
+    if (!copy) return;   // not copied: x64 code, which FEX reads in place
+    volatile uint32_t *to = (uint32_t *)(gPoolRW + MAP_POOL(copy) - gPoolRX + index - MAP_PE(copy));
+    uint32_t was = *to, slot = *(const uint32_t *)index;
+    *to = slot;
+    char line[128];
+    int n = snprintf(line, sizeof line, "[macshack] TLS slot %u synced into the pool copy (module 0x%llx, copy had %u)\n",
+                     slot, (unsigned long long)base, was);
+    gWrite(fd, line, (size_t)n);
+}
+
+static ssize_t engineWrite(int fd, const void *buf, size_t n) {
+    const char *at = fd == 2 && n > 40 ? memmem(buf, n, "[tls-life] ml704 slot=", 22) : NULL;   // Wine's debug lines; not file writes
+    const char *b = at ? memmem(at, n - (size_t)(at - (const char *)buf), " base=", 6) : NULL;
+    char hex[17] = { 0 };
+    if (b) memcpy(hex, b + 6, MIN(16, n - (size_t)(b + 6 - (const char *)buf)));
+    ssize_t written = gWrite(fd, buf, n);
+    if (b) syncTLSIndex(fd, strtoull(hex, NULL, 16));
+    return written;
+}
+
 // Replaces table[slot] (in the engine's read-only data) with fn and returns what was there.
 static void *swapEntry(void **table, int slot, void *fn) {
     vm_address_t page = (vm_address_t)&table[slot] & ~(vm_address_t)(vm_page_size - 1);
@@ -283,7 +331,10 @@ static NSString *fixPoolBookkeeping(void) {
     gUnmapEx = syscalls[unmapEx];
     if (!swapEntry(calls, push, pushAliases) || !swapEntry(syscalls, unmap, unmapView) || !swapEntry(syscalls, unmapEx, unmapViewEx))
         return @"a table is not writable";
-    return [NSString stringWithFormat:@"wrapped unix call %d, syscalls %d and %d", push, unmap, unmapEx];
+    struct rebinding write = {"write", (void *)engineWrite, (void **)&gWrite};
+    BOOL tls = gPoolRX && !rebind_symbols_image((void *)mh, slide, &write, 1) && gWrite;
+    return [NSString stringWithFormat:@"wrapped unix call %d, syscalls %d and %d; TLS slots to the pool copies: %@", push, unmap,
+                                      unmapEx, tls ? @"on" : @"off (no write import)"];
 }
 
 static NSString *logTail(NSString *path, NSUInteger bytes) {
