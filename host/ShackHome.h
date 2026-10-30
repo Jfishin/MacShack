@@ -16,6 +16,12 @@ NSString *ShackHomeLink(NSString *container, NSString *home, NSArray<NSString *>
 // AppData/Roaming), as ShackHomeLink does: Steam's entries move there first, its copy winning (the cloud's) and a
 // clashing one set aside. One report part per folder.
 NSString *ShackWineProfileLinks(NSString *profile);
+// A Wine prefix's registry (system.reg) gains the entries the Visual C++ 2015-2022 runtime package leaves
+// (VC\Runtimes\x64 and arm64, both registry views), once. Unreal's launcher (5.3+) checks them, for arm64 on Madeira (x64
+// on ARM), and otherwise waits on a "required components" dialog nobody sees (Pizzapocalypse 2); the runtime's DLLs are
+// Wine's own. ponytail: only once the prefix exists (a game's first start makes system.reg), so a new Unreal game gets
+// them from its second start; call before the engine starts.
+NSString *ShackWineVCRuntime(NSString *prefix);
 // The app's own: its container, <App Group>/Home, Application Support and Logs; the report goes to
 // Documents/Logs/shared-home.txt. Call first, before anything reads those folders. Without an App Group: nothing.
 NSString *ShackHomeEnsure(void);

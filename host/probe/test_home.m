@@ -175,6 +175,17 @@ int main(void) {
         check([ShackWineProfileLinks(profile) isEqual:@"Local Settings/Application Data: linked; My Documents: linked; Application Data: linked"] &&
               [readText([profile stringByAppendingPathComponent:@"Local Settings/Application Data/VHR/save/savedata.dat"]) isEqual:@"cloud"],
               [[@"Wine profile again: nothing moves (first: " stringByAppendingString:wine] stringByAppendingString:@")"].UTF8String);
+        // A prefix's registry gains the Visual C++ runtime's entries once (Unreal's launcher: Pizzapocalypse 2).
+        NSString *pfx = [scratch stringByAppendingPathComponent:@"pfx"], *reg = [pfx stringByAppendingPathComponent:@"system.reg"];
+        check([ShackWineVCRuntime([scratch stringByAppendingPathComponent:@"nopfx"]) containsString:@"no system.reg"], "VC++ runtime: no prefix yet, nothing written");
+        writeText(reg, @"WINE REGISTRY Version 2\n;; All keys relative to \\\\Machine\n\n#arch=win64\n");
+        check([ShackWineVCRuntime(pfx) hasSuffix:@"added"], "VC++ runtime: entries added");
+        NSString *regText = readText(reg);
+        check([regText hasPrefix:@"WINE REGISTRY Version 2\n"] &&
+              [regText containsString:@"\n[Software\\\\Wow6432Node\\\\Microsoft\\\\VisualStudio\\\\14.0\\\\VC\\\\Runtimes\\\\arm64]\n\"Bld\"=dword:0000898b\n\"Installed\"=dword:00000001\n"] &&
+              [regText containsString:@"\n[Software\\\\Microsoft\\\\VisualStudio\\\\14.0\\\\VC\\\\Runtimes\\\\x64]\n"] &&
+              [regText containsString:@"\"Version\"=\"v14.44.35211.00\"\n"], "VC++ runtime: Wine's registry format, both views, header kept");
+        check([ShackWineVCRuntime(pfx) hasSuffix:@"present"] && [readText(reg) isEqual:regText], "VC++ runtime: once only");
         [fm removeItemAtPath:scratch error:NULL];
         puts("home move ok");
     }

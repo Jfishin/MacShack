@@ -92,6 +92,24 @@ NSString *ShackWineProfileLinks(NSString *profile) {
     return [lines componentsJoinedByString:@"; "];
 }
 
+NSString *ShackWineVCRuntime(NSString *prefix) {
+    NSString *reg = [prefix stringByAppendingPathComponent:@"system.reg"];
+    NSString *text = [NSString stringWithContentsOfFile:reg encoding:NSUTF8StringEncoding error:NULL];
+    if (!text) return @"VC++ runtime entries: no system.reg yet";
+    if ([text containsString:@"\\\\VC\\\\Runtimes\\\\arm64]"]) return @"VC++ runtime entries: present";
+    NSMutableString *add = [NSMutableString string];   // 14.44.35211.0, the 2022 runtime's
+    for (NSString *view in @[@"", @"Wow6432Node\\\\"])
+        for (NSString *arch in @[@"x64", @"arm64"])
+            [add appendFormat:@"\n[Software\\\\%@Microsoft\\\\VisualStudio\\\\14.0\\\\VC\\\\Runtimes\\\\%@]\n\"Bld\"=dword:0000898b\n"
+                               "\"Installed\"=dword:00000001\n\"Major\"=dword:0000000e\n\"Minor\"=dword:0000002c\n\"Rbld\"=dword:00000000\n"
+                               "\"Version\"=\"v14.44.35211.00\"\n", view, arch];
+    NSFileHandle *file = [NSFileHandle fileHandleForWritingAtPath:reg];
+    if (![file seekToEndReturningOffset:NULL error:NULL] || ![file writeData:[add dataUsingEncoding:NSUTF8StringEncoding] error:NULL])
+        return @"VC++ runtime entries: FAILED to write system.reg";
+    [file closeAndReturnError:NULL];
+    return @"VC++ runtime entries: added";
+}
+
 NSString *ShackHomeGroup(void) {
     return gHostID ? [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:[@"group." stringByAppendingString:gHostID]].path : nil;
 }

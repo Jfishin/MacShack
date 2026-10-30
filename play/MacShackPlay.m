@@ -374,6 +374,7 @@ static void runGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
         request[@"run"] = [[exe substringFromIndex:install.length + 1] stringByReplacingOccurrencesOfString:@"/" withString:@"\\"];
         request[@"prefix"] = [compat stringByAppendingPathComponent:@"pfx"];
         note(@"%@", useSteamProfile(request[@"prefix"]));
+        note(@"%@", ShackWineVCRuntime(request[@"prefix"]));   // before the engine starts: Wine reads system.reg then
         // Madeira's video decoder hands frames over in one format, and Media Foundation here has no converter (no
         // msvproc): it must be the one the game's sink asks for. GameMaker's (data.win beside the game) takes YUY2; with
         // ARGB32 its intro never ended (Victory Heat Rally). ARGB32 for the rest (Unity 6: Kami Quest). madeira.cfg's
