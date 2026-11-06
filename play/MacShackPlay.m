@@ -381,7 +381,7 @@ static void runGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
         // env.* still win: Madeira reads them first.
         BOOL gameMaker = [NSFileManager.defaultManager fileExistsAtPath:[exe.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"data.win"]];
         setenv("MADEIRA_WG_VIDEO_FORMAT", gameMaker ? "yuy2" : "argb32", 1);
-        setenv("MADEIRA_WG_64BIT", "1", 0);   // the Windows kit's ARM64EC winegstreamer for 64-bit games (Madeira binds it only so)
+        setenv("MADEIRA_WG_64BIT", "1", 0);   // Madeira's ARM64EC winegstreamer for 64-bit games (it binds it only so)
         if (query[@"appid"].length) {
             request[@"steamAppID"] = query[@"appid"];
             setenv("SteamAppId", query[@"appid"].UTF8String, 1);
@@ -401,8 +401,9 @@ static void runGame(NSDictionary<NSString *, NSString *> *query) {   // g_queue
     if (query[@"shim"].length) {
         // NotProton's launch (compat_run.sh): steam.exe with the program as its arguments; it sets ActiveProcess and
         // Steam's registry, logs on through steamclient64 (lsteamclient), starts the program and waits for it.
-        // Madeira splits its own arguments at spaces and keeps quotes, so the command line goes to Play's launcher
-        // (windows-kit/helpers/launch.c) whole, in MONO_MACSHACK_LAUNCH, with the game's folder as the working folder.
+        // Madeira's own arguments were split at spaces with the quotes kept (0.1.3; 0.2.0 parses them as Windows does), so
+        // the command line goes to Play's launcher (windows-kit/helpers/launch.c) whole, in MONO_MACSHACK_LAUNCH, with the
+        // game's folder as the working folder.
         NSString *args = request[@"args"], *dir = request[@"game"]
             ? [@"C:\\Program Files (x86)\\Steam\\steamapps\\common\\" stringByAppendingString:request[@"game"]] : @"C:\\";
         NSString *program = request[@"game"] ? [NSString stringWithFormat:@"%@\\%@", dir, request[@"run"]] : request[@"run"];

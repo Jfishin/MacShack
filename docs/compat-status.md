@@ -31,6 +31,9 @@ Windows games run on [Madeira](https://github.com/willfaust/Madeira) by Will Fau
 Windows game runs mostly depends on Madeira itself. MacShack's Windows support is experimental: a game can run worse
 here than in Madeira's own app.
 
+On Madeira 0.2.0 (11-06): Victory Heat Rally plays through Steam (NotProton's steam.exe and lsteamclient), about 51 fps.
+The games brought up on 0.1.3 (Advent NEON, Pizzapocalypse 2, Remnant: From the Ashes, Team Dehdehbon) need retesting.
+
 ## Details
 
 Dates are when a state was last observed; a later commit may have changed it, so retest before trusting a row. Rows

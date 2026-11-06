@@ -177,7 +177,7 @@ on the Mac for 30 s each, from the Mac's Steam library (`STEAM_LIBRARY` names a 
 | MacShack and MacShack Play's Mach bridge | `clang -fobjc-arc -Ihost host/ShackPlayMach.m host/probe/test_play_mach.m -framework Foundation -o /tmp/t && /tmp/t` (expect `play mach ok`) |
 | Steam's popen answers (lsof, ps for Steam's Stop) | `clang shims/SteamClient/SteamProcess.c host/probe/test_steam_process.c -o /tmp/t && /tmp/t` (expect `steam process ok`) |
 | The engine's own folder and executable path in Play | header of `host/probe/test_engine_bundle.m` (expect `engine bundle ok`) |
-| Madeira's engine has every symbol Play uses | `sh host/probe/test_engine_symbols.sh <Madeira-0.1.3.ipa>` (expect `engine symbols ok`) |
+| Madeira's engine has every symbol Play uses | `sh host/probe/test_engine_symbols.sh <Madeira-0.2.0.ipa>` (expect `engine symbols ok`) |
 | Madeira's app executable made a library that dyld loads (iOS simulator) | header of `host/probe/test_engine_library.m` (expect `engine library ok`) |
 | Steam Play patch sites for another Steam build (needs capstone) | `python3 prep/steam-onehost/steamplay_sites.py <steamclient.dylib>`, then update `kSites` in `host/ShackSteamPlay.m` |
 | The Windows kit zip (maintainers) | `windows-kit/release.sh` (see [windows-kit/README.md](windows-kit/README.md)), then pin the printed sha256 in `host/WindowsKit.swift` |

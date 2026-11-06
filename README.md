@@ -187,7 +187,7 @@ installed.
 
    | Piece | Downloaded from |
    |---|---|
-   | Windows engine: [Madeira](https://github.com/willfaust/Madeira) 0.1.3 by Will Faust (Wine, FEX-Emu, DXMT) | Will Faust's own release, unmodified |
+   | Windows engine: [Madeira](https://github.com/willfaust/Madeira) 0.2.0 by Will Faust (Wine, FEX-Emu, DXMT) | Will Faust's own release; on the device its app executable becomes a library (the Mach-O header only, the code unchanged) |
    | Windows kit: Steam bridge, `steam.exe` and helpers ([windows-kit/](windows-kit/)) | this repository's `windows-kit` release |
    | Steam's Windows files | Valve's servers |
 
@@ -218,7 +218,7 @@ MacShack stands on these projects:
 | [fishhook](https://github.com/facebook/fishhook) | `host/vendor/fishhook.c` | BSD-3-Clause |
 | Unity's Mono fork | `prep/unity-mono` (patch only) | MIT, some third-party parts BSD |
 | GNU libstdc++ (for x86 games) | fetched by `prep/aarchx/guest_libstdcxx.sh` and `guest32_libstdcxx.sh` | GPLv3 with the GCC Runtime Library Exception |
-| [Madeira](https://github.com/willfaust/Madeira) by Will Faust: Wine, FEX-Emu and DXMT for iOS (MacShack Play's engine) | downloaded by your device from Will's release, unmodified | GPL-3.0-or-later with the Madeira Converter Exception; Wine LGPL-2.1+ |
+| [Madeira](https://github.com/willfaust/Madeira) by Will Faust: Wine, FEX-Emu and DXMT for iOS (MacShack Play's engine) | downloaded by your device from Will's release; its executable's header is made a library's there, the code unchanged | GPL-3.0-or-later with the Madeira Converter Exception; Wine LGPL-2.1+ |
 | [NotProton](https://github.com/NotProtonNot/NotProton) (Steam Play on macOS): its Steam bridge, `ntdll` detour and `steam.exe`, the approach MacShack Play follows | `windows-kit/`, built from NotProton v1.0.3 | GPL-3.0 |
 | [Proton](https://github.com/ValveSoftware/Proton) by Valve: `lsteamclient` and `steam_helper`, through NotProton | `windows-kit/` | Steamworks SDK license; BSD-3-Clause |
 | Wine, LLVM and mingw-w64 runtime parts inside the Windows kit's programs | `windows-kit/` (texts in the kit's `licenses/`) | their own licenses |

@@ -3,18 +3,17 @@
 #import <dlfcn.h>
 #import <mach/mach.h>
 #import <mach-o/dyld.h>
-#import <mach-o/nlist.h>
 #import <os/proc.h>
-#import <pthread.h>
 #import "ShackJIT.h"
 #import "EngineBundle.h"
 #import "ShackPlay.h"
 #import "vendor/fishhook.h"
 
 // Runs Madeira's Windows engine (Windows/engine in the App Group, laid out by MacShack's Set up Windows games: the
-// release's Madeira.debug.dylib, GPL-3.0) in MacShack Play the way Madeira's own app does from its "x64 DX11 cube"
-// button (its ContentView runWineFullSequence), minus the SwiftUI: JIT pool, wineserver, the Windows program, drawing
-// into Play's own CAMetalLayer (madeira_display_set_layer). Calls go through dlsym: the engine stays a separate library.
+// release's app executable made a library, MadeiraEngine.dylib, GPL-3.0) in MacShack Play the way Madeira's own app does
+// from its "x64 DX11 cube" button (its ContentView runWineFullSequence), minus the SwiftUI: JIT pool, wineserver, the
+// Windows program, drawing into Play's own CAMetalLayer (madeira_display_set_layer). Calls go through dlsym: the engine
+// stays a separate library.
 
 // Madeira's pool rules (its StikJITHelper.allocatePool): RX at or above 0x119000000 (FEX's dispatcher emit is
 // position-dependent below it) and outside the guest window [0x70, 0x80) GB. The debugger picks the RX address
@@ -78,7 +77,6 @@ static NSString *releaseImageOnItsMap(const void *engineSymbol) {
 
 static vm_address_t gHeld;
 static vm_size_t gHeldSize;
-static uint64_t gPoolRX, gPoolRW;   // the JIT pool's executable and writable views (preparePool)
 static char gInTheWay[600];   // what filled the hole at launch, when nothing could be held
 
 void MadeiraEngineHoldPoolSpace(void) {
@@ -138,7 +136,6 @@ static NSString *preparePool(size_t mb, vm_address_t image, vm_size_t imageSize)
     sscanf(getenv("SHACK_JIT_POOL") ?: "", "%llx,%llx,%llx", &rx, &rw, &size);
     if (rx < 0x119000000 || (rx + size > 0x7000000000 && rx < 0x8000000000))
         return [NSString stringWithFormat:@"bad pool placement rx 0x%llx (%@)", rx, held];
-    gPoolRX = rx; gPoolRW = rw;
     char v[32];
     snprintf(v, sizeof v, "%llx", rx); setenv("WINE_IOS_JIT_RX", v, 1);   // hex, no 0x (Madeira's format)
     snprintf(v, sizeof v, "%llx", rw); setenv("WINE_IOS_JIT_RW", v, 1);
@@ -171,258 +168,6 @@ BOOL MadeiraEnginePad(NSInteger index, const ShackPadState *state) {
     return YES;
 }
 
-// Two fixes to Madeira's JIT-pool bookkeeping for Windows processes started by other Windows processes (NotProton's
-// launch: launcher -> steam.exe -> game). Madeira runs every process in this one task, copies each PE image's code
-// into its JIT pool (ios_jit_mappings: PE range -> pool copy, owner PEB set only for a child's own copy of the shared
-// ntdll) and tells each process's FEX where the copies are. The engine's symbols are local, so they come from its symbol
-// table; the table layout (0x50-byte entries: PE base, pool base, size, owner PEB at +0x40) is checked in the engine's
-// own walk of it, and the calls are wrapped in the engine's dispatch tables (in the engine, under its locks: no code
-// patching).
-// 1. A new FEX gets only the shared entries (unix_ios_push_jit_aliases: "x86-64 children under FEX will need
-//    per-process alias routing"), so a child's x64 code calling into ntdll jumps to an address its FEX cannot place
-//    (steam.exe died on NtSetInformationProcess, [iOS-xquery] MISS, NoExecOp, right after starting the game). The wrapper
-//    also pushes the binding process's own entries; FEX replaces the overlapping shared ntdll entry with them.
-// 2. Unmapping an image leaves its entry, and a later image of the same size at the same address (another process's)
-//    passes the engine's stale check (its headers look right) and runs the old one's code: after steam.exe freed
-//    steamclient64.dll and imagehlp.dll, the game's nsi.dll ran imagehlp's copy and crashed. The wrapper of
-//    NtUnmapViewOfSection(Ex) retires the entry the way the engine's own window purge does (size, then PE base, zeroed
-//    under ios_pool_lock); the old copy stays in the pool, so a thread still in it does not fault.
-// ponytail: images mapped later still go to whichever FEX bound last (the engine's single callback); route them per
-// process too if a parent's x64 code calls a DLL it loads after starting a child.
-typedef void (*AliasAdd)(unsigned long long pe, unsigned long long jit, unsigned long long size);
-static int (*gPushAliases)(void *args);   // NTSTATUS
-static int (*gUnmap)(void *process, void *addr);
-static int (*gUnmapEx)(void *process, void *addr, unsigned flags);
-static char *gMappings;
-static const int *gMappingCount;
-static void *(*gCurrentPeb)(void);   // the engine's ios_jit_current_peb: what it records as an entry's owner
-static pthread_mutex_t *gPoolLock;
-#define MAP_ENTRY(i) (gMappings + (i) * 0x50)
-#define MAP_PE(e) (*(uint64_t *)(e))
-#define MAP_POOL(e) (*(uint64_t *)((e) + 8))
-#define MAP_SIZE(e) (*(uint64_t *)((e) + 0x10))
-#define MAP_OWNER(e) (*(void **)((e) + 0x40))
-
-static int pushAliases(void *args) {
-    int status = gPushAliases(args);
-    AliasAdd add = args ? *(AliasAdd *)args : NULL;
-    void *peb = gCurrentPeb();
-    if (status || !add || !peb) return status;
-    for (int i = 0; i < *gMappingCount; i++)
-        if (MAP_OWNER(MAP_ENTRY(i)) == peb && MAP_PE(MAP_ENTRY(i))) add(MAP_PE(MAP_ENTRY(i)), MAP_POOL(MAP_ENTRY(i)), MAP_SIZE(MAP_ENTRY(i)));
-    return status;
-}
-
-static void retireImage(uint64_t addr) {
-    pthread_mutex_lock(gPoolLock);
-    for (int i = 0; i < *gMappingCount; i++) {
-        char *e = MAP_ENTRY(i);
-        if (MAP_OWNER(e) || !MAP_PE(e) || addr < MAP_PE(e) || addr >= MAP_PE(e) + MAP_SIZE(e)) continue;
-        MAP_SIZE(e) = 0;
-        __atomic_thread_fence(__ATOMIC_SEQ_CST);
-        MAP_PE(e) = 0;
-    }
-    pthread_mutex_unlock(gPoolLock);
-}
-
-static int unmapView(void *process, void *addr) {
-    int status = gUnmap(process, addr);
-    if (!status) retireImage((uint64_t)addr);
-    return status;
-}
-
-static int unmapViewEx(void *process, void *addr, unsigned flags) {
-    int status = gUnmapEx(process, addr, flags);
-    if (!status) retireImage((uint64_t)addr);
-    return status;
-}
-
-// 3. A module's TLS slot reaches the pool copy. The loader (alloc_tls_slot) writes the slot into the image's _tls_index
-//    after the engine copied the image into the pool, and ARM64EC code reads it PC-relative, from the copy, where it is
-//    still 0. When the game's .exe has TLS it takes slot 0 and FEX (xtajit64.dll) slot 1, so FEX kept its thread_locals
-//    in the game's block: its IR capture writes at +8, MSVC's magic-static epoch, and the game skipped its static
-//    initialisers (Team Dehdehbon: no Ogg callbacks, 127 "Failed to open file stream", then a NULL table). Madeira's fix
-//    (wine 694442e4, unix_ios_sync_pe_write: the same four bytes into this process's copy, as ios_jit_sync_write) is not
-//    in 0.1.3. Here it runs on the loader's own "[tls-life] ml704 slot=" line, the engine's write() of it: that line goes
-//    out right after the slot is written, before the module's TLS callbacks or DllMain.
-// ponytail: that line is the loader's first 24 slots of a process; a later module with TLS keeps reading slot 0.
-static ssize_t (*gWrite)(int, const void *, size_t);
-
-static void syncTLSIndex(int fd, uint64_t base) {
-    const uint8_t *pe = (const uint8_t *)base;
-    if (!base || pe[0] != 'M' || pe[1] != 'Z') return;
-    const uint8_t *opt = pe + *(const uint32_t *)(pe + 0x3c) + 24;
-    uint32_t tls = *(const uint16_t *)opt == 0x20b ? *(const uint32_t *)(opt + 112 + 9 * 8) : 0;   // PE32+, directory 9
-    if (!tls) return;
-    uint64_t index = *(const uint64_t *)(pe + tls + 16);   // IMAGE_TLS_DIRECTORY64.AddressOfIndex
-    void *peb = gCurrentPeb();
-    char *copy = NULL;   // this process's own copy, else the shared one (ios_jit_sync_write's choice)
-    for (int i = 0; i < *gMappingCount; i++) {
-        char *e = MAP_ENTRY(i);
-        if (index < MAP_PE(e) || index >= MAP_PE(e) + MAP_SIZE(e)) continue;
-        if (MAP_OWNER(e) == peb) { copy = e; break; }
-        if (!MAP_OWNER(e) && !copy) copy = e;
-    }
-    if (!copy) return;   // not copied: x64 code, which FEX reads in place
-    volatile uint32_t *to = (uint32_t *)(gPoolRW + MAP_POOL(copy) - gPoolRX + index - MAP_PE(copy));
-    uint32_t was = *to, slot = *(const uint32_t *)index;
-    *to = slot;
-    char line[128];
-    int n = snprintf(line, sizeof line, "[macshack] TLS slot %u synced into the pool copy (module 0x%llx, copy had %u)\n",
-                     slot, (unsigned long long)base, was);
-    gWrite(fd, line, (size_t)n);
-}
-
-static ssize_t engineWrite(int fd, const void *buf, size_t n) {
-    const char *at = fd == 2 && n > 40 ? memmem(buf, n, "[tls-life] ml704 slot=", 22) : NULL;   // Wine's debug lines; not file writes
-    const char *b = at ? memmem(at, n - (size_t)(at - (const char *)buf), " base=", 6) : NULL;
-    char hex[17] = { 0 };
-    if (b) memcpy(hex, b + 6, MIN(16, n - (size_t)(b + 6 - (const char *)buf)));
-    ssize_t written = gWrite(fd, buf, n);
-    if (b) syncTLSIndex(fd, strtoull(hex, NULL, 16));
-    return written;
-}
-
-// 4. A hot ntdll pointer in a child's emulator is healed to the child's own ntdll copy. After 256 exec faults on one
-//    PE address the engine rewrites the pool slots holding it (ios_jit_patch_stale_pointer), translating each pool copy
-//    for its owner, and an emulator's copy (libarm64ecfex.dll, one per process) has none: KiUserExceptionDispatcher,
-//    which an emulator enters for each x64 syscall and exception, went to the first process's ntdll in every child's
-//    emulator, and the child's next syscall ran that copy's invoke_arm64ec_syscall, which its emulator cannot place
-//    (Hi-Fi Rush: its protection's direct syscall, [iOS-xquery] MISS, NoExec). Madeira's fix (#141, the mapper's PEB per
-//    entry) is not in 0.1.3. Here, on the engine's "queued for heal" line (its scanner heals 100 ms later), each child's
-//    emulator copy gets the child's own ntdll copy instead; the engine's heal then finds only the first process's slot.
-// ponytail: emulators' copies only (where the slots were); another per-process module holding an ntdll VA keeps the
-// engine's choice.
-#define MAP_TEXT(e) (*(uint64_t *)((e) + 0x18))
-#define MAP_TEXT_SIZE(e) (*(uint64_t *)((e) + 0x20))
-
-static uint64_t peek(uint64_t address) {   // a dead process's memory reads as 0
-    uint64_t v = 0;
-    vm_size_t n;
-    return vm_read_overwrite(mach_task_self(), address, 8, (vm_address_t)&v, &n) ? 0 : v;
-}
-
-static uint64_t emulatorBase(uint64_t peb) {   // the process's xtajit64.dll, from its loader list (PEB.Ldr)
-    uint64_t head = peek(peb + 0x18) + 0x10, link = peek(head);
-    for (int n = 0; link && link != head && n < 1024; n++, link = peek(link)) {
-        uint16_t name[12] = { 0 };
-        vm_size_t got;
-        if ((peek(link + 0x58) & 0xffff) != 2 * 12 ||   // BaseDllName.Length
-            vm_read_overwrite(mach_task_self(), peek(link + 0x60), sizeof name, (vm_address_t)name, &got)) continue;
-        BOOL same = YES;
-        for (int i = 0; i < 12 && same; i++) same = name[i] < 128 && tolower(name[i]) == "xtajit64.dll"[i];
-        if (same) return peek(link + 0x30);   // DllBase
-    }
-    return 0;
-}
-
-static void healForChildren(uint64_t va) {
-    int count = *gMappingCount;
-    for (int c = 0; c < count; c++) {
-        char *own = MAP_ENTRY(c);   // a child's own copy of the image holding va (ntdll)
-        if (!MAP_OWNER(own) || !MAP_PE(own) || va < MAP_PE(own) || va >= MAP_PE(own) + MAP_SIZE(own)) continue;
-        uint64_t fex = emulatorBase((uint64_t)MAP_OWNER(own)), target = MAP_POOL(own) + va - MAP_PE(own);
-        for (int i = 0; fex && i < count; i++) {
-            char *e = MAP_ENTRY(i);
-            if (MAP_PE(e) != fex || MAP_OWNER(e)) continue;
-            uint64_t *w = (uint64_t *)(gPoolRW + MAP_POOL(e) - gPoolRX);
-            int fixed = 0;
-            for (uint64_t off = 0; off + 8 <= MAP_SIZE(e); off += 8)
-                if ((off < MAP_TEXT(e) || off >= MAP_TEXT(e) + MAP_TEXT_SIZE(e)) && w[off / 8] == va) { w[off / 8] = target; fixed++; }
-            fprintf(stderr, "[macshack] hot 0x%llx: process %p's emulator 0x%llx -> its own copy 0x%llx, %d slot(s)\n",
-                    va, MAP_OWNER(own), fex, target, fixed);
-        }
-    }
-}
-
-static int engineFprintf(FILE *f, const char *format, ...) {
-    va_list ap, args;
-    va_start(ap, format);
-    va_copy(args, ap);
-    int n = vfprintf(f, format, ap);
-    va_end(ap);
-    if (!strncmp(format, "[stale-heal] 0x%llx crossed", 27)) healForChildren(va_arg(args, unsigned long long));
-    va_end(args);
-    return n;
-}
-
-// Replaces table[slot] (in the engine's read-only data) with fn and returns what was there.
-static void *swapEntry(void **table, int slot, void *fn) {
-    vm_address_t page = (vm_address_t)&table[slot] & ~(vm_address_t)(vm_page_size - 1);
-    if (vm_protect(mach_task_self(), page, vm_page_size, FALSE, VM_PROT_READ | VM_PROT_WRITE)) return NULL;
-    void *old = table[slot];
-    table[slot] = fn;
-    vm_protect(mach_task_self(), page, vm_page_size, FALSE, VM_PROT_READ);
-    return old;
-}
-
-static NSString *fixPoolBookkeeping(void) {
-    const struct mach_header_64 *mh = NULL;
-    intptr_t slide = 0;
-    for (uint32_t i = 0; i < _dyld_image_count() && !mh; i++)
-        if (strstr(_dyld_get_image_name(i), "/Madeira.debug.dylib")) {
-            mh = (const struct mach_header_64 *)_dyld_get_image_header(i);
-            slide = _dyld_get_image_vmaddr_slide(i);
-        }
-    if (!mh) return @"no engine image";
-    const struct symtab_command *st = NULL;
-    const struct segment_command_64 *linkedit = NULL, *text = NULL;
-    const struct load_command *lc = (const void *)(mh + 1);
-    for (uint32_t i = 0; i < mh->ncmds; i++, lc = (const void *)((const char *)lc + lc->cmdsize)) {
-        if (lc->cmd == LC_SYMTAB) st = (const void *)lc;
-        if (lc->cmd == LC_SEGMENT_64 && !strcmp(((const struct segment_command_64 *)lc)->segname, SEG_LINKEDIT)) linkedit = (const void *)lc;
-        if (lc->cmd == LC_SEGMENT_64 && !strcmp(((const struct segment_command_64 *)lc)->segname, SEG_TEXT)) text = (const void *)lc;
-    }
-    if (!st || !linkedit || !text) return @"no symbol table";
-    const char *base = (const char *)(slide + linkedit->vmaddr - linkedit->fileoff);
-    const struct nlist_64 *syms = (const void *)(base + st->symoff);
-    const char *strs = base + st->stroff;
-    enum { CALLS, PUSH, MAPPINGS, COUNT, PEB, LOCK, SYSCALLS, UNMAP, UNMAPEX, NAMES };
-    static const char *names[NAMES] = { "_unix_call_funcs", "_unixcall_ios_push_jit_aliases", "_ios_jit_mappings",
-        "_ios_jit_mapping_count", "_ios_jit_current_peb", "_ios_pool_lock", "_syscalls", "_NtUnmapViewOfSection",
-        "_NtUnmapViewOfSectionEx" };
-    uintptr_t found[NAMES] = { 0 }, tables[2] = { 0 };   // _syscalls: ntdll's and win32u's
-    for (uint32_t i = 0; i < st->nsyms; i++) {
-        if (syms[i].n_type & N_STAB || !syms[i].n_value) continue;
-        for (int n = 0; n < NAMES; n++)
-            if (!found[n] && !strcmp(strs + syms[i].n_un.n_strx, names[n])) found[n] = syms[i].n_value + slide;
-        if (!strcmp(strs + syms[i].n_un.n_strx, "_syscalls")) tables[!!tables[0]] = syms[i].n_value + slide;
-    }
-    for (int n = 0; n < NAMES; n++) if (!found[n]) return [NSString stringWithFormat:@"no %s", names[n]];
-    for (int t = 0; t < 2 && tables[t]; t++)   // ntdll's is the one holding NtUnmapViewOfSection
-        for (int i = 0; i < 1024; i++) if (((void **)tables[t])[i] == (void *)found[UNMAP]) found[SYSCALLS] = tables[t];
-    const uint32_t *code = (const uint32_t *)found[PUSH];
-    BOOL stride = NO, owner = NO;   // add x22, x22, #0x50 and ldr x9, [x22, #0x40]: the engine's own walk of the table
-    for (int i = 0; i < 0x80; i++) { stride |= code[i] == 0x910142d6; owner |= code[i] == 0xf94022c9; }
-    if (!stride || !owner) return @"mapping table layout differs (engine changed)";
-    void **calls = (void **)found[CALLS], **syscalls = (void **)found[SYSCALLS];
-    int push = 0, unmap = 0, unmapEx = 0;
-    for (; push < 512; push++) {   // the push itself, or a function that calls or jumps to it (B/BL) early on
-        const uint32_t *fn = calls[push];
-        BOOL hit = fn == (const void *)found[PUSH];
-        for (int i = 0; i < 64 && !hit && (uintptr_t)fn >= (uintptr_t)mh && (uintptr_t)(fn + 64) <= (uintptr_t)mh + text->vmsize; i++)
-            hit = (fn[i] & 0x7c000000) == 0x14000000 &&
-                  (uintptr_t)(fn + i) + ((int64_t)((int32_t)(fn[i] << 6) >> 6) << 2) == found[PUSH];
-        if (hit) break;
-    }
-    while (unmap < 1024 && syscalls[unmap] != (void *)found[UNMAP]) unmap++;
-    while (unmapEx < 1024 && syscalls[unmapEx] != (void *)found[UNMAPEX]) unmapEx++;
-    if (push == 512 || unmap == 1024 || unmapEx == 1024) return @"a call is not in the engine's tables";
-    gMappings = (char *)found[MAPPINGS];
-    gMappingCount = (const int *)found[COUNT];
-    gCurrentPeb = (void *)found[PEB];
-    gPoolLock = (pthread_mutex_t *)found[LOCK];
-    gPushAliases = calls[push];
-    gUnmap = syscalls[unmap];
-    gUnmapEx = syscalls[unmapEx];
-    if (!swapEntry(calls, push, pushAliases) || !swapEntry(syscalls, unmap, unmapView) || !swapEntry(syscalls, unmapEx, unmapViewEx))
-        return @"a table is not writable";
-    struct rebinding hooks[2] = {{"write", (void *)engineWrite, (void **)&gWrite}, {"fprintf", (void *)engineFprintf, NULL}};
-    BOOL tls = gPoolRX && !rebind_symbols_image((void *)mh, slide, hooks, 2) && gWrite;
-    return [NSString stringWithFormat:@"wrapped unix call %d, syscalls %d and %d; TLS slots to the pool copies and hot ntdll pointers "
-                                      "per process: %@", push, unmap, unmapEx, tls ? @"on" : @"off (no write import)"];
-}
-
 static NSString *logTail(NSString *path, NSUInteger bytes) {
     NSData *d = [NSData dataWithContentsOfFile:path];
     if (!d) return @"(no log)";
@@ -450,7 +195,7 @@ NSString *MadeiraEngineDirectory(void) {
 
 NSString *MadeiraEngineRun(NSDictionary *request, CAMetalLayer *layer) {
     NSMutableString *o = [NSMutableString string];
-    NSString *dir = MadeiraEngineDirectory(), *dylib = [dir stringByAppendingPathComponent:@"Madeira.debug.dylib"];
+    NSString *dir = MadeiraEngineDirectory(), *dylib = [dir stringByAppendingPathComponent:@"MadeiraEngine.dylib"];   // WindowsKit.engineLibrary
     if (!dylib || ![NSFileManager.defaultManager fileExistsAtPath:dylib])   // before the pool: no address space pinned, no debugger waited for
         return [o stringByAppendingString:@"engine: Windows games are not set up (MacShack > Settings > Windows games)\n"];
     NSString *exe = request[@"run"], *game = request[@"game"];
@@ -468,7 +213,7 @@ NSString *MadeiraEngineRun(NSDictionary *request, CAMetalLayer *layer) {
     int (*wineserverStart)(const char *) = dlsym(engine, "wineserver_start");
     int (*wineProcessStart)(const char *) = dlsym(engine, "wine_process_start");
     void (*setLayer)(CAMetalLayer *) = dlsym(engine, "madeira_display_set_layer");
-    uint64_t (*presents)(void) = dlsym(engine, "madeira_get_present_count");
+    uint64_t (*presents)(void) = dlsym(engine, "madeira_frame_count") ?: dlsym(engine, "madeira_get_present_count");   // 0.2.0: + GL's
     void (*trapHandler)(void) = dlsym(engine, "jit_install_trap_handler");
     volatile int *quiet = dlsym(engine, "ws_log_quiet");
     int (*running)(void) = dlsym(engine, "wine_process_is_running");
@@ -482,7 +227,6 @@ NSString *MadeiraEngineRun(NSDictionary *request, CAMetalLayer *layer) {
     if (gImageHeld) [o appendFormat:@"engine: %@\n", releaseImageOnItsMap((const void *)wineserverStart)];
     ShackEngineBundleRedirect((const void *)wineserverStart, dir);   // the engine's own files: Windows/engine, not Play's bundle
     [o appendFormat:@"engine: loaded %@\n", dylib.lastPathComponent];
-    [o appendFormat:@"engine: JIT-pool bookkeeping for child processes: %@\n", fixPoolBookkeeping()];
     // Unix halves of Play's own builtins (Windows/engine/aarch64-unix: lsteamclient, from windows-kit). This engine binds a
     // builtin it does not know to a stub table (its iOS loader keeps no unix_path for them), so Play loads each here, after
     // the engine whose exports they bind to, and hands its call table to the PE half: MONO_MACSHACK_UNIXLIB_<NAME> = the
@@ -509,6 +253,18 @@ NSString *MadeiraEngineRun(NSDictionary *request, CAMetalLayer *layer) {
     }
     setenv("MADEIRA_SCREEN_W", @(screenW).stringValue.UTF8String, 1);
     setenv("MADEIRA_SCREEN_H", @(screenH).stringValue.UTF8String, 1);
+    // What 0.2.0's app adds to every launch (MadeiraApp's init, configureLaunch, runWineFullSequence, LibraryBCD), unless
+    // a game's .args set them: a program without a Steam identity of its own gets none (else the bridge gives every
+    // program Thumper's, 356400); Windows.Gaming.Input sees the host pads; DXMT's census is throttled; a Unity IL2CPP game
+    // (GameAssembly.dll beside its exe) suspends threads for real. Not the game-window overlay (#134): it attaches to the
+    // key window, Play's, above its touch controls.
+    if (!request[@"steamAppID"]) setenv("MADEIRA_NO_STEAM_IDENTITY", "1", 0);
+    setenv("MADEIRA_WGI_HOST_PADS", "1", 0);
+    setenv("DXMT_CENSUS_THROTTLE", "1", 0);
+    setenv("MTL_HUD_INSIGHTS_ENABLED", "0", 0);
+    setenv("MADEIRA_GAME_WINDOWS", "0", 0);
+    NSString *il2cpp = [[request[@"gameExe"] stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"GameAssembly.dll"];
+    if (il2cpp && [NSFileManager.defaultManager fileExistsAtPath:il2cpp]) setenv("MADEIRA_REAL_SUSPEND", "1", 0);
     if (vsync) vsync([request[@"fpsMode"] intValue] ?: 1);
     if (quiet) *quiet = 1;
     trapHandler();   // a later brk (no debugger now) is skipped instead of killing us, as in Madeira's app
@@ -539,7 +295,11 @@ NSString *MadeiraEngineRun(NSDictionary *request, CAMetalLayer *layer) {
     dispatch_resume(status);
     [o appendFormat:@"engine: wineserver_start %d (%@)\n", wineserverStart(prefix.fileSystemRepresentation), prefix];   // seeds the prefix
     if (game) [o appendFormat:@"engine: %@\n", linkGame(prefix, game, request[@"gameDir"])];
-    sleep(2);   // as Madeira's app does before the Windows process
+    // Before the Windows process, as Madeira's app: the server ready (10 ms polls, 2 s at most: 0.2.0's
+    // MADEIRA_FAST_SERVER_START), or 2 s.
+    int (*serverRunning)(void) = dlsym(engine, "wineserver_is_running"), (*serverReady)(void) = dlsym(engine, "wineserver_is_ready");
+    if (serverRunning && serverReady) for (int i = 0; i < 200 && serverRunning() && !serverReady(); i++) usleep(10000);
+    else sleep(2);
     // NotProton's steam.exe exits when only "system" processes are left: Wine signals that event once no user program has
     // run for the server's persistence time (Wine's default 3 s). Madeira's in-app server never times out (main_ios.c),
     // so for NotProton's launch Play restores Wine's default once the server is up. After the game has quit, the server

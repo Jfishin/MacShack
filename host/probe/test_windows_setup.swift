@@ -1,11 +1,12 @@
 // Mac check for host/WindowsKit.swift: the downloads and their pins, the layout MacShack Play reads, NotProton's ntdll
 // detour (applied once, "already patched" after, refused on another file), the libraries to sign, the credits.
 // Downloads Madeira's IPA and Valve's two packages once into ~/Library/Caches/MacShackWindowsSetupTest; the kit zip is
-// the argument (windows-kit/release.sh's build/macshack-windows-kit-1.zip) until its release is public. From the
+// the argument (windows-kit/release.sh's build/macshack-windows-kit-2.zip) until its release is public. From the
 // repository root:
-// clang -fobjc-arc -c host/ShackSteamSetup.m -o /tmp/ss.o && swiftc -parse-as-library -import-objc-header host/ShackSteamSetup.h \
-//   host/VDFParser.swift host/SteamClientManifest.swift host/WindowsKit.swift host/probe/test_windows_setup.swift /tmp/ss.o \
-//   -larchive -o /tmp/t && /tmp/t windows-kit/build/macshack-windows-kit-1.zip
+// clang -fobjc-arc -c host/ShackSteamSetup.m -o /tmp/ss.o && clang -fobjc-arc -c host/ShackPrep.m -o /tmp/sp.o && \
+//   swiftc -parse-as-library -import-objc-header host/probe/windows_setup_bridge.h host/VDFParser.swift \
+//   host/SteamClientManifest.swift host/WindowsKit.swift host/probe/test_windows_setup.swift /tmp/ss.o /tmp/sp.o \
+//   -larchive -o /tmp/t && /tmp/t windows-kit/build/macshack-windows-kit-2.zip
 // Expect `windows setup ok`.
 import Foundation
 
@@ -21,7 +22,7 @@ import Foundation
         let kitCopy = cache.appendingPathComponent(WindowsKit.kit.file)
         try? fm.removeItem(at: kitCopy)
         try! fm.copyItem(at: URL(fileURLWithPath: CommandLine.arguments[1]), to: kitCopy)
-        check(WindowsKit.downloads.first == WindowsKit.kit, "the kit is fetched first: an unpublished kit fails before Madeira's 146 MB")
+        check(WindowsKit.downloads.first == WindowsKit.kit, "the kit is fetched first: an unpublished kit fails before Madeira's 177 MB")
         for d in WindowsKit.downloads where d != WindowsKit.kit {
             let file = cache.appendingPathComponent(d.file)
             if SteamClientManifest.sha256(of: file) == d.sha256 { continue }
@@ -39,17 +40,21 @@ import Foundation
         let root = fm.temporaryDirectory.appendingPathComponent("windows-setup-\(UUID().uuidString)/Windows.new")
         let libraries = try! WindowsKit.layOut(cache: cache, into: root, unzip: { ShackSteamUnzip($0, $1) })
         let engine = root.appendingPathComponent("engine")
-        let laidOut = WindowsKit.engineItems + ["arm64ec-windows/lsteamclient.dll", "aarch64-unix/lsteamclient.so", "steamapi-test.exe",
-                                                "steam/steam.exe", "steam/msi.dll", "steam/macshack-launch.exe"]
+        let laidOut = WindowsKit.engineItems.map { $0 == "Madeira" ? WindowsKit.engineLibrary : $0 }
+            + ["arm64ec-windows/lsteamclient.dll", "aarch64-unix/lsteamclient.so", "steamapi-test.exe",
+               "steam/steam.exe", "steam/msi.dll", "steam/macshack-launch.exe"]
             + WindowsKit.valveFiles.map { "steam/\($0.name)" }
         for item in laidOut { check(fm.fileExists(atPath: engine.appendingPathComponent(item).path), "engine/\(item) is laid out") }
+        check(!fm.fileExists(atPath: engine.appendingPathComponent("Madeira").path), "Madeira's executable is gone, made a library")
+        let header = try! FileHandle(forReadingFrom: engine.appendingPathComponent(WindowsKit.engineLibrary)).read(upToCount: 16)!
+        check(header.withUnsafeBytes { $0.load(fromByteOffset: 12, as: UInt32.self) } == 6, "the engine is an MH_DYLIB")
         check(!fm.fileExists(atPath: engine.appendingPathComponent("i386-windows").path), "no i386-windows")
         for notice in ["LICENSE", "NOTICE", "SOURCE", "notproton/NOTICE", "ntdll.patch.json"] {
             check(fm.fileExists(atPath: root.appendingPathComponent("kit/\(notice)").path), "kit/\(notice) is kept")
         }
         let base = engine.resolvingSymlinksInPath().path + "/"
         let names = libraries.map { $0.resolvingSymlinksInPath().path.replacingOccurrences(of: base, with: "") }
-        check(names.contains("Madeira.debug.dylib") && names.contains("aarch64-unix/lsteamclient.so"), "the engine and lsteamclient.so are to be signed: \(names)")
+        check(names.contains(WindowsKit.engineLibrary) && names.contains("aarch64-unix/lsteamclient.so"), "the engine and lsteamclient.so are to be signed: \(names)")
         check(!names.contains { $0.hasSuffix(".dll") || $0.hasSuffix(".exe") }, "no Windows file is to be signed")
 
         // The detour: in once (layOut applied it), and refused on a file it is not for.

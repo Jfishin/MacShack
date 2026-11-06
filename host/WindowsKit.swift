@@ -9,16 +9,18 @@ enum WindowsKit {
         var file: String { url.lastPathComponent }
     }
 
-    // Will Faust's release, as he publishes it (GPL-3.0-or-later): only its engine is kept.
-    static let madeiraVersion = "0.1.3"
+    // Will Faust's release, as he publishes it (GPL-3.0-or-later): only its engine is kept. Since 0.2.0 the engine is the
+    // app's executable, which layOut makes a library MacShack Play can load (ShackPrep: the Mach-O header only).
+    static let madeiraVersion = "0.2.0"
     static let madeira = Download(name: "Madeira \(madeiraVersion)",
-                                  url: URL(string: "https://github.com/willfaust/Madeira/releases/download/v0.1.3/Madeira-0.1.3.ipa")!,
-                                  sha256: "71e900cbc140778bd6fa67c1062821981ed98e6bfb674d853cfeefd6d242e1c0")
+                                  url: URL(string: "https://github.com/willfaust/Madeira/releases/download/v0.2.0/Madeira-0.2.0.ipa")!,
+                                  sha256: "7cdab35d6029b9a7701775ac794ac2674cac501ec6503465775e7a35ae046154")
+    static let engineLibrary = "MadeiraEngine.dylib"   // what MacShack Play opens (play/MadeiraEngine.m)
     // windows-kit/release.sh's zip, a release of this repository (GPL-3.0; its SOURCE names its exact source).
-    static let kitVersion = 1
+    static let kitVersion = 2
     static let kit = Download(name: "MacShack Windows kit \(kitVersion)",
-                              url: URL(string: "https://github.com/Jfishin/MacShack/releases/download/windows-kit-1/macshack-windows-kit-1.zip")!,
-                              sha256: "ee082a5d261353fe14e59f422bb6fb1ad1098e94aaf7e5b58fa670a840052f50")
+                              url: URL(string: "https://github.com/Jfishin/MacShack/releases/download/windows-kit-2/macshack-windows-kit-2.zip")!,
+                              sha256: "fcb378f972dd134300b8f1db7409bb70e71171840a6fd88d9b2d68be847fcf25")
     // Valve's Steam client packages NotProton v1.0.3 takes Steam's Windows files from (its valve-packages.manifest), from
     // the CDN Steam setup uses (SteamSetup.cdn). Downloaded on this device, never redistributed.
     static let valveCDN = URL(string: "https://client-update.fastly.steamstatic.com/")!
@@ -35,12 +37,13 @@ enum WindowsKit {
         ValveFile(name: "tier0_s64.dll", package: 1, path: "tier0_s64.dll", sha256: "30f7bb8d9b86006852493c26124ba253bd9e7ffd40a8b3c7254f86a9032c3be3"),
         ValveFile(name: "vstdlib_s64.dll", package: 1, path: "vstdlib_s64.dll", sha256: "99efb4c2ad47f90c803b5ee0bd6424916b28facb9fa2568845b1b1f58a36062a"),
     ]
-    // The kit first: a kit not (yet) published fails before the 146 MB Madeira download. layOut reads the cache by file name.
+    // The kit first: a kit not (yet) published fails before the 177 MB Madeira download. layOut reads the cache by file name.
     static var downloads: [Download] { [kit, madeira] + valvePackages }
 
-    // From Madeira's app: its engine and the files it reads beside it. Not: i386-windows (194 MB, until a 32-bit game
-    // needs it), Madeira's own app, JIT extension and frameworks.
-    static let engineItems = ["Madeira.debug.dylib", "default.metallib", "aarch64-windows", "arm64ec-windows", "x86_64-vcruntime",
+    // From Madeira's app: its engine and the files it reads beside it (gl: desktop OpenGL through Zink, d3d9 on wined3d;
+    // compat: LuaJIT for LÖVE games). Not: i386-windows (173 MB, until a 32-bit game needs it), vulkan and x86_64-opengl
+    // (opt-in in madeira.cfg), Madeira's own app, JIT extension and frameworks.
+    static let engineItems = ["Madeira", "default.metallib", "aarch64-windows", "arm64ec-windows", "gl", "compat",
                               "nls", "d3d12", "prefix-template.tar.gz", "cacert.pem", "legal", "licenses"]
 
     // Who made each piece: shown before anything downloads (WindowsGamesView).
@@ -93,7 +96,14 @@ enum WindowsKit {
             try fm.moveItem(at: app.appendingPathComponent(item), to: engine.appendingPathComponent(item))
         }
         try fm.removeItem(at: ipa)
-        guard fm.fileExists(atPath: engine.appendingPathComponent("Madeira.debug.dylib").path) else { throw Failure("\(madeira.name) has no Madeira.debug.dylib") }
+        // The engine: Madeira's app executable as a library, its code and data unchanged.
+        let executable = engine.appendingPathComponent("Madeira")
+        guard fm.fileExists(atPath: executable.path) else { throw Failure("\(madeira.name) has no Madeira executable") }
+        do {
+            try ShackPrep.libraryFromExecutable(atPath: executable.path, outputPath: engine.appendingPathComponent(engineLibrary).path,
+                                                installName: "@rpath/\(engineLibrary)")
+        } catch { throw Failure("\(madeira.name)'s engine: \(error.localizedDescription)") }
+        try fm.removeItem(at: executable)
         // The kit: its pieces where the engine and Play look for them, its notices and the detour in kit/.
         try unpack(kit, into: kitDir)
         for dir in ["steam", "aarch64-unix"] { try fm.createDirectory(at: engine.appendingPathComponent(dir), withIntermediateDirectories: true) }

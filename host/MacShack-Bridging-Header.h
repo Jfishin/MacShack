@@ -4,6 +4,7 @@
 #import "ShackSignProbe.h"
 #import "ShackSteamProbe.h"
 #import "ShackSteamSetup.h"
+#import "ShackPrep.h"
 #import "ShackMetalFXProbe.h"
 #import "ShackSigner.h"
 
