@@ -29,7 +29,8 @@ struct WindowsGamesView: View {
                         Label("Restart MacShack to finish: swipe it away in the app switcher, then open it again.", systemImage: "arrow.clockwise")
                             .foregroundStyle(.orange)
                     }
-                    if let stamp = WindowsSetup.stamp, setup.state != .working("Removing") {
+                    let stamp = WindowsSetup.stamp, removing = setup.state == .working("Removing")
+                    if let stamp, !removing {
                         LabeledContent("Set up", value: "Madeira \(stamp.madeira), kit \(stamp.kit)")
                         if WindowsSetup.playInstalled {
                             Button("Open MacShack Play") {
@@ -39,10 +40,15 @@ struct WindowsGamesView: View {
                         Button("Remove Windows games", role: .destructive) {
                             Task { games = await offMain { WindowsSetup.installedGames() }; askRemove = true }   // walks the library: off the main thread
                         }
-                    } else {
+                    }
+                    // Not set up, or set up with an older Madeira or kit than this MacShack pins: setting up again swaps the
+                    // Windows folder (the games in the Steam library stay).
+                    if stamp == nil || removing || stamp != WindowsKit.stamp {
                         switch setup.state {
                         case .idle:
-                            Button("Set up Windows games") { setup.start() }.disabled(!WindowsSetup.playInstalled)
+                            Button(stamp == nil ? "Set up Windows games" : "Update to Madeira \(WindowsKit.madeiraVersion), kit \(WindowsKit.kitVersion)") {
+                                setup.start()
+                            }.disabled(!WindowsSetup.playInstalled)
                             if !WindowsSetup.playInstalled {
                                 Text("Install MacShack Play first: build its scheme in Xcode.").foregroundStyle(.secondary)
                             }
