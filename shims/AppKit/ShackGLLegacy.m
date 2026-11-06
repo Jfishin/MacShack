@@ -514,6 +514,10 @@ void ShackGLUnpackTight(BOOL repacked, GLenum fmt, void (^send)(void)) {
 // BGRA 8_8_8_8_REV, which ES refuses with a sized format: the texture stayed empty and its framebuffer incomplete).
 // An upload with pixels keeps its format and type (ShackGL.m repacks those).
 void ShackGLTexAlloc(GLint *internal, GLenum *fmt, GLenum *type, const void *data) {
+    // GL 1.0's component counts, which desktop GL still takes as internal formats (Titan Souls' images: 4 with BGRA
+    // bytes); ES refused the upload and the texture stayed empty.
+    static const GLint counts[] = { GL_LUMINANCE, GL_LUMINANCE_ALPHA, GL_RGB, GL_RGBA };
+    if (*internal >= 1 && *internal <= 4) *internal = counts[*internal - 1];
     switch (*internal) {
     case 0x805B: *internal = GL_RGBA16F; break;   // GL_RGBA16
     case 0x8054: *internal = GL_RGB16F; break;    // GL_RGB16
