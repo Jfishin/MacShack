@@ -447,7 +447,7 @@ index c356e617..c2e90964 100644
  #include <string.h>
  #include <errno.h>
 diff --git a/src/dyld.c b/src/dyld.c
-index 039958e3..b057a5c0 100644
+index 039958e3..3f4b9276 100644
 --- a/src/dyld.c
 +++ b/src/dyld.c
 @@ -569,6 +569,7 @@
@@ -471,6 +471,15 @@ index 039958e3..b057a5c0 100644
          img->scan_lo = vmlo;
          img->scan_hi = vmhi;
      }
+@@ -1140,7 +1145,7 @@ static SymIndex *symidx_build(const uint8_t *slice, uint64_t text_vmaddr)
+             symoff = rd32(lc + 8); nsyms = rd32(lc + 12);
+             stroff = rd32(lc + 16); strsize = rd32(lc + 20);
+         } else if (cmd == LC_DYSYMTAB) {
+-            iextdef = rd32(lc + 8 + 3 * 4); nextdef = rd32(lc + 8 + 4 * 4);
++            iextdef = rd32(lc + 16); nextdef = rd32(lc + 20);   /* dysymtab_command: iextdefsym, nextdefsym */
+             have_dysym = 1;
+         }
+         lc += rd32(lc + 4);
 @@ -6071,7 +6076,11 @@ static void wine_preload_skip_pinned(DynImage *img)
  
  int ocerz_dyld_run(struct OcerzVM *vm, const char *path, int argc, char **argv, char **envp)

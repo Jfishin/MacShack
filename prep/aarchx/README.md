@@ -45,6 +45,9 @@ iOS changes are marked `MacShack:` in the source:
   flags nothing reads no longer keeps the earlier flags live (shld/shrd); shifts, rotates, adc, sbb, setcc and
   mul/div with a memory operand run as load, register form, store; pushf, popf, movs, stos, shifts of ah-bh, haddps,
   rsqrtss and rcpss run translated (`docs/m32.md` lists their switches; diff32 covers each). Meant for upstream.
+- a dylib without an export trie is indexed from LC_DYSYMTAB's iextdefsym and nextdefsym, which the symbol-table index
+  read one field late (nextdefsym and iundefsym): with a local symbol first, Titan Souls' 2014 SDL2_image gave 1 of its
+  44 exports and IMG_Load was stubbed (no textures). Meant for upstream.
 
 Not carried over from the old patch (no failing test on this base): the side-gap fusion check (`check_sidegap.c`
 passes without it), the low-shadow fallback (it broke cache mode on the Mac; unreachable on iOS) and the bridged-call
