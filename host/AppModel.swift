@@ -94,7 +94,7 @@ final class AppModel {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         var found = items.filter { $0.pathExtension == "app" }
-        if folder == "Staging" { found += items.compactMap(StagedFolder.game) }
+        if folder == "Staging" { found = found.map { StagedFolder.gogGame(in: $0) ?? $0 } + items.compactMap(StagedFolder.game) }
         return found.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
     }
 

@@ -5,21 +5,44 @@ import Foundation
 // folder: the data moves beside the installed game (Documents/Games) and the .app to Staging's top, where the installer
 // takes it. Only on Prepare, never while scanning: Files may still be copying. Names already in Documents/Games are
 // refused rather than mixing two games' data.
+// GOG's Mac games come in a wrapper app whose own executable (GOGLauncher) starts the real game,
+// Contents/Resources/game/<Game>.app, data beside it there (Titan Souls); a copy may have lost the wrapper's .app. The
+// wrapper lists as the game inside it, and Prepare takes that game out the same way; a wrapper with the game's own name
+// is set aside as "<name> (GOG launcher)" first.
 enum StagedFolder {
     static func game(in folder: URL) -> URL? {
         guard folder.pathExtension != "app", (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true,
               let items = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) else { return nil }
         let apps = items.filter { $0.pathExtension == "app" }
+        return apps.count == 1 ? apps[0] : gogGame(in: folder)
+    }
+
+    static func gogGame(in wrapper: URL) -> URL? {
+        let folder = wrapper.appendingPathComponent("Contents/Resources/game", isDirectory: true)
+        let apps = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "app" }
         return apps.count == 1 ? apps[0] : nil
     }
 
-    // The .app to install: app itself unless it is in a folder directly inside Staging (at Staging's top, or installed in
-    // Documents/Games for a Prepare again).
+    // The .app to install: app itself unless it is in a folder directly inside Staging, or a GOG wrapper's game there (at
+    // Staging's top, or installed in Documents/Games for a Prepare again).
     static func unpack(_ app: URL, staging: URL, games: URL) throws -> URL {
         let fm = FileManager.default
-        let folder = app.deletingLastPathComponent()
-        guard folder.deletingLastPathComponent().standardizedFileURL.path == staging.standardizedFileURL.path else { return app }
+        var app = app, folder = app.deletingLastPathComponent()
+        // Resolved: a listing below the top can come back as /private/var/... for Staging's /var/...
+        let same = { (a: URL, b: URL) in a.resolvingSymlinksInPath().path == b.resolvingSymlinksInPath().path }
+        let atStaging = { (url: URL) in same(url.deletingLastPathComponent(), staging) }
+        let wrapper = folder.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let gog = atStaging(wrapper) && gogGame(in: wrapper).map { same($0, app) } == true
+        guard gog || atStaging(folder) else { return app }
         func fail(_ text: String) -> NSError { NSError(domain: "MacShack", code: 4, userInfo: [NSLocalizedDescriptionKey: text]) }
+        if gog && same(wrapper, staging.appendingPathComponent(app.lastPathComponent)) {
+            let aside = staging.appendingPathComponent(app.deletingPathExtension().lastPathComponent + " (GOG launcher)")
+            if fm.fileExists(atPath: aside.path) { throw fail("Staging already has \(aside.lastPathComponent).") }
+            try fm.moveItem(at: wrapper, to: aside)
+            folder = aside.appendingPathComponent("Contents/Resources/game", isDirectory: true)
+            app = folder.appendingPathComponent(app.lastPathComponent)
+        }
         let leftover = { (name: String) in name == ".DS_Store" || name.hasPrefix("._") }
         let data = try fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent != app.lastPathComponent && !leftover($0.lastPathComponent) }

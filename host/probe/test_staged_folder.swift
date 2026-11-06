@@ -37,6 +37,32 @@ import Foundation
         try fm.createDirectory(at: installedGame, withIntermediateDirectories: true)
         check(try StagedFolder.unpack(installedGame, staging: staging, games: games).path == installedGame.path, "an installed .app is left as is")
         check(fm.fileExists(atPath: games.appendingPathComponent("archive").path), "and Games is untouched")
+
+        // GOG's wrapper (Titan Souls), its .app lost in the copy: the game inside is listed and comes to Staging's top.
+        let titan = staging.appendingPathComponent("Titan Souls")
+        for dir in ["Contents/MacOS", "Contents/Resources/game/Titan Souls.app/Contents/MacOS"] {
+            try fm.createDirectory(at: titan.appendingPathComponent(dir), withIntermediateDirectories: true)
+        }
+        try Data().write(to: titan.appendingPathComponent("Contents/MacOS/GOGLauncher"))
+        let same = { (a: URL?, b: URL) in a?.resolvingSymlinksInPath().path == b.resolvingSymlinksInPath().path }
+        let titanGame = StagedFolder.game(in: titan)
+        check(same(titanGame, titan.appendingPathComponent("Contents/Resources/game/Titan Souls.app")), "a GOG wrapper lists its game")
+        let titanApp = try StagedFolder.unpack(titanGame!, staging: staging, games: games)
+        check(same(titanApp, staging.appendingPathComponent("Titan Souls.app")) &&
+              fm.fileExists(atPath: titanApp.appendingPathComponent("Contents/MacOS").path), "the game goes to Staging's top")
+        check(StagedFolder.game(in: titan) == nil && fm.fileExists(atPath: titan.appendingPathComponent("Contents/MacOS/GOGLauncher").path),
+              "the wrapper stays, no longer a game")
+        // A wrapper with its .app and the game's own name, data beside the game: set aside, data beside the installed game.
+        let hero = staging.appendingPathComponent("Hero.app")
+        try fm.createDirectory(at: hero.appendingPathComponent("Contents/Resources/game/Hero.app/Contents/MacOS"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: hero.appendingPathComponent("Contents/Resources/game/hero.pak"))
+        let heroGame = StagedFolder.gogGame(in: hero)
+        check(heroGame?.lastPathComponent == "Hero.app" && StagedFolder.game(in: hero) == nil, "a wrapper .app lists its game (AppModel maps it)")
+        let heroApp = try StagedFolder.unpack(heroGame!, staging: staging, games: games)
+        check(same(heroApp, hero) && fm.fileExists(atPath: heroApp.appendingPathComponent("Contents/MacOS").path) &&
+              !fm.fileExists(atPath: heroApp.appendingPathComponent("Contents/Resources/game").path), "the game takes the wrapper's place")
+        check(fm.fileExists(atPath: staging.appendingPathComponent("Hero (GOG launcher)/Contents/Resources").path), "the wrapper is set aside")
+        check(fm.fileExists(atPath: games.appendingPathComponent("hero.pak").path), "its data beside the game")
         try fm.removeItem(at: root)
         print("staged folder ok")
     }
