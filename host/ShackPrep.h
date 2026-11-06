@@ -40,6 +40,14 @@ NS_ASSUME_NONNULL_BEGIN
            loaderPathShift:(nullable NSString *)loaderPathShift
                    linkMap:(nullable NSDictionary<NSString *, NSString *> *)linkMap
                      error:(NSError * _Nullable * _Nullable)error;
+/// An iOS app's main executable as a library another app can dlopen (Madeira's engine, which ships inside its app's
+/// executable since 0.2.0): MH_DYLIB without PIE, LC_ID_DYLIB installName in place of LC_LOAD_DYLINKER, and __PAGEZERO
+/// cut to the page below __TEXT, so segment indices (and the fixups that name them) stay. Nothing else changes: code,
+/// data, build version, links, rpaths. Unsigned; writes atomically.
++ (BOOL)libraryFromExecutableAtPath:(NSString *)inputPath
+                         outputPath:(NSString *)outputPath
+                        installName:(NSString *)installName
+                              error:(NSError * _Nullable * _Nullable)error;
 @end
 
 NS_ASSUME_NONNULL_END

@@ -91,6 +91,19 @@ static NSMutableData *NamedCommand(uint32_t cmd, NSData *old, NSString *name, NS
     memcpy(b + prefix, utf8.bytes, utf8.length); return out;
 }
 
+// The rewritten command table in place of the old one, grown only into header padding that is all zero.
+static BOOL WriteCommands(NSMutableData *data, NSArray<NSData *> *commands, uint32_t oldSize, NSUInteger firstData, NSError **error) {
+    uint8_t *b = data.mutableBytes;
+    NSMutableData *blob = [NSMutableData data]; for (NSData *c in commands) [blob appendData:c];
+    if (blob.length > UINT32_MAX || blob.length + 32 > firstData) return Fail(error, @"Insufficient Mach-O header padding for rewritten load commands.");
+    // Do not assume unsectioned bytes between the command table and first section are free.
+    for (NSUInteger off = 32 + oldSize; off < 32 + blob.length; off++)
+        if (b[off]) return Fail(error, @"Mach-O header growth would overwrite nonzero data.");
+    memset(b + 32, 0, MAX(oldSize, blob.length)); memcpy(b + 32, blob.bytes, blob.length);
+    W32(b + 16, (uint32_t)commands.count); W32(b + 20, (uint32_t)blob.length);
+    return YES;
+}
+
 // Every rewritten command is copied, so no pointer into NSMutableData survives a resize.
 // Collect the first occupied byte after the headers; never relocate a code/data payload.
 static NSArray<NSMutableData *> *Commands(NSData *data, NSUInteger *firstData, NSError **error) {
@@ -395,14 +408,39 @@ static NSUInteger PatchREDPoolReservations(NSMutableData *data) {
             commands[i] = NamedCommand(cmd, c, linkMap[CommandString(c, 8, 24, nil)], 24);   // a private copy's own name
         }
     }
-    NSMutableData *blob = [NSMutableData data]; for (NSData *c in commands) [blob appendData:c];
-    if (blob.length > UINT32_MAX || blob.length + 32 > firstData) return Fail(error, @"Insufficient Mach-O header padding for rewritten load commands.");
-    // Do not assume unsectioned bytes between the command table and first section are free.
-    for (NSUInteger off = 32 + oldSize; off < 32 + blob.length; off++)
-        if (b[off]) return Fail(error, @"Mach-O header growth would overwrite nonzero data.");
-    memset(b + 32, 0, MAX(oldSize, blob.length)); memcpy(b + 32, blob.bytes, blob.length);
-    W32(b + 16, (uint32_t)commands.count); W32(b + 20, (uint32_t)blob.length);
+    if (!WriteCommands(data, commands, oldSize, firstData, error)) return NO;
     if (convert) { W32(b + 12, MH_DYLIB); W32(b + 24, (U32(b + 24) | MH_NO_REEXPORTED_DYLIBS) & ~MH_PIE); W32(b + 28, 0); }
+    return [data writeToFile:outputPath options:NSDataWritingAtomic error:error];
+}
+
++ (BOOL)libraryFromExecutableAtPath:(NSString *)inputPath outputPath:(NSString *)outputPath installName:(NSString *)installName
+                              error:(NSError **)error {
+    if (error) *error = nil;
+    NSData *source = [NSData dataWithContentsOfFile:inputPath options:NSDataReadingMappedIfSafe error:error];
+    if (!source) return NO;
+    NSRange slice; if (!Slice(source, &slice, error)) return NO;
+    NSMutableData *data = [[source subdataWithRange:slice] mutableCopy];
+    uint8_t *b = data.mutableBytes; uint32_t oldSize = U32(b + 20);
+    if (U32(b + 12) != MH_EXECUTE) return Fail(error, @"Not a main executable.");
+    NSUInteger firstData;
+    NSArray<NSMutableData *> *original = Commands(data, &firstData, error); if (!original) return NO;
+    NSMutableArray<NSMutableData *> *commands = [NSMutableArray array];
+    BOOL zero = NO, named = NO;
+    for (NSMutableData * __strong c in original) {
+        uint8_t *p = c.mutableBytes; uint32_t cmd = U32(p);
+        if (cmd == LC_SEGMENT_64 && !memcmp(p + 8, "__PAGEZERO\0", 11)) {
+            if (U64(p + 24) || U64(p + 32) != 0x100000000ULL) return Fail(error, @"__PAGEZERO is not the 4 GB below __TEXT.");
+            W64(p + 24, 0x100000000ULL - 0x4000); W64(p + 32, 0x4000); zero = YES;
+        }
+        if (cmd == LC_LOAD_DYLINKER) {
+            c = NamedCommand(LC_ID_DYLIB, nil, installName, 24); p = c.mutableBytes;
+            W32(p + 16, 0x10000); W32(p + 20, 0x10000); named = YES;
+        }
+        [commands addObject:c];
+    }
+    if (!zero || !named) return Fail(error, @"Main executable has no __PAGEZERO or LC_LOAD_DYLINKER to convert.");
+    if (!WriteCommands(data, commands, oldSize, firstData, error)) return NO;
+    W32(b + 12, MH_DYLIB); W32(b + 24, U32(b + 24) & ~MH_PIE);
     return [data writeToFile:outputPath options:NSDataWritingAtomic error:error];
 }
 @end
