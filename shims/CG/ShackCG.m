@@ -96,8 +96,16 @@ CFArrayRef CGDisplayCopyAllDisplayModes(CGDirectDisplayID display, CFDictionaryR
     if (ShackVirtualDisplaySize(NULL)) return CFBridgingRetain(@[RetinaMode()]);
     return CFBridgingRetain(@[RetinaMode(), PixelMode(1, 1), PixelMode(3, 4), PixelMode(2, 3), PixelMode(1, 2)]);
 }
+// As a Mac's display switches to the mode, a non-Retina GL surface (NSView.m) becomes the mode's width in pixels, which
+// the panel scales to fit: a 1x mode (2868x1320) makes it 3x the points, the HiDPI desktop mode 1x (Titan Souls' SDL
+// 2.0.3 switches to the resolution its menu picks, and otherwise drew 2868x1320 into a 956x440 surface). ponytail: the
+// screen keeps its points, so windows and the pointer stay in them; Metal and Retina surfaces are unaffected.
 CGError CGDisplaySetDisplayMode(CGDirectDisplayID display, CGDisplayModeRef mode, CFDictionaryRef options) {
-    NSLog(@"[ShackCG] CGDisplaySetDisplayMode ignored (%zux%zu)", mode ? MODE(mode).width : 0, mode ? MODE(mode).height : 0);
+    if (!mode) return kCGErrorSuccess;
+    CGSize p; CGFloat s; ScreenMetrics(&p, &s);
+    CGFloat gl = (CGFloat)MODE(mode).width / p.width;
+    ((void (*)(id, SEL, CGFloat))objc_msgSend)([(Class<ShackScreen>)NSClassFromString(@"NSScreen") mainScreen], NSSelectorFromString(@"shack_setGLScale:"), gl);
+    NSLog(@"[ShackCG] CGDisplaySetDisplayMode %zux%zu: non-Retina GL surfaces at %.2fx", MODE(mode).width, MODE(mode).height, gl);
     return kCGErrorSuccess;
 }
 size_t CGDisplayModeGetWidth(CGDisplayModeRef mode) { return mode ? MODE(mode).width : 0; }

@@ -87,6 +87,7 @@ static inline void ShackMainSync(dispatch_block_t b) { if (NSThread.isMainThread
 + (NSScreen *)mainScreen; + (NSArray<NSScreen *> *)screens;
 @property (nonatomic, readonly) NSRect frame, visibleFrame; @property (nonatomic, readonly) CGFloat backingScaleFactor;
 @property (nonatomic, readonly) NSDictionary *deviceDescription;
+- (CGFloat)shack_glScale;   // a non-Retina GL surface's scale: 1, or the display mode the game switched to
 @end
 
 @interface NSView : NSResponder
@@ -95,7 +96,7 @@ static inline void ShackMainSync(dispatch_block_t b) { if (NSThread.isMainThread
 @property (nonatomic, strong) CALayer *layer; @property (nonatomic) BOOL wantsLayer; @property (nonatomic, getter=isHidden) BOOL hidden;
 - (CALayer *)makeBackingLayer; - (CGRect)uiFrame;
 - (instancetype)initWithFrame:(NSRect)r; - (void)addSubview:(NSView *)v; - (void)setNeedsDisplay:(BOOL)f; - (void)setAutoresizingMask:(NSUInteger)m;
-- (NSView *)hitTest:(NSPoint)p; - (void)shack_applyFrame:(NSRect)r; - (void)shack_syncUIFrame;
+- (NSView *)hitTest:(NSPoint)p; - (void)shack_applyFrame:(NSRect)r; - (void)shack_syncUIFrame; - (BOOL)wantsBestResolutionOpenGLSurface;
 - (void)shack_moveToWindow:(NSWindow *)w;   // window set on the view and its subviews, viewDidMoveToWindow sent, first display queued
 - (NSPoint)convertPoint:(NSPoint)p fromView:(NSView *)v; - (BOOL)isFlipped;
 @end

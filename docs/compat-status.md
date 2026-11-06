@@ -19,7 +19,7 @@ Slots & Daggers · Soulstone Survivors · Super Money Ring (demo) · Valheim
 **Intel (AArchX, needs JIT)**
 
 Akane · Aragami · BioShock Remastered · Blasphemous · Celeste · Cuphead · Cyber Shadow · Hades · Shovel Knight ·
-Subnautica
+Subnautica · Titan Souls
 
 **Apps**
 
@@ -77,6 +77,7 @@ differ now, so retest those from Big Picture.
 | Shovel Knight | custom engine, GL | Plays (10-08) | An earlier build hit a malloc heap-corruption trap |
 | Gravity Circuit | LÖVE / LuaJIT | Alignment fault (SIGBUS) after 15 log lines on the Mac (9-27) | Not tried on the phone |
 | Enter the Gungeon | Unity, GNU libstdc++ | Not run since the libstdc++ guest existed | |
+| Titan Souls (GOG) | custom engine, SDL 2.0.3, OpenGL (ShackGL) | Plays with a controller at 2868×1320 (11-06) | Stage the GOG folder as it is (the game is inside the GOG launcher's wrapper). Its first start saves the screen it sees (956×440, pixel scale 1: tiny text) in `data/config.txt`; in Options, set RESOLUTION to another size and apply it (A), then to the top one: the menu counts its first entry as applied while the saved size is not in its list. MacShack's Resolution at Full Retina makes the top size 2868×1320 |
 
 ### i386 (32-bit): experimental
 

@@ -85,6 +85,7 @@ or iOS kills dyld on a cached invalid page.
 | Virtual HID gamepad, all three pad identities | `clang -fobjc-arc -DSHACK_HID_TEST shims/IOKit/ShackHID.m host/probe/test_shack_hid.m -framework Foundation -framework GameController -o /tmp/t && /tmp/t && SHACK_HID_PAD=xbox2016 /tmp/t && SHACK_HID_PAD=xbox360 /tmp/t` |
 | Text input (`interpretKeyEvents:`) | `clang -fobjc-arc shims/AppKit/ShackTextInput.m host/probe/test_textinput.m -framework Foundation -o /tmp/t && /tmp/t` (expect `text input ok`) |
 | Key events from Steam's on-screen keyboard (`CGEventPost`, iOS simulator) | header of `host/probe/test_cg_keys.m` (expect `cg keys ok`) |
+| Display mode switches size non-Retina GL surfaces (`CGDisplaySetDisplayMode`, iOS simulator) | header of `host/probe/test_cg_modes.m` (expect `cg modes ok`) |
 | Pointer warp and read-back (`CGWarpMouseCursorPosition`, `HIGetMousePosition`, iOS simulator) | header of `host/probe/test_mouse_warp.m` (expect `mouse warp ok`) |
 | Carbon shim: folders, catalog info, dates, Multiprocessing Services semaphores and critical regions (iOS simulator) | header of `host/probe/test_carbon.m` (expect `carbon ok`) |
 | metalgldrv's CGL-over-EGL adapter (Mac, against a metalgldrv macOS build) | header of `host/probe/test_gldrv.m` (expect `gldrv ok`) |

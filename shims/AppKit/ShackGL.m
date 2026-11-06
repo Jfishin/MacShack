@@ -56,6 +56,8 @@ static __thread __unsafe_unretained NSOpenGLContext *tCurrent;
 }
 // Drawable storage follows the layer's pixel size; checked at makeCurrent and after every flush (resizes, late attach).
 - (void)fitLayer {
+    // A display mode switch (NSScreen's shack_glScale) resizes a non-Retina surface: NSView sets the new scale, on main.
+    if (!_view.wantsBestResolutionOpenGLSurface && _layer.contentsScale != NSScreen.mainScreen.shack_glScale) [_view shack_syncUIFrame];
     CGSize px = CGSizeMake(_layer.bounds.size.width * _layer.contentsScale, _layer.bounds.size.height * _layer.contentsScale);
     if (px.width < 1 || px.height < 1 || CGSizeEqualToSize(px, _size)) return;
     GLint fb, rb, w = 0, h = 0;

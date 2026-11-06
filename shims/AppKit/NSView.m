@@ -6,7 +6,8 @@
 - (void)removeTrackingArea:(id)area { [_tracking removeObject:area]; }
 - (NSArray *)trackingAreas { return _tracking ?: @[]; }
 // As in AppKit, a GL surface is Retina only when asked (GLFW asks; Godot 3 without allow_hidpi does not, and draws
-// its window size in points: at 3x its picture filled a third of the screen). Core Animation scales a 1x surface up.
+// its window size in points: at 3x its picture filled a third of the screen). Core Animation scales a 1x surface up. A
+// display mode the game switches to sizes it as on a Mac (NSScreen's shack_glScale: 2868x1320 is 3x the points).
 - (void)setWantsBestResolutionOpenGLSurface:(BOOL)f { _bestGL = f; if (_ui && _layer) ShackMainSync(^{ [self attachLayer]; }); }
 - (BOOL)wantsBestResolutionOpenGLSurface { return _bestGL; }
 - (void)updateTrackingAreas {}   // GLFW's override calls super; a forwarded super-send traps in NSInvocation
@@ -24,7 +25,7 @@
     CGSize old = _layer.bounds.size;
     _layer.frame = _ui.bounds;
     ShackResizeSublayers(_layer, old);
-    _layer.contentsScale = [_layer isKindOfClass:NSClassFromString(@"CAEAGLLayer")] && !_bestGL ? 1 : NSScreen.mainScreen.backingScaleFactor;
+    _layer.contentsScale = [_layer isKindOfClass:NSClassFromString(@"CAEAGLLayer")] && !_bestGL ? NSScreen.mainScreen.shack_glScale : NSScreen.mainScreen.backingScaleFactor;
     if (_layer.superlayer != _ui.layer) [_ui.layer addSublayer:_layer];
     NSLog(@"[ShackAppKit] attachLayer %@ bounds %@ scale %.1f", NSStringFromClass(_layer.class), NSStringFromCGRect(_layer.bounds), _layer.contentsScale);
 }

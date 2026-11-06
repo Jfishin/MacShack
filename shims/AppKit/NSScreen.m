@@ -14,8 +14,12 @@ static UIScreen *ShackUIScreen(void) { return ((UIWindowScene *)UIApplication.sh
 - (NSRect)rectValue { return self.CGRectValue; }
 @end
 
-@implementation NSScreen { CGRect _frame; CGFloat _scale, _native; NSInteger _fps; BOOL _ready; }
+@implementation NSScreen { CGRect _frame; CGFloat _scale, _native, _glScale; NSInteger _fps; BOOL _ready; }
 SHACK_SAFETY_NET
+// A non-Retina GL surface's scale (NSView.m): 1, as in AppKit, until the game switches the display to a mode
+// (CGDisplaySetDisplayMode, ShackCG.m sets it).
+- (CGFloat)shack_glScale { return _glScale > 0 ? _glScale : 1; }
+- (void)shack_setGLScale:(CGFloat)scale { _glScale = scale; }
 // ponytail: metrics captured once; rotation/screen changes are not tracked. Games read these per frame off-main,
 // so a per-call ShackMainSync would deadlock against any main-thread wait on a render thread. The loader primes
 // this on the main thread before the guest starts; ShackMainSync stays outside dispatch_once so a racing
