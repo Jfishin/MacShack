@@ -74,8 +74,14 @@ def resolve(path):
 
     _, vrva, vsize, roff, rsize = pe.sec('.text')
     cave = vrva + vsize
-    payload = (cave + 15) & ~15
     mapped_end = (cave + PAGE - 1) & ~(PAGE - 1)
+    # The payload ends the cave: since 0.2.0 Madeira puts its own trampoline at the cave's start (its [pc2fh] patch of
+    # RtlPcToFileHeader, 48 bytes 16 past .text's 16-aligned end, virtual_ios.c), in the JIT-pool copy every process
+    # runs, and wrote it over the payload's first bytes when the payload began there: the hook then jumped to
+    # 0xfffffffffffffffe (macshack-launch.exe, before steam.exe).
+    payload = (mapped_end - PAYLOAD_MAX) & ~15
+    if payload < ((cave + 15) & ~15) + 16 + 48:
+        raise SystemExit(f"{path}: the cave after .text ({cave:#x}..{mapped_end:#x}) has no room past Madeira's trampoline")
     return {**site, 'pe': pe, 'imageBase': pe.imagebase, 'sha256': hashlib.sha256(pe.d).hexdigest(),
             'LdrGetDllHandle': get_handle, 'LdrLoadDll': load_dll, 'NtProtectVirtualMemory': protect.pop(),
             'caveRVA': cave, 'payloadRVA': payload, 'room': mapped_end - payload, 'fill': pe.d[roff + vsize]}
