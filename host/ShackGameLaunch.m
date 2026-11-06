@@ -84,6 +84,26 @@ NSArray<NSString *> *ShackTranslatedArgs(NSString *appPath, NSArray<NSString *> 
 // Rewired (Unity) maps the 2019 identity as an unknown controller before 2019 (Cuphead: up/down swapped) and knows the
 // 2016 one in every version. Older Feral ports carry their own list of known pads (Resources/InputDevices/<kind>/<pad>.plist,
 // VendorID and ProductID) and ignore any other (Batman: Arkham Asylum knows the wired Xbox 360 pad, no Xbox Wireless one).
+// SDL2 up to 2.0.4 names pads in its built-in mappings by an id of vendor and product only (the 360 pad:
+// 5e040000000000008e02000000000000) and has no Xbox Wireless entry; a game that keeps only mapped pads
+// (SDL_IsGameController) sees none of the default identity (Titan Souls: SDL 2.0.3, "Not a game controller").
+static BOOL OldSDL(NSString *appPath) {
+    NSData *x360 = [@"5e040000000000008e02000000000000," dataUsingEncoding:NSASCIIStringEncoding];
+    NSData *wireless = [@"5e040000fd02" dataUsingEncoding:NSASCIIStringEncoding];   // a later SDL's own entry
+    for (NSString *dir in @[@"Contents/Frameworks", @"Contents/MacOS"]) {
+        NSString *root = [appPath stringByAppendingPathComponent:dir];
+        for (NSString *rel in [NSFileManager.defaultManager enumeratorAtPath:root]) {
+            NSString *name = rel.lastPathComponent;
+            if (![name isEqualToString:@"SDL2"] && !([name hasPrefix:@"libSDL2"] && [name.pathExtension isEqualToString:@"dylib"])) continue;
+            NSData *lib = [NSData dataWithContentsOfFile:[root stringByAppendingPathComponent:rel] options:NSDataReadingMappedIfSafe error:NULL];
+            NSRange all = NSMakeRange(0, lib.length);
+            if (lib && [lib rangeOfData:x360 options:0 range:all].location != NSNotFound &&
+                [lib rangeOfData:wireless options:0 range:all].location == NSNotFound) return YES;
+        }
+    }
+    return NO;
+}
+
 const char *ShackPadIdentity(NSString *appPath) {
     NSFileManager *fm = NSFileManager.defaultManager;
     if ([fm fileExistsAtPath:[appPath stringByAppendingString:@"/Contents/Resources/Data/Managed/Rewired_Core.dll"]]) return "xbox2016";
@@ -97,7 +117,7 @@ const char *ShackPadIdentity(NSString *appPath) {
         if (product == 0x2FD || product == 0x2E0) return NULL;   // it knows the Xbox Wireless Controller
         x360 |= product == 0x28E;
     }
-    return x360 ? "xbox360" : NULL;
+    return x360 || OldSDL(appPath) ? "xbox360" : NULL;
 }
 
 int ShackTranslatedJITMB(NSString *appPath) {

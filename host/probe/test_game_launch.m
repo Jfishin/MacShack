@@ -1,8 +1,10 @@
-// Mac check of the game start MacShack and MacShack Play share (host/ShackGameLaunch.m): a game's .args.
+// Mac check of the game start MacShack and MacShack Play share (host/ShackGameLaunch.m): a game's .args, the virtual pad's
+// identity.
 //   clang -fobjc-arc -Ihost host/ShackGameLaunch.m host/probe/test_game_launch.m -framework Foundation \
 //     -Wl,-undefined,dynamic_lookup -o /tmp/t && /tmp/t
 // expect `game launch ok` (the rest of the file needs the iOS host; nothing here calls it).
 #import "ShackGameLaunch.h"
+#import "ShackLoader.h"
 
 static void check(BOOL ok, const char *what) {
     if (!ok) { fprintf(stderr, "FAIL: %s\n", what); exit(1); }
@@ -36,6 +38,16 @@ int main(void) {
               !watch && !jit && !trace && ![fm fileExistsAtPath:never], "Steam's arguments as they are");
         [@"-windowed\n" writeToFile:plain atomically:YES encoding:NSUTF8StringEncoding error:NULL];
         check([ShackLaunchArgs(@{@"argsFile": plain}, &watch, &jit, &trace) isEqual:@[@"-windowed"]], "else the game's .args");
+        // The pad: an SDL2 whose mappings know the 360 pad by the old id and no Xbox Wireless one gets the 360 pad.
+        NSString *old = [dir stringByAppendingPathComponent:@"Titan.app"], *sdl = @"Contents/Frameworks/SDL2.framework/Versions/A";
+        [fm createDirectoryAtPath:[old stringByAppendingPathComponent:sdl] withIntermediateDirectories:YES attributes:nil error:NULL];
+        [@"\x7f" "ELF..5e040000000000008e02000000000000,X360 Controller,a:b0,..." writeToFile:[old stringByAppendingFormat:@"/%@/SDL2", sdl]
+            atomically:YES encoding:NSASCIIStringEncoding error:NULL];
+        check(!strcmp(ShackPadIdentity(old) ?: "", "xbox360"), "old SDL2: the 360 pad");
+        [@"5e040000000000008e02000000000000,X360,...030000005e040000fd02000003090000,Xbox Wireless,..."
+            writeToFile:[old stringByAppendingFormat:@"/%@/SDL2", sdl] atomically:YES encoding:NSASCIIStringEncoding error:NULL];
+        check(!ShackPadIdentity(old), "an SDL2 that knows the Xbox Wireless pad: the default");
+        check(!ShackPadIdentity([dir stringByAppendingPathComponent:@"Plain.app"]), "no SDL2: the default");
         [fm removeItemAtPath:dir error:NULL];
         puts("game launch ok");
     }
