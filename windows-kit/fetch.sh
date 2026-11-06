@@ -47,7 +47,7 @@ echo "==> Wine $WINE_COMMIT"
 # build/): the one file of Madeira's source it reaches for, placed where that path lands.
 mkdir -p "$b/build"
 fetch "$MADEIRA_CFG_URL" "$b/build/madeira_cfg.h" "$MADEIRA_CFG_SHA256"
-echo "==> Madeira's build/madeira_cfg.h (v0.1.3)"
+echo "==> Madeira's build/madeira_cfg.h (v$MADEIRA_VERSION)"
 
 fetch "$LLVM_MINGW_URL" "$b/$LLVM_MINGW.tar.xz" "$LLVM_MINGW_SHA256"
 if [ ! -d "$b/$LLVM_MINGW" ]; then   # extracted beside, renamed only when whole

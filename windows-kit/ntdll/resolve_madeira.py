@@ -32,11 +32,12 @@ import resolve as NP  # noqa: E402  (NotProton's)
 PAYLOAD_MAX = 1024   # NotProton's aarch64 payload is 868 bytes; ours drops the second site
 PAGE = 0x1000
 
-# Madeira v0.1.3's arm64ec-windows/ntdll.dll (windows-kit/fetch.sh): the values this resolver found, kept as a self-test.
+# Madeira v0.2.0's arm64ec-windows/ntdll.dll (windows-kit/fetch.sh): the values this resolver found, kept as a self-test.
+# (v0.1.3's, 59c15237: the same site 0x124 bytes lower, NtProtectVirtualMemory at 0x80e60.)
 PINNED = {
-    '59c1523792cef4f5d4cbffdd62d8c7d9682be8c718fb7d65db2dcf711e3f7e51':
-        {'hookRVA': 0x375a8, 'wm': 'x22', 'load_path': -0x80, 'build_module': 0x370fc,
-         'LdrGetDllHandle': 0x2ce3c, 'LdrLoadDll': 0x2e964, 'NtProtectVirtualMemory': 0x80e60},
+    '596ba0e4853e56ed61e006a20651edfb86cf49162bb0ac9bedc91d5873d43ada':
+        {'hookRVA': 0x376cc, 'wm': 'x22', 'load_path': -0x80, 'build_module': 0x37220,
+         'LdrGetDllHandle': 0x2ce3c, 'LdrLoadDll': 0x2e964, 'NtProtectVirtualMemory': 0x80f40},
 }
 
 

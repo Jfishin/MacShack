@@ -29,9 +29,9 @@ notproton/, kept as it ships them):
   at that commit.
   mingw-w64 runtime (from llvm-mingw): macshack-launch.exe and steamapi-test.exe contain it, statically linked
   (licenses/mingw-w64-runtime.txt). msi.dll is built without it.
-  Madeira v0.1.3's ntdll.dll (https://github.com/willfaust/Madeira, GPL-3.0-or-later): read for the detour's
+  Madeira v0.2.0's ntdll.dll (https://github.com/willfaust/Madeira, GPL-3.0-or-later): read for the detour's
   addresses; the kit carries only the detour's bytes, applied on the device.
-  Madeira v0.1.3's build/madeira_cfg.h (GPL-3.0-or-later): a header Madeira's Wine includes, there only so Wine's
+  Madeira v0.2.0's build/madeira_cfg.h (GPL-3.0-or-later): a header Madeira's Wine includes, there only so Wine's
   build configures; none of it is in the kit.
 
 MacShack's own files here (scripts, helpers/): GPL-3.0-or-later (LICENSE), Copyright the MacShack authors.

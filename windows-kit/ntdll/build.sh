@@ -5,7 +5,7 @@
 # device (host/WindowsKit.swift) as NotProton patches its copy of CrossOver on the Mac: no Madeira file is re-hosted.
 # NotProton's detour.c and link64.ld (build/notproton, v1.0.3) are used unmodified; its toolchain (the system clang
 # for a bare aarch64 target, Homebrew ld.lld and llvm-objcopy).
-#   windows-kit/ntdll/build.sh      for build/madeira-ntdll.dll (fetch.sh: Madeira v0.1.3's)
+#   windows-kit/ntdll/build.sh      for build/madeira-ntdll.dll (fetch.sh: the pinned Madeira's)
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 b="$(cd "$here/.." && pwd)/build"

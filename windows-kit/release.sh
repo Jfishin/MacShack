@@ -56,7 +56,7 @@ Built from https://github.com/Jfishin/MacShack, folder windows-kit/ with git tre
   Wine $WINE_COMMIT ($WINE_URL):
     build tools, headers, import libraries, and winecrt0 + compiler-rt linked into lsteamclient.dll
   $LLVM_MINGW ($LLVM_MINGW_URL)
-  Madeira v0.1.3's arm64ec-windows/ntdll.dll ($MADEIRA_IPA_URL): the detour's addresses
+  Madeira v$MADEIRA_VERSION's arm64ec-windows/ntdll.dll ($MADEIRA_IPA_URL): the detour's addresses
 EOF
 files="ntdll.patch.json arm64ec-windows/lsteamclient.dll aarch64-unix/lsteamclient.so steam/steam.exe steam/msi.dll
   steam/macshack-launch.exe steamapi-test.exe LICENSE NOTICE SOURCE notproton/NOTICE notproton/LICENSE.lsteamclient
