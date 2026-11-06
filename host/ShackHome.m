@@ -210,6 +210,11 @@ void ShackHomeMirrorLogs(void) {
             [fm copyItemAtPath:[steamLogs stringByAppendingPathComponent:name] toPath:[to stringByAppendingFormat:@"/Steam logs/%@", name] error:NULL];
     NSString *group = ShackHomeGroup();   // what Documents/HomeExport.txt names (debugging a game's files in the shared home)
     if (group) ShackHomeExport([docs stringByAppendingPathComponent:@"HomeExport.txt"], [group stringByAppendingPathComponent:@"Home"], [to stringByAppendingPathComponent:@"HomeExport"]);
+    NSString *playLogs = [group stringByAppendingPathComponent:@"Logs"];   // MacShack Play's Mac games write theirs there
+    [fm createDirectoryAtPath:[to stringByAppendingPathComponent:@"Play logs"] withIntermediateDirectories:YES attributes:nil error:NULL];
+    for (NSString *name in group ? [fm contentsOfDirectoryAtPath:playLogs error:NULL] : nil)
+        if ([name.pathExtension isEqualToString:@"log"])
+            [fm copyItemAtPath:[playLogs stringByAppendingPathComponent:name] toPath:[to stringByAppendingFormat:@"/Play logs/%@", name] error:NULL];
 }
 
 NSString *ShackShareGameData(NSString *games, NSString *shared) {

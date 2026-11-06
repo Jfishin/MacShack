@@ -36,8 +36,9 @@ NSString *ShackPrefsSync(NSString *localPrefs, NSString *sharedPrefs, NSString *
 // The app's own (container Library/Preferences, <App Group>/Home/Library/Preferences; MacShack's own domains, Apple's,
 // Valve's and Chromium's skipped). At app start, and at each game's start and end.
 NSString *ShackHomePrefsSync(void);
-// What devicectl cannot reach behind the links, copied into Documents/Logs/Shared: Library/Logs (Unity's Player.log)
-// and Steam's logs/*.txt. At app start and after each game.
+// What devicectl cannot reach behind the links, copied into Documents/Logs/Shared: Library/Logs (Unity's Player.log),
+// Steam's logs/*.txt and MacShack Play's Mac games' own logs (<App Group>/Logs/*.log, "Play logs"). At app start and
+// after each game.
 void ShackHomeMirrorLogs(void);
 // Data beside the games in Local Games (a staged folder's own: Batman's BMAAData, steam_appid.txt) for MacShack Play,
 // which reads only the App Group: each entry of games that is not a .app, an .args or a link moves (a rename) into
