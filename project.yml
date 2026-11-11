@@ -407,6 +407,7 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UIRequiresFullScreen: true
+        UIApplicationSupportsIndirectInputEvents: true   # an iPad pointer's clicks are pointer touches, not fingers: a mouse to Steam
         GCSupportsGameMode: true
         CADisableMinimumFrameDurationOnPhone: true
         LSSupportsGameMode: true

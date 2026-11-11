@@ -94,6 +94,7 @@ or iOS kills dyld on a cached invalid page.
 | Check | Command |
 |---|---|
 | Steam client setup: Valve's manifest, unpacking, compared with Valve's own install (downloads ~412 MB once) | header of `host/probe/test_steam_setup.swift` (expect `steam setup ok`) |
+| Big Picture fingers as Chromium touches (`host/ShackSteamTouch.m`, fake CEF structs) | `clang -fobjc-arc host/ShackSteamTouch.m host/probe/test_steam_touch.m -framework Foundation -o /tmp/t && /tmp/t` (expect `steam touch ok`) |
 | In-process semaphores and shared memory for Steam (`shims/SteamClient/SteamIPC.c`) | `clang host/probe/test_steam_ipc.c shims/SteamClient/SteamIPC.c -o /tmp/t && /tmp/t` (expect `steam ipc ok`) |
 | Steam's pthread keys beyond the process's 512 (`shims/SteamClient/SteamTSD.c`) | `clang host/probe/test_steam_tsd.c shims/SteamClient/SteamTSD.c -o /tmp/t && /tmp/t` (expect `steam tsd ok`) |
 | An Intel game's Steam API under AArchX (Steam running) | header of `prep/aarchx/check_steam_api.c` (expect `steam api ok` with the same hash as Rosetta) |

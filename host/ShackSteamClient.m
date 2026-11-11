@@ -16,6 +16,7 @@
 #import <sys/event.h>
 #import "ShackSteamProbe.h"
 #import "ShackSteamPlay.h"
+#import "ShackSteamTouch.h"
 #import "ShackPlay.h"
 #import "vendor/fishhook.h"
 #import <crt_externs.h>
@@ -178,6 +179,12 @@ static void *helperDlopen(const char *path, int mode) {
     }
     return helperOrigDlopen(path, mode);
 }
+// The helper finds CEF's functions with dlsym (CEF's library loader); its browsers are learned for touch (ShackSteamTouch.m).
+static void *(*helperOrigDlsym)(void *, const char *);
+static void *helperDlsym(void *handle, const char *name) {
+    void *f = helperOrigDlsym(handle, name);
+    return name && !strcmp(name, "cef_browser_host_create_browser") ? ShackSteamTouchCreateBrowser(f) : f;
+}
 
 // The helper image's own rebindings (above), applied once it is loaded.
 static void rebindHelper(const struct mach_header_64 *h, intptr_t slide) {
@@ -189,6 +196,7 @@ static void rebindHelper(const struct mach_header_64 *h, intptr_t slide) {
         rebind_symbols_image((void *)h, slide, (struct rebinding[]){{"SDL_CreateWindowWithProperties", helperCreateWindowWithProperties, NULL}}, 1);
     else say(@"Steam Helper: libSDLh not found, its windows keep asking for OpenGL");
     rebind_symbols_image((void *)h, slide, (struct rebinding[]){{"dlopen", helperDlopen, (void **)&helperOrigDlopen}}, 1);
+    rebind_symbols_image((void *)h, slide, (struct rebinding[]){{"dlsym", helperDlsym, (void **)&helperOrigDlsym}}, 1);
 }
 
 // Loads a program image and finds its main (LC_MAIN); loaded(header, slide) runs before main is returned.
