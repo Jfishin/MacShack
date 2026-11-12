@@ -63,7 +63,7 @@ struct SplashView: View {
             // Landscape only, like the overlay above the game: diagram left, game and status right, so nothing is
             // pushed off the top of a 440 pt tall screen.
             HStack(spacing: 36) {
-                PhoneDiagram().frame(width: 180, height: 180)
+                DeviceDiagram().frame(width: 180, height: 180)
                 VStack(alignment: .leading, spacing: 14) { header; hints; statusRow; tipView }
                     .frame(maxWidth: 420, alignment: .leading)
             }
@@ -84,24 +84,27 @@ struct SplashView: View {
 }
 
 // A landscape iPhone outline (island on the left, where GameOverlay puts the menu button; MacShack is landscape
-// only, so no turn) whose island pulses under a tapping hand. Core Animation,
-// not SwiftUI: the render server keeps it moving while the main thread is busy loading the game's libraries.
-private struct PhoneDiagram: UIViewRepresentable {
+// only, so no turn) whose island pulses under a tapping hand; on an iPad, a 4:3 outline with the spot in the middle of
+// that side edge. Core Animation, not SwiftUI: the render server keeps it moving while the main thread is busy loading
+// the game's libraries.
+private struct DeviceDiagram: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
+        let pad = UIDevice.current.userInterfaceIdiom == .pad
         let view = UIView(frame: CGRect(x: 0, y: 0, width: 180, height: 180))
         let phone = CALayer()
-        phone.bounds = CGRect(x: 0, y: 0, width: 156, height: 74)
+        phone.bounds = pad ? CGRect(x: 0, y: 0, width: 150, height: 112) : CGRect(x: 0, y: 0, width: 156, height: 74)
         phone.position = CGPoint(x: 90, y: 90)
         view.layer.addSublayer(phone)
 
         let outline = CAShapeLayer()
-        outline.path = UIBezierPath(roundedRect: phone.bounds.insetBy(dx: 1.5, dy: 1.5), cornerRadius: 20).cgPath
+        outline.path = UIBezierPath(roundedRect: phone.bounds.insetBy(dx: 1.5, dy: 1.5), cornerRadius: pad ? 12 : 20).cgPath
         outline.fillColor = nil
         outline.strokeColor = UIColor.white.cgColor
         outline.lineWidth = 3
         phone.addSublayer(outline)
 
-        let islandFrame = CGRect(x: 14 - 3.5, y: 37 - 12, width: 7, height: 24)   // 64 pt left of centre
+        let islandFrame = pad ? CGRect(x: 6, y: 56 - 14, width: 5, height: 28)   // the side edge's middle
+                              : CGRect(x: 14 - 3.5, y: 37 - 12, width: 7, height: 24)   // 64 pt left of centre
         let island = CALayer()
         island.frame = islandFrame
         island.cornerRadius = 3.5
@@ -124,7 +127,7 @@ private struct PhoneDiagram: UIViewRepresentable {
         hand.contents = symbol?.cgImage
         hand.contentsScale = UIScreen.main.scale
         hand.bounds = CGRect(origin: .zero, size: symbol?.size ?? CGSize(width: 30, height: 30))
-        hand.position = CGPoint(x: 78 - 44, y: 37 + 34)
+        hand.position = CGPoint(x: islandFrame.midX + 20, y: islandFrame.midY + 34)
         hand.opacity = 0
         phone.addSublayer(hand)
 
