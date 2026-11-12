@@ -2,7 +2,7 @@
 # Release-iphoneos shims of 2026-10-03, limited to the images Steam loads (steam_osx, Steam Helper, CEF, ipcserver
 # and their libraries; not the overlay, Miles, Remote Play, OpenVR, updaters). MacShack's rule is hard 0: dyld on
 # iOS refuses an image with an unresolved non-weak import, so each needs a shim export (most can be stubs).
-# 544 symbols. Format: framework, then symbol  [images that import it].
+# 543 symbols. Format: framework, then symbol  [images that import it].
 
 ## AppKit (203)
 _NSAccessibilityActionDescription  [Chromium Embedded Framework]
@@ -461,7 +461,7 @@ _kDADiskDescriptionVolumePathKey  [Chromium Embedded Framework]
 _kDADiskDescriptionVolumeUUIDKey  [Chromium Embedded Framework]
 _kDADiskDescriptionWatchVolumePath  [Chromium Embedded Framework]
 
-## Carbon (24)
+## Carbon (23)
 _AEProcessEvent  [Chromium Embedded Framework]
 _AddEventTypesToHandler  [Chromium Embedded Framework]
 _CallNextEventHandler  [Chromium Embedded Framework]
@@ -482,7 +482,6 @@ _RetainEvent  [Chromium Embedded Framework]
 _SendEventToEventTargetWithOptions  [Chromium Embedded Framework]
 _SetEventParameter  [Chromium Embedded Framework]
 _SetEventTime  [Chromium Embedded Framework]
-_TISCreateASCIICapableInputSourceList  [Chromium Embedded Framework]
 _TSMRemoveDocumentProperty  [Chromium Embedded Framework]
 _TSMSetDocumentProperty  [Chromium Embedded Framework]
 _UnregisterEventHotKey  [Chromium Embedded Framework]

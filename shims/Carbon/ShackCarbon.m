@@ -28,6 +28,8 @@ TISInputSourceRef TISCopyCurrentASCIICapableKeyboardInputSource(void) { return T
 CFArrayRef TISCreateInputSourceList(CFDictionaryRef properties, Boolean includeAllInstalled) {
     const void *us = CFSTR("ShackUSLayout"); return CFArrayCreate(NULL, &us, 1, &kCFTypeArrayCallBacks);
 }
+// Chromium focusing a password field lists the ASCII-capable sources and CFReleases the list: never NULL.
+CFArrayRef TISCreateASCIICapableInputSourceList(void) { return TISCreateInputSourceList(NULL, false); }
 OSStatus TISSelectInputSource(TISInputSourceRef source) { return noErr; }
 
 void *TISGetInputSourceProperty(TISInputSourceRef source, CFStringRef key) {
