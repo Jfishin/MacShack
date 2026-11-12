@@ -54,13 +54,10 @@ your device.
 
 ## How it works
 
-```
-Mac game ──► prepare ─────────────► MacShack Play ──► the game ──► shims ──────────────► iOS
-             adapt + sign on                          (Intel:      macOS frameworks
-             the device                                AArchX)     rebuilt on iOS ones
-
-Windows game ──► Steam Play ──► MacShack Play ──► Madeira (Wine + x86 translation) ──► iOS
-```
+<p align="center">
+  <img src="docs/images/how-it-works.svg" width="900"
+       alt="Two apps work together. MacShack is the app you open: its own screens, Steam Big Picture, preparing and signing games, and the JIT helper. MacShack Play is where every game runs: Apple silicon Mac games on MacShack's macOS shims, Intel Mac games through AArchX on the same shims, and Windows games on Madeira (Wine, FEX, DXMT). Both sit on iOS and share game files, saves and settings.">
+</p>
 
 - **Prepare and sign.** iOS runs only code signed for the app. MacShack rewrites a game's executables for iOS and signs
   them on the device with your own developer certificate, then loads them against the untouched game files.
