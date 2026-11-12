@@ -1,8 +1,8 @@
 // Mac check for host/WindowsKit.swift: the downloads and their pins, the layout MacShack Play reads, NotProton's ntdll
 // detour (applied once, "already patched" after, refused on another file), the libraries to sign, the credits.
 // Downloads Madeira's IPA and Valve's two packages once into ~/Library/Caches/MacShackWindowsSetupTest; the kit zip is
-// the argument (windows-kit/release.sh's build/macshack-windows-kit-2.zip) until its release is public. From the
-// repository root:
+// the argument: the windows-kit-2 release's macshack-windows-kit-2.zip, or windows-kit/release.sh's build of it. From
+// the repository root:
 // clang -fobjc-arc -c host/ShackSteamSetup.m -o /tmp/ss.o && clang -fobjc-arc -c host/ShackPrep.m -o /tmp/sp.o && \
 //   swiftc -parse-as-library -import-objc-header host/probe/windows_setup_bridge.h host/VDFParser.swift \
 //   host/SteamClientManifest.swift host/WindowsKit.swift host/probe/test_windows_setup.swift /tmp/ss.o /tmp/sp.o \
