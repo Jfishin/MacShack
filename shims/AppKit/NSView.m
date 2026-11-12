@@ -56,16 +56,16 @@
     }
 }
 - (void)shack_syncUIFrame { if (_ui) ShackMainSync(^{ self->_ui.frame = [self uiFrame]; if (self->_layer) [self attachLayer]; }); }
-- (void)resizeSubviewsWithOldSize:(NSSize)old {
-    NSSize now = _frame.size;
-    for (NSView *v in [_subviews copy]) {
-        NSUInteger m = v->_autoresizing;
-        if (!m) continue;
-        NSRect f = v.frame;
-        f.origin.x = ShackResized(f.origin.x, f.size.width, old.width, now.width, 1, 2, 4, m, &f.size.width);
-        f.origin.y = ShackResized(f.origin.y, f.size.height, old.height, now.height, 8, 16, 32, m, &f.size.height);
-        if (!CGRectEqualToRect(f, v.frame)) v.frame = f;   // its own setFrame: resizes the next level
-    }
+// As AppKit, each subview applies its own autoresizing in resizeWithOldSuperviewSize:, which a subclass may override:
+// SDL3's Metal view sizes its drawable there (Terraria on an iPad grew its view from 800x480 and kept a 480p drawable).
+- (void)resizeSubviewsWithOldSize:(NSSize)old { for (NSView *v in [_subviews copy]) [v resizeWithOldSuperviewSize:old]; }
+- (void)resizeWithOldSuperviewSize:(NSSize)old {
+    NSUInteger m = _autoresizing;
+    if (!m || !_superview) return;
+    NSSize now = _superview.frame.size; NSRect f = _frame;
+    f.origin.x = ShackResized(f.origin.x, f.size.width, old.width, now.width, 1, 2, 4, m, &f.size.width);
+    f.origin.y = ShackResized(f.origin.y, f.size.height, old.height, now.height, 8, 16, 32, m, &f.size.height);
+    if (!CGRectEqualToRect(f, _frame)) self.frame = f;   // its own setFrame: resizes the next level
 }
 - (NSUInteger)autoresizingMask { return _autoresizing; }
 - (void)setAutoresizesSubviews:(BOOL)f {}
