@@ -63,7 +63,7 @@ static inline void ShackMainSync(dispatch_block_t b) { if (NSThread.isMainThread
 @property (nonatomic, weak) NSResponder *nextResponder;
 - (BOOL)acceptsFirstResponder; - (BOOL)becomeFirstResponder; - (BOOL)resignFirstResponder;
 - (void)mouseDown:(NSEvent *)e; - (void)mouseUp:(NSEvent *)e; - (void)mouseDragged:(NSEvent *)e; - (void)mouseMoved:(NSEvent *)e;
-- (void)rightMouseDown:(NSEvent *)e; - (void)rightMouseUp:(NSEvent *)e; - (void)scrollWheel:(NSEvent *)e;
+- (void)rightMouseDown:(NSEvent *)e; - (void)rightMouseUp:(NSEvent *)e; - (void)rightMouseDragged:(NSEvent *)e; - (void)scrollWheel:(NSEvent *)e;
 - (void)keyDown:(NSEvent *)e; - (void)keyUp:(NSEvent *)e; - (void)flagsChanged:(NSEvent *)e;
 - (void)interpretKeyEvents:(NSArray<NSEvent *> *)events; - (void)doCommandBySelector:(SEL)s;
 @end
@@ -136,6 +136,7 @@ static inline void ShackMainSync(dispatch_block_t b) { if (NSThread.isMainThread
 - (void)run; - (void)finishLaunching; - (void)sendEvent:(NSEvent *)e; - (void)activateIgnoringOtherApps:(BOOL)f; - (void)activate;
 - (void)terminate:(id)s; - (BOOL)setActivationPolicy:(NSInteger)p; - (void)setPresentationOptions:(NSUInteger)o;
 - (BOOL)isActive; - (void)hide:(id)s; - (void)unhide:(id)s;
+- (void)shack_deliver:(NSEvent *)e;   // from any thread: to the event's thread, then sendEvent:
 - (void)shack_addWindow:(NSWindow *)w; - (void)shack_setKeyWindow:(NSWindow *)w;
 - (CFRunLoopRef)shack_appLoop;   // the app thread's run loop, where views draw
 - (void)shack_adoptAppThread;    // the calling thread is the app thread (NSApplicationMain, before the nib builds views)

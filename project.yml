@@ -295,6 +295,7 @@ targets:
         UIBackgroundModes: [audio]   # keeps running behind Big Picture (its game audio), so Steam's Stop reaches it
         UILaunchScreen: {}
         UIRequiresFullScreen: true
+        UIApplicationSupportsIndirectInputEvents: true   # an iPad pointer's clicks carry their button (right click)
         LSSupportsGameMode: true
         GCSupportsGameMode: true
         LSApplicationCategoryType: public.app-category.games

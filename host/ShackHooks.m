@@ -912,6 +912,9 @@ void ShackHooksInstall(NSString *bundlePath, NSString *execPath, NSString *codeP
                                            class_getClassMethod(NSUserDefaults.class, @selector(shack_standardUserDefaults)));
             NSLog(@"[MacShack] guest preferences: %@", prefsID);
         }
+        // Games that draw their own cursor: the iPad's pointer hides over them (ShackHostView), not to show two. By
+        // bundle id; --shack-env=SHACK_HIDE_POINTER=0 or 1 in a game's .args overrides it either way.
+        if ([@[@"org.Terraria"] containsObject:prefsID]) setenv("SHACK_HIDE_POINTER", "1", 0);
         struct rebinding r[] = {
             {"CFPreferencesCopyAppValue", shack_CFPreferencesCopyAppValue, (void **)&orig_CFPreferencesCopyAppValue},
             {"CFPreferencesGetAppBooleanValue", shack_CFPreferencesGetAppBooleanValue, (void **)&orig_CFPreferencesGetAppBooleanValue},

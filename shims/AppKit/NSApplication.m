@@ -77,21 +77,37 @@ static void KeepAlive(void *info) {}
 // -stop: makes -run return once the event or timer being handled is done, as on a Mac. ponytail: the app-thread model
 // only; the older model's -run parks for good and nested -run loops never return, as before.
 - (void)stop:(id)s { _stopRequested = YES; if (_appLoop) CFRunLoopStop(_appLoop); }
-- (void)sendEvent:(NSEvent *)e {
-    // A window made on UIKit's main thread is handled there: Steam Helper runs in-process with steam_osx (the app
-    // thread), and its Chromium checks that its views get events on the main thread.
+// The thread an event is handled on. A window made on UIKit's main thread is handled there: Steam Helper runs
+// in-process with steam_osx (the app thread), and its Chromium checks that its views get events on the main thread.
+- (CFRunLoopRef)shack_loopForEvent:(NSEvent *)e {
     NSWindow *w = e.window ?: _key; CFRunLoopRef made = w.shack_creatorLoop;   // the app thread that made the window
-    CFRunLoopRef app = w.shack_mainThreadWindow ? CFRunLoopGetMain() : made && ShackAppKitIsAppLoop(made) ? made : _appLoop;
-    if (app && CFRunLoopGetCurrent() != app) {   // from UIKit: handle it on the app thread, between the game's own work
+    return w.shack_mainThreadWindow ? CFRunLoopGetMain() : made && ShackAppKitIsAppLoop(made) ? made : _appLoop;
+}
+// An event from UIKit (or another thread): to the app thread first, then sendEvent:, so a subclass's override runs once
+// and there. SDL3Application's turns each keyDown into text; a hop inside sendEvent: ran it twice (Terraria typed "aa").
+- (void)shack_deliver:(NSEvent *)e {
+    CFRunLoopRef app = [self shack_loopForEvent:e];
+    if (app && CFRunLoopGetCurrent() != app) {
         CFRunLoopPerformBlock(app, kCFRunLoopCommonModes, ^{ [self sendEvent:e]; }); CFRunLoopWakeUp(app);
         return;
     }
+    [self sendEvent:e];
+}
+- (void)sendEvent:(NSEvent *)e {
+    CFRunLoopRef app = [self shack_loopForEvent:e];
+    if (app && CFRunLoopGetCurrent() != app) {   // a game's own call from the wrong thread: only the rest hops
+        CFRunLoopPerformBlock(app, kCFRunLoopCommonModes, ^{ [self shack_dispatch:e]; }); CFRunLoopWakeUp(app);
+        return;
+    }
+    [self shack_dispatch:e];
+}
+- (void)shack_dispatch:(NSEvent *)e {
     _current = e;
     if (!(e = [NSEvent shack_runLocalMonitors:e])) return;
     [(e.window ?: _key) sendEvent:e];
 }
 // CGEventPost's key events (libShackCG): on a Mac they reach the key window of the app in front, as from a keyboard.
-// Steam's on-screen keyboard types this way, from steamclient's IPC thread (sendEvent: hops to the window's thread).
+// Steam's on-screen keyboard types this way, from steamclient's IPC thread (shack_deliver: hops to the window's thread).
 __attribute__((visibility("default"))) void ShackAppKitPostKey(unsigned short keyCode, NSString *characters, BOOL down) {
     NSWindow *w = NSApp.keyWindow;
     NSEvent *e = [NSEvent new]; e.type = down ? NSEventTypeKeyDown : NSEventTypeKeyUp;
@@ -99,7 +115,7 @@ __attribute__((visibility("default"))) void ShackAppKitPostKey(unsigned short ke
     e.keyCode = keyCode; e.modifierFlags = NSEvent.modifierFlags;
     e.characters = characters; e.charactersIgnoringModifiers = characters.lowercaseString; e.isARepeat = NO;
     e.locationInWindow = NSEvent.mouseLocation;
-    [NSApp sendEvent:e];
+    [NSApp shack_deliver:e];
 }
 - (void)activateIgnoringOtherApps:(BOOL)f {}
 - (void)activate {}

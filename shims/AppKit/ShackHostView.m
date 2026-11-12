@@ -45,10 +45,11 @@ void ShackAppKitSetDirectTouch(BOOL (*fn)(id, int, CGPoint)) { gDirectTouch = fn
 static BOOL (*gDirectScroll)(id view, CGPoint p, CGPoint delta);
 void ShackAppKitSetDirectScroll(BOOL (*fn)(id, CGPoint, CGPoint)) { gDirectScroll = fn; }
 
+@interface ShackHostView () <UIPointerInteractionDelegate> @end
 @implementation ShackHostView {
     UIView *_guestCanvas;
     CGSize _virtualSize;
-    BOOL _virtualTouchActive;
+    BOOL _virtualTouchActive, _right;   // _right: the pointer's secondary button holds the current click
     NSView *_directView;   // the view whose taker has the current finger
     UIPanGestureRecognizer *_trackpad;   // two-finger scrolls; a mouse wheel's are another recognizer, without momentum
     CGPoint _scrolled, _velocity, _coastAt;   // the scroll so far; the coast after the fingers lift, and where
@@ -62,7 +63,7 @@ void ShackAppKitSetDirectScroll(BOOL (*fn)(id, CGPoint, CGPoint)) { gDirectScrol
         self.multipleTouchEnabled = NO; self.backgroundColor = UIColor.blackColor;
         // An iPad's pointer (trackpad, mouse), as a Mac's: hover moves the mouse, scrolls are the scroll wheel and a
         // trackpad's coast on after the fingers lift (over Steam: a finger, or its browser's wheel; scroll:). Clicks are
-        // pointer touches.
+        // pointer touches, the secondary button a right click.
         [self addGestureRecognizer:[[UIHoverGestureRecognizer alloc] initWithTarget:self action:@selector(hover:)]];
         for (NSNumber *type in @[@(UIScrollTypeMaskContinuous), @(UIScrollTypeMaskDiscrete)]) {
             UIPanGestureRecognizer *scroll = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(scroll:)];
@@ -70,6 +71,8 @@ void ShackAppKitSetDirectScroll(BOOL (*fn)(id, CGPoint, CGPoint)) { gDirectScrol
             [self addGestureRecognizer:scroll];
             if (type.integerValue == UIScrollTypeMaskContinuous) _trackpad = scroll;
         }
+        const char *hide = getenv("SHACK_HIDE_POINTER");   // set for games that draw their own cursor (ShackHooks.m)
+        if (hide && !strcmp(hide, "1")) [self addInteraction:[[UIPointerInteraction alloc] initWithDelegate:self]];
         if (ShackVirtualDisplaySize(&_virtualSize)) {
             // UIKit owns this host's physical size. Only the guest canvas is transformed;
             // NSView frames and engine backing buffers keep the virtual desktop dimensions.
@@ -112,12 +115,15 @@ void ShackAppKitSetDirectScroll(BOOL (*fn)(id, CGPoint, CGPoint)) { gDirectScrol
 - (NSEvent *)mouseEvent:(NSEventType)t touch:(UITouch *)touch {
     NSEvent *e = [self mouseEvent:t at:[touch locationInView:self] time:touch.timestamp];
     e.clickCount = touch.tapCount;
-    [NSEvent shack_setPressedMouseButtons:t == NSEventTypeLeftMouseUp ? 0 : 1];
+    BOOL up = t == NSEventTypeLeftMouseUp || t == NSEventTypeRightMouseUp;
+    if (_right) e.buttonNumber = 1;
+    [NSEvent shack_setPressedMouseButtons:up ? 0 : _right ? 2 : 1];
     return e;
 }
+- (UIPointerStyle *)pointerInteraction:(UIPointerInteraction *)i styleForRegion:(UIPointerRegion *)r { return [UIPointerStyle hiddenPointerStyle]; }
 - (void)hover:(UIHoverGestureRecognizer *)g {
     if (g.state != UIGestureRecognizerStateBegan && g.state != UIGestureRecognizerStateChanged) return;
-    [NSApp sendEvent:[self mouseEvent:NSEventTypeMouseMoved at:[g locationInView:self] time:NSProcessInfo.processInfo.systemUptime]];
+    [NSApp shack_deliver:[self mouseEvent:NSEventTypeMouseMoved at:[g locationInView:self] time:NSProcessInfo.processInfo.systemUptime]];
 }
 // A scroll of d points (content following the fingers) at p: to a taker (Steam's browsers), else a Mac scroll wheel
 // event. ponytail: a line per 10 points, as a wheel without precise deltas; precise trackpad deltas when a game needs them.
@@ -127,7 +133,7 @@ void ShackAppKitSetDirectScroll(BOOL (*fn)(id, CGPoint, CGPoint)) { gDirectScrol
     if (hit && gDirectScroll(hit, w, d)) return;
     NSEvent *e = [self mouseEvent:NSEventTypeScrollWheel at:p time:NSProcessInfo.processInfo.systemUptime];
     e.deltaX = e.scrollingDeltaX = d.x / 10; e.deltaY = e.scrollingDeltaY = d.y / 10;
-    [NSApp sendEvent:e];
+    [NSApp shack_deliver:e];
 }
 // A trackpad's two fingers over a touch taker (Steam's browsers) are a finger there, from the pointer: Chromium follows
 // it 1:1, keeps to the axis it starts on (a wheel's sideways drift turned Big Picture's shelves) and coasts on itself.
@@ -185,19 +191,20 @@ void ShackAppKitSetDirectScroll(BOOL (*fn)(id, CGPoint, CGPoint)) { gDirectScrol
         NSView *hit = [self.nsWindow.contentView hitTest:p];
         if (hit && gDirectTouch(hit, 0, p)) { _directView = hit; return; }
     }
-    [NSApp sendEvent:[self mouseEvent:NSEventTypeLeftMouseDown touch:ts.anyObject]];
+    _right = (ev.buttonMask & UIEventButtonMaskSecondary) != 0;   // a pointer's right button (UIApplicationSupportsIndirectInputEvents)
+    [NSApp shack_deliver:[self mouseEvent:_right ? NSEventTypeRightMouseDown : NSEventTypeLeftMouseDown touch:ts.anyObject]];
 }
 - (void)touchesMoved:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)ev {
     if (_directView) gDirectTouch(_directView, 1, [self windowPoint:ts.anyObject]);
-    else if (!_guestCanvas || _virtualTouchActive) [NSApp sendEvent:[self mouseEvent:NSEventTypeLeftMouseDragged touch:ts.anyObject]];
+    else if (!_guestCanvas || _virtualTouchActive) [NSApp shack_deliver:[self mouseEvent:_right ? NSEventTypeRightMouseDragged : NSEventTypeLeftMouseDragged touch:ts.anyObject]];
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)ev { [self touchesEnded:ts phase:2]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)ev { [self touchesEnded:ts phase:3]; }
 - (void)touchesEnded:(NSSet<UITouch *> *)ts phase:(int)phase {
     if (_directView) gDirectTouch(_directView, phase, [self windowPoint:ts.anyObject]);
-    else if (!_guestCanvas || _virtualTouchActive) [NSApp sendEvent:[self mouseEvent:NSEventTypeLeftMouseUp touch:ts.anyObject]];
+    else if (!_guestCanvas || _virtualTouchActive) [NSApp shack_deliver:[self mouseEvent:_right ? NSEventTypeRightMouseUp : NSEventTypeLeftMouseUp touch:ts.anyObject]];
     _directView = nil;
-    _virtualTouchActive = NO;
+    _virtualTouchActive = NO; _right = NO;
 }
 
 // Mac keycodes 54-63 are modifiers: AppKit reports them as flagsChanged with the updated modifier state, never keyDown/keyUp.
@@ -219,7 +226,7 @@ static NSEventModifierFlags ModifierFlagForKeyCode(unsigned short k) {
     e.window = self.nsWindow; e.windowNumber = self.nsWindow.windowNumber; e.timestamp = p.timestamp; e.keyCode = k; e.modifierFlags = m;
     if (!flag) { e.characters = p.key.characters; e.charactersIgnoringModifiers = p.key.charactersIgnoringModifiers; e.isARepeat = NO; }
     e.locationInWindow = NSEvent.mouseLocation;
-    [NSApp sendEvent:e];
+    [NSApp shack_deliver:e];
 }
 - (void)typeCharacters:(NSString *)s {
     unsigned short k = ShackKeyCodeForCharacter([s characterAtIndex:0]);
@@ -229,7 +236,7 @@ static NSEventModifierFlags ModifierFlagForKeyCode(unsigned short k) {
         e.keyCode = k == 0xFFFF ? 0 : k; e.modifierFlags = NSEvent.modifierFlags;
         e.characters = s; e.charactersIgnoringModifiers = s.lowercaseString; e.isARepeat = NO;
         e.locationInWindow = NSEvent.mouseLocation;
-        [NSApp sendEvent:e];
+        [NSApp shack_deliver:e];
     }
 }
 - (void)toggleKeyboard {
