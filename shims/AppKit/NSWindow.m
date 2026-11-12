@@ -36,7 +36,10 @@ static NSInteger gWindowCounter = 1;
 - (BOOL)isKeyWindow { return NSApp.keyWindow == self; }
 - (void)setContentView:(NSView *)v {
     _contentView = v; v.nextResponder = self; [v shack_moveToWindow:self];
-    if (_host) { UIView *u = v.uiView; [v setFrame:_frame]; ShackMainSync(^{ [self->_host shack_setGuestView:u]; }); }
+    // As AppKit, the content view sits at the window's origin. SDL3 makes it with the window's frame, centred on screen
+    // (Terraria's 800x480 on an iPad: {400, 360}), and sizes its Metal view from that: the game drew offset, cut off.
+    [v setFrame:(NSRect){NSZeroPoint, _frame.size}];
+    if (_host) { UIView *u = v.uiView; ShackMainSync(^{ [self->_host shack_setGuestView:u]; }); }
 }
 // AppKit: the controller's view becomes the content view and the controller sits between them in the responder chain.
 // Crimson Desert installs its Metal view this way, reads it back through contentViewController.view, and takes mouse
@@ -109,6 +112,7 @@ static void GiveScreen(UIWindow *w, NSWindow *to) {   // main thread; to has its
     // A window wholly off the screen is invisible on macOS too (Steam's VGUI windows: 1x1 at -15000,-15000): it is
     // ordered in, but never takes the screen from one that shows. One with no size yet still does (sized later).
     if (!_host && !CGRectIsEmpty(_frame) && !CGRectIntersectsRect(_frame, NSScreen.mainScreen.frame)) { _visible = YES; [NSApp shack_addWindow:self]; return; }
+    NSRect asked = _frame;
     ShackMainSync(^{
         if (!gFront) gFront = [NSMutableArray array];
         [gFront removeObject:self]; [gFront addObject:self];
@@ -143,7 +147,21 @@ static void GiveScreen(UIWindow *w, NSWindow *to) {   // main thread; to has its
     if (_contentView) [_contentView setFrame:_frame];
     _visible = YES;
     [NSApp shack_addWindow:self];
-    [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidResizeNotification object:self];
+    [self shack_framedFrom:asked always:YES];   // observers hear every resize here, as before
+}
+// The window moved or resized from `old`. As AppKit, the delegate hears it as well as observers: SDL3 makes itself the
+// delegate and listens no other way (Terraria on an iPad kept 800x480 at {400, 360}: a 480p drawable, and every hover
+// outside 800x480 dropped). The delegate only hears a real change, as on a Mac.
+- (void)shack_framedFrom:(NSRect)old always:(BOOL)always {
+    for (NSString *name in @[NSWindowDidMoveNotification, NSWindowDidResizeNotification]) {
+        BOOL move = name == NSWindowDidMoveNotification;
+        BOOL changed = move ? !CGPointEqualToPoint(old.origin, _frame.origin) : !CGSizeEqualToSize(old.size, _frame.size);
+        if (!changed && (move || !always)) continue;
+        NSNotification *n = [NSNotification notificationWithName:name object:self];
+        [NSNotificationCenter.defaultCenter postNotification:n];
+        SEL s = move ? @selector(windowDidMove:) : @selector(windowDidResize:);
+        if (changed && [self.delegate respondsToSelector:s]) [self.delegate performSelector:s withObject:n];
+    }
 }
 - (void)makeKeyWindow {
     [NSApp shack_setKeyWindow:self];
@@ -166,8 +184,18 @@ static void GiveScreen(UIWindow *w, NSWindow *to) {   // main thread; to has its
 }
 - (void)setFrame:(NSRect)r display:(BOOL)d {
     // UIKit stays fullscreen, but AppKit clients must read back the frame they set. Feral emits its own
-    // geometry event after calling super; a no-op here left its virtual desktop permanently zero-sized.
+    // geometry event after calling super; a no-op here left its virtual desktop permanently zero-sized. As AppKit, the
+    // delegate hears the change: Terraria sets its saved 1600x1200 here, so going full screen changes nothing after.
+    // A window that shows on the screen fills it from its origin, so that is where it is: SDL3 keeps its size centred
+    // ({400, -360} for Terraria), and FNA's mouse (global position minus the window's) sat 360 pt above the pointer.
+    // One wholly off the screen keeps its place (Steam's VGUI windows; orderFront: reads it).
+    // Bigger than the screen gets the screen, as initWithContentRect: does: Terraria at 2752x2064 told SDL that size while
+    // 1600x1200 showed, and its cursor reached 58% of the screen.
+    NSRect old = _frame, screen = NSScreen.mainScreen.frame;
+    if (CGRectIntersectsRect(r, screen)) r.origin = screen.origin;
+    if (screen.size.width > 0 && (r.size.width > screen.size.width || r.size.height > screen.size.height)) r = screen;
     _frame = r;
+    [self shack_framedFrom:old always:NO];
 }
 - (void)setFrame:(NSRect)r display:(BOOL)d animate:(BOOL)a { [self setFrame:r display:d]; }
 - (void)setFrameOrigin:(NSPoint)p {}
@@ -199,7 +227,9 @@ static void GiveScreen(UIWindow *w, NSWindow *to) {   // main thread; to has its
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return YES; }
 - (BOOL)isMiniaturized { return NO; }
-- (BOOL)isZoomed { return NO; }
+// As on a Mac, a window that fills the screen is zoomed, and every window shown here does: SDL3 then reports it
+// maximized, not restored, after each resize (Terraria dropped its saved 1600x1200 to 800x600 on a restored one).
+- (BOOL)isZoomed { return CGSizeEqualToSize(_frame.size, NSScreen.mainScreen.frame.size); }
 - (BOOL)isOnActiveSpace { return YES; }
 - (NSUInteger)occlusionState { return self == gOwner && !gBackground ? 1 << 1 : 0; }   // NSWindowOcclusionStateVisible: has the screen (GiveScreen), app in front
 - (CGFloat)alphaValue { return _alphaValue; }
@@ -260,6 +290,7 @@ NOP(setExcludedFromWindowsMenu:(BOOL)f) NOP(setCanHide:(BOOL)f) NOP(registerForD
         case NSEventTypeMouseMoved: [hit mouseMoved:e]; break;
         case NSEventTypeRightMouseDown: [hit rightMouseDown:e]; break;
         case NSEventTypeRightMouseUp: [held rightMouseUp:e]; _mouseTarget = nil; break;
+        case NSEventTypeRightMouseDragged: [held rightMouseDragged:e]; break;
         case NSEventTypeScrollWheel: [hit scrollWheel:e]; break;
         case NSEventTypeKeyDown: [target keyDown:e]; break;
         case NSEventTypeKeyUp: [target keyUp:e]; break;
